@@ -1,0 +1,8 @@
+node_modules
+server/node_modules
+server/data/*.sqlite
+server/uploads
+.git
+.gitignore
+npm-debug.log
+README.md
