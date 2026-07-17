@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>会议任务草稿确认</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #f5f7fb;
+      color: #1f2937;
+    }
+    body {
+      margin: 0;
+      background: #f5f7fb;
+    }
+    .page {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+      margin-bottom: 20px;
+    }
+    h1, h2 {
+      margin: 0 0 12px;
+    }
+    .muted {
+      color: #6b7280;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .stats {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    .badge {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #eef2ff;
+      color: #4338ca;
+      font-size: 13px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: #4b5563;
+      margin-bottom: 6px;
+    }
+    input, textarea, button {
+      font: inherit;
+    }
+    input, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    textarea {
+      min-height: 76px;
+      resize: vertical;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: end;
+    }
+    .task-list {
+      display: grid;
+      gap: 16px;
+    }
+    .task-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 16px;
+      background: #fcfcfd;
+    }
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #2563eb;
+      color: #fff;
+    }
+    button.secondary {
+      background: #e5e7eb;
+      color: #111827;
+    }
+    button.warn {
+      background: #f59e0b;
+      color: #fff;
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .status-pending { color: #b45309; }
+    .status-confirmed { color: #15803d; }
+    .status-discarded { color: #6b7280; }
+    .message {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #eff6ff;
+      color: #1d4ed8;
+      white-space: pre-wrap;
+    }
+    .error {
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+    @media (max-width: 700px) {
+      .page {
+        padding: 14px;
+      }
+      .toolbar {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <h1>会议任务草稿确认</h1>
+      <div class="toolbar">
+        <div>
+          <label for="operator">你的姓名</label>
+          <input id="operator" placeholder="请输入你的姓名，用于记录修改和确认人" />
+        </div>
+        <button id="reloadBtn" class="secondary">刷新草稿</button>
+      </div>
+      <div id="summary" class="meta"></div>
+      <div id="stats" class="stats"></div>
+      <div id="pageMessage"></div>
+    </div>
+
+    <div class="card">
+      <h2>任务列表</h2>
+      <div id="taskList" class="task-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>最终确认</h2>
+      <p class="muted">所有任务处理完后，点击下方按钮统一入表。仅 `已确认` 的任务会进入总任务表。</p>
+      <button id="finalizeBtn" class="primary">确认入表</button>
+    </div>
+  </div>
+
+  <script>
+    const draftId = Number(window.location.pathname.split('/').filter(Boolean).pop());
+    const operatorInput = document.getElementById('operator');
+    const reloadBtn = document.getElementById('reloadBtn');
+    const finalizeBtn = document.getElementById('finalizeBtn');
+    const summaryEl = document.getElementById('summary');
+    const statsEl = document.getElementById('stats');
+    const taskListEl = document.getElementById('taskList');
+    const pageMessageEl = document.getElementById('pageMessage');
+
+    let currentDraft = null;
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function setMessage(text, isError = false) {
+      if (!text) {
+        pageMessageEl.innerHTML = '';
+        return;
+      }
+      pageMessageEl.innerHTML = '<div class="message ' + (isError ? 'error' : '') + '">' + escapeHtml(text) + '</div>';
+    }
+
+    function getOperator() {
+      return operatorInput.value.trim();
+    }
+
+    function ensureOperator() {
+      if (getOperator()) return true;
+      setMessage('请先填写你的姓名，再进行修改或确认操作。', true);
+      operatorInput.focus();
+      return false;
+    }
+
+    function renderDraft(draft) {
+      currentDraft = draft;
+      summaryEl.innerHTML = [
+        ['会议标题', draft.meeting_title || '未命名会议'],
+        ['会议来源', draft.meeting_source || '会议纪要'],
+        ['草稿 ID', draft.id],
+        ['当前状态', draft.confirmation_status || '-']
+      ].map(([label, value]) => '<div><div class="muted">' + escapeHtml(label) + '</div><div>' + escapeHtml(value) + '</div></div>').join('');
+
+      const stats = draft.task_stats || { pending: 0, confirmed: 0, discarded: 0 };
+      statsEl.innerHTML = [
+        ['待处理', stats.pending || 0],
+        ['已确认', stats.confirmed || 0],
+        ['已忽略', stats.discarded || 0]
+      ].map(([label, value]) => '<span class="badge">' + escapeHtml(label) + '：' + escapeHtml(value) + '</span>').join('');
+
+      taskListEl.innerHTML = (draft.draft_tasks || []).map((task) => {
+        const itemId = escapeHtml(task.item_id);
+        return '<div class="task-card" data-item-id="' + itemId + '">' +
+          '<div><strong>' + escapeHtml(task.task_name || '未命名任务') + '</strong></div>' +
+          '<div class="muted">状态：<span class="status-' + escapeHtml(task.status || 'pending') + '">' + escapeHtml(task.status || 'pending') + '</span></div>' +
+          '<div class="task-grid">' +
+            '<div><label>任务名称</label><input data-field="task_name" value="' + escapeHtml(task.task_name || '') + '" /></div>' +
+            '<div><label>负责人</label><input data-field="assignee" value="' + escapeHtml(task.assignee || '') + '" /></div>' +
+            '<div><label>截止时间</label><input data-field="deadline" value="' + escapeHtml(task.deadline || '') + '" /></div>' +
+            '<div><label>备注</label><input data-field="comment" value="' + escapeHtml(task.comment || '') + '" /></div>' +
+          '</div>' +
+          '<div style="margin-top:12px"><div class="muted">原文依据</div><div>' + escapeHtml(task.evidence_quote || task.evidence || '待确认') + '</div></div>' +
+          '<div class="muted" style="margin-top:8px">最近修改：' + escapeHtml(task.updated_by || '-') + (task.updated_at ? ' / ' + escapeHtml(task.updated_at) : '') + '</div>' +
+          '<div class="muted">确认人：' + escapeHtml(task.confirmed_by || '-') + (task.confirmed_at ? ' / ' + escapeHtml(task.confirmed_at) : '') + '</div>' +
+          '<div class="actions">' +
+            '<button class="secondary" data-action="save">保存修改</button>' +
+            '<button class="primary" data-action="confirm">确认</button>' +
+            '<button class="warn" data-action="discard">忽略</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+
+      finalizeBtn.disabled = (draft.task_stats?.pending || 0) > 0;
+    }
+
+    async function request(url, options) {
+      const response = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.success === false) {
+        throw new Error(data.message || '请求失败');
+      }
+      return data;
+    }
+
+    async function loadDraft() {
+      setMessage('');
+      const data = await request('/api/meeting/draft/' + draftId);
+      renderDraft(data.draft);
+    }
+
+    function readTaskForm(taskCard) {
+      return {
+        task_name: taskCard.querySelector('[data-field="task_name"]').value.trim(),
+        assignee: taskCard.querySelector('[data-field="assignee"]').value.trim(),
+        deadline: taskCard.querySelector('[data-field="deadline"]').value.trim(),
+        comment: taskCard.querySelector('[data-field="comment"]').value.trim()
+      };
+    }
+
+    taskListEl.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      if (!ensureOperator()) return;
+
+      const taskCard = event.target.closest('.task-card');
+      const itemId = taskCard?.dataset.itemId;
+      if (!taskCard || !itemId) return;
+
+      const action = button.dataset.action;
+      const fields = readTaskForm(taskCard);
+
+      try {
+        button.disabled = true;
+        if (action === 'save') {
+          await request('/api/meeting/draft-item/update', {
+            method: 'POST',
+            body: JSON.stringify({ draft_id: draftId, item_id: itemId, ...fields, operator: getOperator() })
+          });
+          setMessage('任务已保存。');
+        }
+
+        if (action === 'confirm') {
+          await request('/api/meeting/draft-item/update', {
+            method: 'POST',
+            body: JSON.stringify({ draft_id: draftId, item_id: itemId, ...fields, operator: getOperator() })
+          });
+          await request('/api/meeting/draft-item/confirm', {
+            method: 'POST',
+            body: JSON.stringify({ draft_id: draftId, item_id: itemId, operator: getOperator() })
+          });
+          setMessage('任务已确认。');
+        }
+
+        if (action === 'discard') {
+          await request('/api/meeting/draft-item/discard', {
+            method: 'POST',
+            body: JSON.stringify({ draft_id: draftId, item_id: itemId, operator: getOperator(), comment: fields.comment })
+          });
+          setMessage('任务已忽略。');
+        }
+
+        await loadDraft();
+      } catch (error) {
+        setMessage(error.message || '操作失败', true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    reloadBtn.addEventListener('click', async () => {
+      try {
+        reloadBtn.disabled = true;
+        await loadDraft();
+      } catch (error) {
+        setMessage(error.message || '加载失败', true);
+      } finally {
+        reloadBtn.disabled = false;
+      }
+    });
+
+    finalizeBtn.addEventListener('click', async () => {
+      if (!ensureOperator()) return;
+      try {
+        finalizeBtn.disabled = true;
+        const data = await request('/api/meeting/draft/finalize', {
+          method: 'POST',
+          body: JSON.stringify({ draft_id: draftId, confirmed_by: getOperator() })
+        });
+        setMessage('确认入表成功。\n创建任务数：' + (data.created_count || 0) + '\n重复任务数：' + (data.duplicate_count || 0));
+        await loadDraft();
+      } catch (error) {
+        setMessage(error.message || '确认入表失败', true);
+      } finally {
+        finalizeBtn.disabled = false;
+      }
+    });
+
+    loadDraft().catch((error) => setMessage(error.message || '加载失败', true));
+  </script>
+</body>
+</html>
