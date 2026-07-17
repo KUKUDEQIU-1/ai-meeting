@@ -1,0 +1,37 @@
+{
+  "name": "ai-meeting-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon index.js",
+    "start": "node index.js",
+    "test": "node scripts/test-getnote-import.js",
+    "debug:feishu-create-table": "node scripts/debug-feishu-create-table.ts",
+    "debug:feishu-permission": "node scripts/debug-feishu-bitable-permission.ts",
+    "debug:getnote-one": "node scripts/debug-getnote-one.ts",
+    "daily:getnote": "node scripts/daily-getnote.ts",
+    "debug:getnote-sync": "node scripts/test-getnote-import.js",
+    "debug:feishu-row-height": "node scripts/debug-feishu-row-height.ts",
+    "debug:feishu-meeting-note-one": "node scripts/debug-feishu-meeting-note-one.ts",
+    "sync:feishu-meeting-notes": "node scripts/sync-feishu-meeting-notes.ts",
+    "daily:feishu-meeting-notes": "node scripts/daily-feishu-meeting-notes.ts",
+    "sync:feishu-docx-note": "node scripts/sync-feishu-docx-note.ts",
+    "add:feishu-docx-note-source": "node scripts/add-feishu-docx-note-source.ts",
+    "list:feishu-docx-note-sources": "node scripts/list-feishu-docx-note-sources.ts",
+    "daily:feishu-docx-notes": "node scripts/daily-feishu-docx-notes.ts",
+    "daily:meeting-tasks": "node scripts/daily-meeting-tasks.ts",
+    "clear:master-task-table": "node scripts/clear-master-task-table.ts",
+    "list:master-tasks": "node scripts/list-master-tasks.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.0.2",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
