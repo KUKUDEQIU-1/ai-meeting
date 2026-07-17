@@ -40,7 +40,7 @@ app.get('/meeting-drafts/:draftId', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', version: 'latest-draft-v2' });
 });
 
 app.use('/api/meetings', meetingsRouter);
