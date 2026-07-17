@@ -289,6 +289,22 @@ router.get('/draft/latest', async (req, res, next) => {
   }
 });
 
+router.get('/latest-draft', async (req, res, next) => {
+  try {
+    const drafts = await listPendingMeetingTaskDrafts();
+    const draft = drafts[0] || null;
+
+    if (!draft) {
+      res.status(404).json({ message: '暂无待确认草稿' });
+      return;
+    }
+
+    res.json({ success: true, draft: toDraftResponse(draft) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/draft/:id', async (req, res, next) => {
   try {
     const draftId = Number(req.params.id);

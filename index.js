@@ -27,12 +27,16 @@ app.get('/', (req, res) => {
   ].join('\n'));
 });
 
-app.get('/meeting-drafts/:draftId', (req, res) => {
+app.get('/meeting-drafts/latest', (req, res) => {
+  res.redirect('/meeting-drafts/__latest__');
+});
+
+app.get('/latest-meeting-draft', (req, res) => {
   res.sendFile(path.resolve(__dirname, 'public', 'meeting-draft.html'));
 });
 
-app.get('/meeting-drafts/latest', (req, res) => {
-  res.redirect('/meeting-drafts/__latest__');
+app.get('/meeting-drafts/:draftId', (req, res) => {
+  res.sendFile(path.resolve(__dirname, 'public', 'meeting-draft.html'));
 });
 
 app.get('/api/health', (req, res) => {

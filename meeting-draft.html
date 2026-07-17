@@ -177,8 +177,9 @@
   </div>
 
   <script>
-    const draftPathValue = window.location.pathname.split('/').filter(Boolean).pop();
-    const isLatestMode = draftPathValue === '__latest__';
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const draftPathValue = pathParts[pathParts.length - 1];
+    const isLatestMode = draftPathValue === '__latest__' || draftPathValue === 'latest-meeting-draft';
     const draftId = isLatestMode ? null : Number(draftPathValue);
     const operatorInput = document.getElementById('operator');
     const reloadBtn = document.getElementById('reloadBtn');
@@ -273,7 +274,7 @@
 
     async function loadDraft() {
       setMessage('');
-      const endpoint = isLatestMode ? '/api/meeting/draft/latest' : '/api/meeting/draft/' + draftId;
+      const endpoint = isLatestMode ? '/api/meeting/latest-draft' : '/api/meeting/draft/' + draftId;
       const data = await request(endpoint);
       renderDraft(data.draft);
     }
