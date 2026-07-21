@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js",
-    "test": "node scripts/test-getnote-import.js",
+    "test": "node scripts/test-feishu-task-cards.js",
+    "test:feishu-task-cards": "node scripts/test-feishu-task-cards.js",
+    "test:getnote-import": "node scripts/test-getnote-import.js",
     "debug:feishu-create-table": "node scripts/debug-feishu-create-table.ts",
     "debug:feishu-permission": "node scripts/debug-feishu-bitable-permission.ts",
     "debug:getnote-one": "node scripts/debug-getnote-one.ts",
@@ -20,6 +22,8 @@
     "add:feishu-docx-note-source": "node scripts/add-feishu-docx-note-source.ts",
     "list:feishu-docx-note-sources": "node scripts/list-feishu-docx-note-sources.ts",
     "daily:feishu-docx-notes": "node scripts/daily-feishu-docx-notes.ts",
+    "worker:feishu-docx": "node scripts/worker-feishu-docx.ts",
+    "list:feishu-group-members": "node scripts/list-feishu-group-members.js",
     "daily:meeting-tasks": "node scripts/daily-meeting-tasks.ts",
     "clear:master-task-table": "node scripts/clear-master-task-table.ts",
     "list:master-tasks": "node scripts/list-master-tasks.ts"

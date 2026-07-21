@@ -261,6 +261,25 @@ function migrateDatabase() {
       WHERE table_id IS NOT NULL AND table_id != '' AND record_id IS NOT NULL AND record_id != ''`);
     db.run('DROP TABLE getnote_task_instances_old');
   }
+
+  db.run(`CREATE TABLE IF NOT EXISTS meeting_task_draft_assignees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id INTEGER NOT NULL,
+    assignee_key TEXT NOT NULL,
+    assignee_name TEXT NOT NULL,
+    receive_id_type TEXT NOT NULL DEFAULT 'open_id',
+    receive_id TEXT NOT NULL DEFAULT '',
+    card_message_id TEXT,
+    delivery_status TEXT NOT NULL DEFAULT 'pending',
+    delivery_error TEXT,
+    confirmation_status TEXT NOT NULL DEFAULT 'pending',
+    confirmed_at TEXT,
+    confirmed_by TEXT,
+    last_callback_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(draft_id, assignee_key)
+  )`);
 }
 
 export function run(sql, params = []) {

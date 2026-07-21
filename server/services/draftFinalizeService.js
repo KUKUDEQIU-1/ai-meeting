@@ -70,3 +70,42 @@ export async function finalizeMeetingTaskDraft({ draftId, confirmedBy = '待确�
     feishu_result: feishuResult
   };
 }
+
+function normalizeAssigneeKey(value) {
+  return String(value || '').replace(/\s+/g, '').trim() || '待确认';
+}
+
+function assigneeNameOf(task) {
+  return task.assignee || task.owner || task.assignee_name || '待确认';
+}
+
+export async function finalizeMeetingTaskDraftForAssignee({ draftId, assigneeKey, confirmedBy = '待确认' } = {}) {
+  const draft = await getMeetingTaskDraftById(draftId);
+
+  if (!draft) {
+    const error = new Error(`draft 不存在 id=${draftId}`);
+    error.status = 404;
+    throw error;
+  }
+
+  const ownedConfirmedTasks = (draft.draft_tasks || []).filter((task) => (
+    normalizeAssigneeKey(assigneeNameOf(task)) === assigneeKey && task.status === 'confirmed'
+  ));
+
+  if (!ownedConfirmedTasks.length) {
+    return {
+      draft_id: draftId,
+      status: 'no_confirmed_tasks',
+      created_count: 0,
+      duplicate_count: 0,
+      progress_updated_count: 0,
+      feishu_result: { success: true, created_count: 0, failed: [] }
+    };
+  }
+
+  return finalizeMeetingTaskDraft({
+    draftId,
+    confirmedBy,
+    confirmedTasks: ownedConfirmedTasks
+  });
+}

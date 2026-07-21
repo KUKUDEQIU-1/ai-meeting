@@ -2,31 +2,8 @@ import express from 'express';
 import { createTaskRecord } from '../services/feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingService.js';
 import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImportService.js';
-import { getMeetingTaskDraftById, updateMeetingTaskDraftItem } from '../services/taskDraftService.js';
-import { finalizeMeetingTaskDraft } from '../services/draftFinalizeService.js';
 
 const router = express.Router();
-
-function badRequest(message) {
-  const error = new Error(message);
-  error.status = 400;
-  return error;
-}
-
-function getDraftTaskStats(tasks) {
-  return (tasks || []).reduce((summary, task) => {
-    const status = task.status || 'pending';
-    summary[status] = (summary[status] || 0) + 1;
-    return summary;
-  }, { pending: 0, confirmed: 0, discarded: 0 });
-}
-
-function toDraftResponse(draft) {
-  return {
-    ...draft,
-    task_stats: getDraftTaskStats(draft.draft_tasks || [])
-  };
-}
 
 router.post('/sync-feishu', async (req, res, next) => {
   try {
@@ -245,189 +222,21 @@ router.post('/sync-getnote', async (req, res, next) => {
   }
 });
 
-router.post('/confirm-draft', async (req, res, next) => {
+router.post('/sync-feishu-docx', async (req, res, next) => {
   try {
-    const draftId = Number(req.body?.draft_id);
-    const confirmedBy = String(req.body?.confirmed_by || '待确认').trim();
-    const confirmedTasks = Array.isArray(req.body?.confirmed_tasks) ? req.body.confirmed_tasks : null;
+    const limit = Number(req.body?.limit) || undefined;
+    const force = req.body?.force === true || req.body?.force === 'true';
+    const reanalyze = req.body?.reanalyze === true || req.body?.reanalyze === 'true';
+    const { syncConfiguredFeishuDocxNotes } = await import('../services/feishuDocxNoteImportService.js');
 
-    if (!Number.isFinite(draftId) || draftId <= 0) {
-      res.status(400).json({ message: 'draft_id 非法' });
-      return;
-    }
-
-    const result = await finalizeMeetingTaskDraft({ draftId, confirmedBy, confirmedTasks });
-    const updatedDraft = await getMeetingTaskDraftById(draftId);
-
-    res.json({
-      success: true,
-      ...result,
-      draft: updatedDraft
+    const result = await syncConfiguredFeishuDocxNotes({
+      limit,
+      force,
+      reanalyze
     });
+
+    res.json(result);
   } catch (error) {
-    if (error.feishu_result) {
-      res.status(error.status || 502).json({ success: false, feishu_result: error.feishu_result, message: error.message });
-      return;
-    }
-    next(error);
-  }
-});
-
-router.get('/draft/:id', async (req, res, next) => {
-  try {
-    const draftId = Number(req.params.id);
-
-    if (!Number.isFinite(draftId) || draftId <= 0) {
-      throw badRequest('draft_id 非法');
-    }
-
-    const draft = await getMeetingTaskDraftById(draftId);
-
-    if (!draft) {
-      res.status(404).json({ message: 'draft 不存在' });
-      return;
-    }
-
-    res.json({ success: true, draft: toDraftResponse(draft) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/draft-item/update', async (req, res, next) => {
-  try {
-    const draftId = Number(req.body?.draft_id);
-    const itemId = String(req.body?.item_id || '').trim();
-    const taskName = String(req.body?.task_name || '').trim();
-    const assignee = String(req.body?.assignee || '').trim();
-    const deadline = String(req.body?.deadline || '').trim();
-    const comment = String(req.body?.comment || '').trim();
-    const operator = String(req.body?.operator || '').trim();
-
-    if (!Number.isFinite(draftId) || draftId <= 0) throw badRequest('draft_id 非法');
-    if (!itemId) throw badRequest('item_id 不能为空');
-    if (!taskName) throw badRequest('task_name 不能为空');
-
-    const result = await updateMeetingTaskDraftItem(draftId, itemId, (task) => ({
-      ...task,
-      task_name: taskName,
-      assignee: assignee || '待确认',
-      owner: assignee || '待确认',
-      deadline: deadline || '待确认',
-      comment,
-      updated_by: operator,
-      updated_at: new Date().toISOString()
-    }));
-
-    if (!result?.draft) {
-      res.status(404).json({ message: 'draft 不存在' });
-      return;
-    }
-    if (!result.item) {
-      res.status(404).json({ message: 'draft item 不存在' });
-      return;
-    }
-
-    res.json({ success: true, draft: toDraftResponse(result.draft), item: result.item });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/draft-item/confirm', async (req, res, next) => {
-  try {
-    const draftId = Number(req.body?.draft_id);
-    const itemId = String(req.body?.item_id || '').trim();
-    const operator = String(req.body?.operator || '').trim();
-
-    if (!Number.isFinite(draftId) || draftId <= 0) throw badRequest('draft_id 非法');
-    if (!itemId) throw badRequest('item_id 不能为空');
-
-    const result = await updateMeetingTaskDraftItem(draftId, itemId, (task) => ({
-      ...task,
-      status: 'confirmed',
-      confirmed_by: operator,
-      confirmed_at: new Date().toISOString(),
-      updated_by: operator,
-      updated_at: new Date().toISOString()
-    }));
-
-    if (!result?.draft) {
-      res.status(404).json({ message: 'draft 不存在' });
-      return;
-    }
-    if (!result.item) {
-      res.status(404).json({ message: 'draft item 不存在' });
-      return;
-    }
-
-    res.json({ success: true, draft: toDraftResponse(result.draft), item: result.item });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/draft-item/discard', async (req, res, next) => {
-  try {
-    const draftId = Number(req.body?.draft_id);
-    const itemId = String(req.body?.item_id || '').trim();
-    const operator = String(req.body?.operator || '').trim();
-    const comment = String(req.body?.comment || '').trim();
-
-    if (!Number.isFinite(draftId) || draftId <= 0) throw badRequest('draft_id 非法');
-    if (!itemId) throw badRequest('item_id 不能为空');
-
-    const result = await updateMeetingTaskDraftItem(draftId, itemId, (task) => ({
-      ...task,
-      status: 'discarded',
-      comment,
-      updated_by: operator,
-      updated_at: new Date().toISOString()
-    }));
-
-    if (!result?.draft) {
-      res.status(404).json({ message: 'draft 不存在' });
-      return;
-    }
-    if (!result.item) {
-      res.status(404).json({ message: 'draft item 不存在' });
-      return;
-    }
-
-    res.json({ success: true, draft: toDraftResponse(result.draft), item: result.item });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.post('/draft/finalize', async (req, res, next) => {
-  try {
-    const draftId = Number(req.body?.draft_id);
-    const confirmedBy = String(req.body?.confirmed_by || '待确认').trim();
-
-    if (!Number.isFinite(draftId) || draftId <= 0) throw badRequest('draft_id 非法');
-
-    const draft = await getMeetingTaskDraftById(draftId);
-    if (!draft) {
-      res.status(404).json({ message: 'draft 不存在' });
-      return;
-    }
-
-    const pendingTasks = (draft.draft_tasks || []).filter((task) => task.status === 'pending');
-    if (pendingTasks.length) {
-      res.status(400).json({ success: false, message: '仍有待处理任务，无法确认入表', pending_count: pendingTasks.length, draft: toDraftResponse(draft) });
-      return;
-    }
-
-    const confirmedTasks = (draft.draft_tasks || []).filter((task) => task.status === 'confirmed');
-    const result = await finalizeMeetingTaskDraft({ draftId, confirmedBy, confirmedTasks });
-    const updatedDraft = await getMeetingTaskDraftById(draftId);
-    res.json({ success: true, ...result, draft: toDraftResponse(updatedDraft) });
-  } catch (error) {
-    if (error.feishu_result) {
-      res.status(error.status || 502).json({ success: false, feishu_result: error.feishu_result, message: error.message });
-      return;
-    }
     next(error);
   }
 });

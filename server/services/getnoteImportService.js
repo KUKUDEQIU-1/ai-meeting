@@ -1,5 +1,5 @@
 import { get, run } from '../db/database.js';
-import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuGroup, sendMeetingTableToFeishuUser, writeMeetingIndexRecord } from './feishuBitableClient.js';
+import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser, writeMeetingIndexRecord } from './feishuBitableClient.js';
 import { addTagsToNote, extractGetNoteContent, extractGetNoteContentWithMeta, getNoteDetail, getNoteList, getTopicNoteList } from './getnoteClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
 import { saveTaskHistory, saveTaskInstances, saveTaskProgress, suppressHistoricalTasks, updateTaskInstancesFromProgress } from './taskHistoryService.js';
@@ -35,22 +35,6 @@ function getNotifyTarget() {
 async function notifyUserSafe(params) {
   try {
     const result = await sendMeetingTableToFeishuUser(params);
-
-    return {
-      status: result.status || 'success',
-      error: result.error || null
-    };
-  } catch (error) {
-    return {
-      status: 'failed',
-      error: error.message
-    };
-  }
-}
-
-async function notifyGroupSafe(params) {
-  try {
-    const result = await sendMeetingTableToFeishuGroup(params);
 
     return {
       status: result.status || 'success',
@@ -592,17 +576,6 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     });
     notifyStatus = notifyResult.status;
     notifyError = notifyResult.error;
-
-    const groupNotifyResult = await notifyGroupSafe({
-      meeting_title: meetingTitle,
-      meeting_source: 'Get笔记',
-      table_name: meetingTable.table_name,
-      table_url: meetingTable.table_url,
-      tasks_count: aiResult.tasks.length,
-      imported_count: todayTasksCount,
-      failed_count: 0
-    });
-    console.log(`[GetNote Sync] notify group done note_id=${normalizedNoteId} status=${groupNotifyResult.status}${groupNotifyResult.error ? ` error=${groupNotifyResult.error}` : ''}`);
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,

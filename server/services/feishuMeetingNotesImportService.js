@@ -1,11 +1,12 @@
 import { get, run } from '../db/database.js';
-import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendDraftTasksToFeishuGroup, sendMeetingTableToFeishuUser } from './feishuBitableClient.js';
+import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser } from './feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
 import { saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
 import { extractFeishuMeetingNoteContentWithMeta, findMeetingNoteId, getFeishuMeetingDetail, getFeishuMeetingNoteDetail, getFeishuMeetingNoteList, normalizeFeishuMeetingNote } from './feishuMeetingNotesClient.js';
 import { formatSegmentsForPrompt, normalizeMeetingTranscript } from './meetingTranscriptService.js';
-import { createMeetingTaskDraft, updateMeetingTaskDraftStatus } from './taskDraftService.js';
+import { createMeetingTaskDraft } from './taskDraftService.js';
 import { resolveDraftTasksAgainstHistory } from './taskResolutionService.js';
+import { dispatchDraftTaskCards } from './feishuTaskCardService.js';
 
 const SKIPPED_MESSAGE = '该飞书会议智能纪要已同步，跳过重复写入';
 
@@ -75,9 +76,9 @@ async function notifyUserSafe(params) {
   }
 }
 
-async function notifyGroupSafe(params) {
+async function dispatchDraftTaskCardsSafe(draft) {
   try {
-    const result = await sendDraftTasksToFeishuGroup(params);
+    const result = await dispatchDraftTaskCards(draft);
     return { status: result.status || 'success', error: result.error || null };
   } catch (error) {
     return { status: 'failed', error: error.message };
@@ -376,21 +377,8 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
     notifyStatus = notifyResult.status;
     notifyError = notifyResult.error;
 
-    const groupNotifyResult = await notifyGroupSafe({
-      draft_id: draft.id,
-      meeting_title: meetingTitle,
-      meeting_source: '飞书会议智能纪要',
-      new_tasks: resolutionResult.tasks,
-      existing_matches: resolutionResult.existing_matches,
-      uncertain_tasks: resolutionResult.uncertain_tasks
-    });
-    console.log(`[Feishu Meeting Notes Sync] notify group done note_id=${normalizedNoteId} status=${groupNotifyResult.status}${groupNotifyResult.error ? ` error=${groupNotifyResult.error}` : ''}`);
-
-    if (groupNotifyResult.status === 'success' && groupNotifyResult.message_id) {
-      await updateMeetingTaskDraftStatus(draft.id, 'pending_confirmation', {
-        confirmation_message_id: groupNotifyResult.message_id
-      });
-    }
+    const cardDispatchResult = await dispatchDraftTaskCardsSafe(draft);
+    console.log(`[Feishu Meeting Notes Sync] private task cards done note_id=${normalizedNoteId} status=${cardDispatchResult.status}${cardDispatchResult.error ? ` error=${cardDispatchResult.error}` : ''}`);
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,

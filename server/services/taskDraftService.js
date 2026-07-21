@@ -159,6 +159,94 @@ export async function updateMeetingTaskDraftItem(id, itemId, updater) {
   return { draft: updatedDraft, item: nextTask };
 }
 
+export async function upsertDraftAssigneeState({
+  draftId,
+  assigneeKey,
+  assigneeName,
+  receiveIdType = 'open_id',
+  receiveId,
+  deliveryStatus = 'pending',
+  deliveryError = '',
+  cardMessageId = ''
+}) {
+  const timestamp = nowIso();
+
+  await run(
+    `INSERT INTO meeting_task_draft_assignees
+      (draft_id, assignee_key, assignee_name, receive_id_type, receive_id, card_message_id, delivery_status, delivery_error, confirmation_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+     ON CONFLICT(draft_id, assignee_key) DO UPDATE SET
+      assignee_name = excluded.assignee_name,
+      receive_id_type = excluded.receive_id_type,
+      receive_id = excluded.receive_id,
+      card_message_id = COALESCE(NULLIF(excluded.card_message_id, ''), card_message_id),
+      delivery_status = excluded.delivery_status,
+      delivery_error = excluded.delivery_error,
+      updated_at = excluded.updated_at`,
+    [
+      draftId,
+      assigneeKey,
+      assigneeName,
+      receiveIdType,
+      receiveId || '',
+      cardMessageId || '',
+      deliveryStatus,
+      deliveryError || '',
+      timestamp,
+      timestamp
+    ]
+  );
+
+  return getDraftAssigneeState(draftId, assigneeKey);
+}
+
+export async function updateDraftAssigneeDelivery({ draftId, assigneeKey, deliveryStatus, deliveryError = '', cardMessageId = '' }) {
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET delivery_status = ?, delivery_error = ?, card_message_id = COALESCE(NULLIF(?, ''), card_message_id), updated_at = ?
+     WHERE draft_id = ? AND assignee_key = ?`,
+    [deliveryStatus, deliveryError || '', cardMessageId || '', nowIso(), draftId, assigneeKey]
+  );
+
+  return getDraftAssigneeState(draftId, assigneeKey);
+}
+
+export async function markDraftAssigneeConfirmed({ draftId, assigneeKey, confirmedBy, callbackId }) {
+  const existing = await getDraftAssigneeState(draftId, assigneeKey);
+  const timestamp = existing?.confirmed_at || nowIso();
+
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET confirmation_status = 'confirmed', confirmed_at = COALESCE(confirmed_at, ?), confirmed_by = COALESCE(confirmed_by, ?), last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
+     WHERE draft_id = ? AND assignee_key = ?`,
+    [timestamp, confirmedBy || '', callbackId || null, nowIso(), draftId, assigneeKey]
+  );
+
+  return getDraftAssigneeState(draftId, assigneeKey);
+}
+
+export async function updateDraftAssigneeCallbackId({ draftId, assigneeKey, callbackId }) {
+  await run(
+    'UPDATE meeting_task_draft_assignees SET last_callback_id = COALESCE(?, last_callback_id), updated_at = ? WHERE draft_id = ? AND assignee_key = ?',
+    [callbackId || null, nowIso(), draftId, assigneeKey]
+  );
+
+  return getDraftAssigneeState(draftId, assigneeKey);
+}
+
+export async function getDraftAssigneeState(draftId, assigneeKey) {
+  return get('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ? AND assignee_key = ?', [draftId, assigneeKey]);
+}
+
+export async function getDraftAssigneeStateByMessageId(messageId) {
+  if (!messageId) return null;
+  return get('SELECT * FROM meeting_task_draft_assignees WHERE card_message_id = ?', [messageId]);
+}
+
+export async function listDraftAssigneeStates(draftId) {
+  return all('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ? ORDER BY assignee_name ASC', [draftId]);
+}
+
 function hydrateDraft(row) {
   const draftTasks = normalizeDraftTasks(parseJson(row.draft_json, []), row.id);
   return {
