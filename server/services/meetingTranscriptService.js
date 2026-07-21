@@ -1,4 +1,6 @@
 const SPEAKER_LINE_RE = /^@?([^\n@]{1,40}?)\s+(\d{2}:\d{2}:\d{2})\s*$/;
+const EMBEDDED_SPEAKER_HEADER_RE = /(?:^|\n)\s*@?([^\n@：:]{1,40}?)\s+(\d{2}:\d{2}:\d{2})\s*(?:\n|[：:])\s*/g;
+const INLINE_SPEAKER_HEADER_RE = /(?:^|\s)(@?[\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9._-]{0,11})\s+(\d{2}:\d{2}:\d{2})\s+/gu;
 const LOW_SIGNAL_PATTERNS = [
   /^(嗯+|啊+|哦+|额+|对+|好+|可以+|行+|是+|没事|没问题|收到)$/,
   /^(对对对|嗯嗯嗯|好好好)$/
@@ -44,6 +46,95 @@ function hasContextualLink(segment, prev, next) {
   return false;
 }
 
+function normalizeSpeakerName(value) {
+  return String(value || '').trim().replace(/^@/, '') || '待确认';
+}
+
+function withAttributionMetadata(segment, overrides = {}) {
+  const warnings = new Set([
+    ...(Array.isArray(segment.attribution_warnings) ? segment.attribution_warnings : []),
+    ...(Array.isArray(overrides.attribution_warnings) ? overrides.attribution_warnings : [])
+  ].filter(Boolean));
+  const speakerStatus = overrides.speaker_status || segment.speaker_status || (segment.speaker && segment.speaker !== '待确认' ? 'provided' : 'unknown');
+  const reviewRequired = Boolean(overrides.review_required || segment.review_required || speakerStatus !== 'provided' || warnings.size);
+
+  return {
+    ...segment,
+    ...overrides,
+    speaker: normalizeSpeakerName(overrides.speaker ?? segment.speaker),
+    speaker_status: speakerStatus,
+    speaker_confidence: overrides.speaker_confidence ?? segment.speaker_confidence ?? (speakerStatus === 'provided' ? 0.8 : 0.2),
+    review_required: reviewRequired,
+    attribution_warnings: Array.from(warnings)
+  };
+}
+
+function pushCurrent(segments, current) {
+  if (current && current.text.trim()) {
+    segments.push(withAttributionMetadata({ ...current, text: current.text.trim() }));
+  }
+}
+
+function findInlineSpeakerHeaders(text) {
+  const matches = Array.from(String(text || '').matchAll(INLINE_SPEAKER_HEADER_RE)).map((match) => ({
+    index: match.index + match[0].length - match[0].trimStart().length,
+    length: match[0].trimStart().length, speaker: match[1], time: match[2]
+  }));
+
+  if (matches.length < 2 || matches[0].index !== 0) {
+    return [];
+  }
+
+  return matches;
+}
+
+function splitHeaderMatches(segment, matches) {
+  const text = String(segment.text || '');
+  const result = [];
+  let cursor = 0;
+
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const before = text.slice(cursor, match.index).trim();
+
+    if (before) {
+      result.push(withAttributionMetadata({ ...segment, text: before }, { speaker_status: segment.speaker_status || 'provided', speaker_confidence: Math.min(segment.speaker_confidence ?? 0.8, 0.6), review_required: true, attribution_warnings: ['embedded_header_split_before'] }));
+    }
+
+    const contentStart = match.index + match.length;
+    const nextMatch = matches[index + 1];
+    const contentEnd = nextMatch ? nextMatch.index : text.length;
+    const content = text.slice(contentStart, contentEnd).trim();
+    cursor = contentEnd;
+
+    if (content) {
+      result.push(withAttributionMetadata({ speaker: normalizeSpeakerName(match.speaker), time: match.time.trim(), text: content }, { speaker_status: 'embedded_header', speaker_confidence: 0.7, review_required: true, attribution_warnings: ['embedded_speaker_header_detected'] }));
+    }
+  }
+
+  const trailing = text.slice(cursor).trim();
+
+  if (trailing) {
+    result.push(withAttributionMetadata({ ...segment, text: trailing }, { speaker_confidence: Math.min(segment.speaker_confidence ?? 0.8, 0.6), review_required: true, attribution_warnings: ['embedded_header_trailing_text'] }));
+  }
+
+  return result.length ? result : [withAttributionMetadata(segment)];
+}
+
+function splitEmbeddedHeaders(segment) {
+  const text = String(segment.text || '');
+  const matches = Array.from(text.matchAll(EMBEDDED_SPEAKER_HEADER_RE)).map((match) => ({
+    index: match.index, length: match[0].length, speaker: match[1], time: match[2]
+  }));
+  const inlineMatches = findInlineSpeakerHeaders(text);
+
+  if (!matches.length && !inlineMatches.length) {
+    return [withAttributionMetadata(segment)];
+  }
+
+  return splitHeaderMatches(segment, matches.length ? matches : inlineMatches);
+}
+
 export function parseFeishuMeetingTranscript(rawText) {
   const lines = String(rawText || '').split(/\r?\n/);
   const segments = [];
@@ -55,13 +146,15 @@ export function parseFeishuMeetingTranscript(rawText) {
 
     const match = line.match(SPEAKER_LINE_RE);
     if (match) {
-      if (current && current.text.trim()) {
-        segments.push({ ...current, text: current.text.trim() });
-      }
+      pushCurrent(segments, current);
       current = {
-        speaker: match[1].trim().replace(/^@/, ''),
+        speaker: normalizeSpeakerName(match[1]),
         time: match[2].trim(),
-        text: ''
+        text: '',
+        speaker_status: 'provided',
+        speaker_confidence: 0.8,
+        review_required: false,
+        attribution_warnings: []
       };
       continue;
     }
@@ -70,7 +163,11 @@ export function parseFeishuMeetingTranscript(rawText) {
       current = {
         speaker: '待确认',
         time: '',
-        text: line
+        text: line,
+        speaker_status: 'unknown',
+        speaker_confidence: 0.2,
+        review_required: true,
+        attribution_warnings: ['missing_initial_speaker_header']
       };
       continue;
     }
@@ -78,11 +175,9 @@ export function parseFeishuMeetingTranscript(rawText) {
     current.text = current.text ? `${current.text}\n${line}` : line;
   }
 
-  if (current && current.text.trim()) {
-    segments.push({ ...current, text: current.text.trim() });
-  }
+  pushCurrent(segments, current);
 
-  return segments;
+  return segments.flatMap(splitEmbeddedHeaders);
 }
 
 export function mergeBrokenSpeakerSegments(segments = []) {
@@ -90,14 +185,31 @@ export function mergeBrokenSpeakerSegments(segments = []) {
 
   for (const segment of segments) {
     const last = merged[merged.length - 1];
-    const compact = compactText(segment.text);
     const shouldMerge = last
       && last.speaker === segment.speaker
-      && (!last.time || !segment.time || Math.abs(toSeconds(last.time) - toSeconds(segment.time)) <= 90)
-      && (compact.length < 30 || isLowSignalText(segment.text) || hasContextualLink(segment, last, null));
+      && !last.review_required
+      && !segment.review_required
+      && last.speaker_status === 'provided'
+      && segment.speaker_status === 'provided'
+      && (!last.time || !segment.time || Math.abs(toSeconds(last.time) - toSeconds(segment.time)) <= 5)
+      && hasContextualLink(segment, last, null)
+      && !isLowSignalText(segment.text);
 
     if (!shouldMerge) {
-      merged.push({ ...segment });
+      const warnings = [];
+
+      if (last && last.speaker === segment.speaker && Math.abs(toSeconds(last.time) - toSeconds(segment.time)) > 5) {
+        warnings.push('same_speaker_not_merged_time_gap');
+      }
+
+      if (last && last.speaker === segment.speaker && isLowSignalText(segment.text)) {
+        warnings.push('same_speaker_not_merged_low_signal');
+      }
+
+      merged.push(withAttributionMetadata(segment, warnings.length ? {
+        review_required: true,
+        attribution_warnings: warnings
+      } : {}));
       continue;
     }
 
@@ -127,17 +239,20 @@ export function filterLowCoherenceSegments(segments = []) {
     const lowSignal = isLowSignalText(segment.text);
 
     if (lowSignal && !hasContextualLink(segment, prev, next)) {
-      discardedSegments.push({
+      discardedSegments.push(withAttributionMetadata({
         ...segment,
         discard_reason: 'low_coherence_no_context'
-      });
+      }, {
+        review_required: true,
+        attribution_warnings: ['low_coherence_no_context']
+      }));
       continue;
     }
 
-    usableSegments.push({
+    usableSegments.push(withAttributionMetadata({
       ...segment,
       coherence: lowSignal ? 'context-linked' : 'clear'
-    });
+    }));
   }
 
   return {
@@ -153,5 +268,14 @@ export function normalizeMeetingTranscript(rawText) {
 }
 
 export function formatSegmentsForPrompt(segments = []) {
-  return segments.map((segment) => `[${segment.time || '未提供'}] ${segment.speaker || '待确认'}：${String(segment.text || '').trim()}`).join('\n');
+  return segments.map((segment) => {
+    const warnings = Array.isArray(segment.attribution_warnings) && segment.attribution_warnings.length
+      ? ` warnings=${segment.attribution_warnings.join('|')}`
+      : '';
+    const status = segment.speaker_status || 'unknown';
+    const confidence = typeof segment.speaker_confidence === 'number' ? segment.speaker_confidence.toFixed(2) : '0.00';
+    const review = segment.review_required ? ' review_required=true' : '';
+
+    return `[${segment.time || '未提供'}] ${segment.speaker || '待确认'} (speaker_status=${status} speaker_confidence=${confidence}${review}${warnings})：${String(segment.text || '').trim()}`;
+  }).join('\n');
 }
