@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getTenantAccessToken } from './feishuBitableClient.js';
-import { assigneeMembersToMap, buildAssigneeTaskCard, groupDraftTasksByAssignee, parseAssigneeMap } from './feishuTaskCardPure.js';
+import { assigneeMembersToMap, assigneeNameOf, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
 import { getDraftAssigneeState, getMeetingTaskDraftById, updateDraftAssigneeDelivery, upsertDraftAssigneeState } from './taskDraftService.js';
 
@@ -21,6 +21,31 @@ export function resolveTaskCardRecipients(assignees) {
     original_receive_id: assignee.receive_id,
     test_mode: true
   }));
+}
+
+export function groupDraftTasksForTestRecipient(tasks, receiveId) {
+  const grouped = new Map();
+
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const assigneeName = assigneeNameOf(task);
+    const assigneeKey = normalizeAssigneeKey(assigneeName);
+
+    if (!grouped.has(assigneeKey)) {
+      grouped.set(assigneeKey, {
+        assignee_key: assigneeKey,
+        assignee_name: assigneeName,
+        receive_id_type: 'open_id',
+        receive_id: receiveId,
+        original_receive_id: '',
+        test_mode: true,
+        tasks: []
+      });
+    }
+
+    grouped.get(assigneeKey).tasks.push(task);
+  }
+
+  return [...grouped.values()];
 }
 
 async function postFeishuMessage({ receiveId, card }) {
@@ -129,6 +154,29 @@ async function sendAssigneeCard(draft, assignee) {
 }
 
 export async function dispatchDraftTaskCards(draft) {
+  const testReceiveOpenId = configuredTaskCardTestReceiveOpenId();
+  const draftTasks = draft?.draft_tasks || [];
+
+  if (testReceiveOpenId) {
+    const results = [];
+
+    for (const assignee of groupDraftTasksForTestRecipient(draftTasks, testReceiveOpenId)) {
+      results.push(await sendAssigneeCard(draft, assignee));
+    }
+
+    const sentCount = results.filter((item) => item.status === 'sent').length;
+    const failedCount = results.filter((item) => item.status === 'failed').length;
+
+    return {
+      status: sentCount > 0 ? 'success' : 'failed',
+      sent_count: sentCount,
+      failed_count: failedCount,
+      results,
+      member_source: 'test_receive_override',
+      delivery_failures: []
+    };
+  }
+
   const configuredMap = parseAssigneeMap();
   let assigneeMap = configuredMap;
   let memberSource = 'configured_map';
@@ -143,7 +191,7 @@ export async function dispatchDraftTaskCards(draft) {
     console.warn(`[Draft Notify] group member lookup failed; using configured mapping error=${error.message}`);
   }
 
-  const grouped = groupDraftTasksByAssignee(draft?.draft_tasks || [], assigneeMap);
+  const grouped = groupDraftTasksByAssignee(draftTasks, assigneeMap);
   const results = [];
 
   await persistUnmappedAssignees(draft.id, grouped.deliveryFailures);
