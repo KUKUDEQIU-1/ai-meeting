@@ -81,6 +81,7 @@ FEISHU_APP_SECRET=
 FEISHU_BITABLE_APP_TOKEN=
 FEISHU_BITABLE_TABLE_ID=
 FEISHU_ASSIGNEE_MAP_JSON={"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}
+FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 FEISHU_EVENT_VERIFICATION_TOKEN=
 FEISHU_DOCX_SOURCE_API_TOKEN=
 ```
@@ -184,6 +185,14 @@ FEISHU_ASSIGNEE_MAP_JSON={"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}
 ```
 
 负责人名称会先去除空白后匹配。未配置映射的负责人会记录为发送失败，不会回退发送到全局通知账号。
+
+测试新卡片投递时可设置专用覆盖接收人：
+
+```env
+FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID=ou_xxx
+```
+
+设置后，所有新生成的负责人任务卡片只会发送给该测试 `open_id`。卡片仍按原负责人分组并显示原负责人名称，本地持久化的 `assignee_key` 也仍是原任务负责人；仅 `receive_id` 会改为测试人，因此回调操作者校验会要求测试人点击卡片。该变量只影响后续新投递的卡片，不会修改任务负责人，也不会补发历史卡片。
 
 飞书开放平台还需要：
 
@@ -406,6 +415,7 @@ server/db/schema.sql
 FEISHU_GROUP_NOTIFY_RECEIVE_ID_TYPE=chat_id
 FEISHU_GROUP_NOTIFY_RECEIVE_ID=
 FEISHU_ASSIGNEE_MAP_JSON={"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}
+FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 FEISHU_EVENT_VERIFICATION_TOKEN=
 FEISHU_NOTIFY_RECEIVE_ID_TYPE=email
 FEISHU_NOTIFY_RECEIVE_ID=
@@ -427,6 +437,7 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID_TYPE=chat_id`：群通知接收 ID 类型。仅用于非草稿确认类群通知；飞书会议纪要/docx 草稿确认不再使用群确认链接。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID=`：目标群聊 ID。该变量不再控制草稿确认投递，草稿确认改为按负责人私发交互卡片。
 - `FEISHU_ASSIGNEE_MAP_JSON=`：负责人到飞书 `open_id` 的映射，键会按去空格后的负责人姓名匹配；未映射负责人会记录为投递失败，不会回退发送到全局收件人。示例：`{"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}`。
+- `FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID=`：可选测试覆盖接收人。配置后所有新任务确认卡片只发给该测试 `open_id`，但负责人分组、卡片标签、任务归属和入表过滤仍使用原负责人；回调 actor 校验使用持久化的测试 `receive_id`。
 - `FEISHU_EVENT_VERIFICATION_TOKEN=`：飞书事件订阅/卡片回调 verification token。配置后 `/api/feishu/card-action` 会拒绝 token 不匹配的回调。
 - `FEISHU_NOTIFY_RECEIVE_ID_TYPE=email`：飞书私发通知的接收 ID 类型，默认 `email`。
 - `FEISHU_NOTIFY_RECEIVE_ID=`：飞书私发通知接收人。配置后，worker 启动首次扫描若 `imported=0` 会私发“未读取到会议内容”。
@@ -501,7 +512,7 @@ npm run worker:getnote
 
 ## 飞书负责人私有任务卡片
 
-飞书会议智能纪要和 docx 草稿路径会先创建本地 `meeting_task_drafts`，再按负责人归一化分组，向 `FEISHU_ASSIGNEE_MAP_JSON` 中配置的 `open_id` 私发一张交互任务卡片。每张卡片只包含该负责人的任务，使用 `receive_id_type=open_id`，卡片内可修改任务名称、截止时间、备注，或确认本人任务入总任务表。未配置映射的负责人只会在本地 `meeting_task_draft_assignees` 中记录投递失败，不会发送到 `FEISHU_NOTIFY_RECEIVE_ID` 或群聊。
+飞书会议智能纪要和 docx 草稿路径会先创建本地 `meeting_task_drafts`，再按负责人归一化分组，向 `FEISHU_ASSIGNEE_MAP_JSON` 中配置的 `open_id` 私发一张交互任务卡片。每张卡片只包含该负责人的任务，使用 `receive_id_type=open_id`，卡片内可修改任务名称、截止时间、备注，或确认本人任务入总任务表。未配置映射的负责人只会在本地 `meeting_task_draft_assignees` 中记录投递失败，不会发送到 `FEISHU_NOTIFY_RECEIVE_ID` 或群聊。若配置 `FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID`，新卡片只发送给该测试人；原负责人分组和 `assignee_key` 保持不变，点击人必须是持久化的测试 `receive_id`。
 
 飞书控制台需要配置：
 
