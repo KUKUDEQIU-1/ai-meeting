@@ -82,7 +82,7 @@ function normalizeTaskType(task) {
     return task.task_type;
   }
 
-  if (task.extraction_type === 'follow_up' || task.needs_confirmation) {
+  if (task.extraction_type === 'follow_up' || task.extraction_type === 'inferred') {
     return 'follow_up';
   }
 

@@ -1,4 +1,5 @@
 import { fetchWithRetry } from '../utils/fetchWithRetry.js';
+import { formatSegmentsForPrompt } from './meetingTranscriptService.js';
 
 const fallbackSummary = (meetingText) => ({
   title: '会议纪要',
@@ -28,6 +29,30 @@ const fallbackTasks = () => [
     project: 'AI会议助手',
     source: '会议纪要'
   }
+];
+
+const PENDING_ASSIGNEE = '待确认';
+const SPEAKER_CONFIDENCE_OWNER_THRESHOLD = 0.65;
+const LOW_RISK_ATTRIBUTION_WARNINGS = new Set([
+  'same_speaker_not_merged_time_gap',
+  'same_speaker_not_merged_low_signal'
+]);
+const HIGH_RISK_ATTRIBUTION_WARNING_PATTERNS = [
+  /embedded/i,
+  /missing_initial_speaker_header/i,
+  /speaker_conflict/i,
+  /executor_conflict/i,
+  /explicit_executor_conflict/i,
+  /overlap/i,
+  /leakage/i,
+  /crosstalk/i,
+  /open_mic/i,
+  /low_coherence/i,
+  /串音/,
+  /抢话/,
+  /泄漏/,
+  /重叠/,
+  /冲突/
 ];
 
 function hasConfiguredAiKey() {
@@ -85,36 +110,126 @@ function normalizeChapters(chapters) {
   }));
 }
 
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function isPendingAssignee(value) {
+  const text = normalizeText(value);
+  return !text || /^(说话人\d+|未知|未提供|不明确|待确认|无|暂无)$/.test(text);
+}
+
+function getAttributionWarnings(item) {
+  return Array.isArray(item.attribution_warnings) ? item.attribution_warnings.map(normalizeText).filter(Boolean) : [];
+}
+
+function hasHighRiskAttributionWarning(warnings) {
+  return warnings.some((warning) => HIGH_RISK_ATTRIBUTION_WARNING_PATTERNS.some((pattern) => pattern.test(warning)));
+}
+
+function hasOnlyLowRiskAttributionWarnings(warnings) {
+  return warnings.length > 0 && warnings.every((warning) => LOW_RISK_ATTRIBUTION_WARNINGS.has(warning));
+}
+
+function getSourceSpeakerConfidence(item, speakerStatus) {
+  if (typeof item.source_speaker_confidence === 'number') return item.source_speaker_confidence;
+  if (typeof item.speaker_confidence === 'number') return item.speaker_confidence;
+  return speakerStatus === 'provided' ? 0.8 : 0.2;
+}
+
+function getSourceSpeakerStatus(item) {
+  const status = normalizeText(item.source_speaker_status || item.speaker_status);
+  if (status) return status;
+
+  return isPendingAssignee(item.source_speaker || item.speaker) ? 'unknown' : 'provided';
+}
+
+function hasReliableSourceSpeaker(item) {
+  const sourceSpeaker = normalizeText(item.source_speaker || item.speaker);
+  const speakerStatus = getSourceSpeakerStatus(item);
+  const speakerConfidence = getSourceSpeakerConfidence(item, speakerStatus);
+
+  return !isPendingAssignee(sourceSpeaker)
+    && speakerStatus === 'provided'
+    && speakerConfidence >= SPEAKER_CONFIDENCE_OWNER_THRESHOLD;
+}
+
+function isParticipantOrRecipientMention(item, assignee) {
+  const name = normalizeText(assignee);
+  if (isPendingAssignee(name)) return false;
+
+  const evidence = `${item.evidence_quote || ''} ${item.evidence || ''} ${item.task_description || ''} ${item.description || ''} ${item.task_brief || ''}`;
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const discussionOrRecipient = new RegExp(`(跟|和|与)${escapedName}(讨论|review|评审|确认|沟通)|${escapedName}(讨论|review|评审)|发给${escapedName}|同步给${escapedName}|抄送${escapedName}|给${escapedName}同步`);
+  return discussionOrRecipient.test(evidence);
+}
+
+function normalizeAssigneeAttribution(item) {
+  const rawAssignee = normalizeText(item.assignee || item.owner || item.responsible || PENDING_ASSIGNEE);
+  const sourceSpeaker = normalizeText(item.source_speaker || item.speaker);
+  const assigneeSource = normalizeText(item.assignee_source || 'unclear');
+  const speakerStatus = getSourceSpeakerStatus(item);
+  const speakerConfidence = getSourceSpeakerConfidence(item, speakerStatus);
+  const warnings = getAttributionWarnings(item);
+  const explicitAssignee = assigneeSource === 'explicit_mention' && !isPendingAssignee(rawAssignee);
+  const reliableSourceSpeaker = hasReliableSourceSpeaker(item);
+  const highRiskAttribution = speakerStatus !== 'provided'
+    || speakerConfidence < SPEAKER_CONFIDENCE_OWNER_THRESHOLD
+    || isPendingAssignee(sourceSpeaker)
+    || hasHighRiskAttributionWarning(warnings);
+
+  if (explicitAssignee) {
+    return { assignee: rawAssignee, assignee_source: 'explicit_mention', needs_confirmation: Boolean(item.needs_confirmation) };
+  }
+
+  if (highRiskAttribution) {
+    return { assignee: PENDING_ASSIGNEE, assignee_source: 'unclear', needs_confirmation: true };
+  }
+
+  if (reliableSourceSpeaker && (isPendingAssignee(rawAssignee) || isParticipantOrRecipientMention(item, rawAssignee) || assigneeSource === 'speaker')) {
+    return { assignee: sourceSpeaker, assignee_source: 'speaker', needs_confirmation: Boolean(item.needs_confirmation || hasOnlyLowRiskAttributionWarnings(warnings)) };
+  }
+
+  return { assignee: rawAssignee, assignee_source: assigneeSource || (isPendingAssignee(rawAssignee) ? 'unclear' : 'speaker'), needs_confirmation: Boolean(item.needs_confirmation) };
+}
+
 function normalizeTasks(tasks) {
   if (!Array.isArray(tasks)) {
     return [];
   }
 
-  return tasks.map((item) => ({
-    task_name: item.task_name || item.title || item.task || item.todo || '未命名任务',
-    title: item.task_name || item.title || item.task || item.todo || '未命名任务',
-    task_brief: item.task_brief || item.brief || item.title || item.task || item.todo || '',
-    task_description: item.task_description || item.description || item.detail || item.summary || '',
-    description: item.task_description || item.description || item.detail || item.summary || '',
-    assignee: item.assignee || item.owner || item.responsible || '待确认',
-    owner: item.assignee || item.owner || item.responsible || '待确认',
-    deadline: item.deadline || item.dueDate || item.due || '待确认',
-    priority: item.priority || '中',
-    status: item.status || '待开始',
-    project: item.project || 'AI会议助手',
-    source: item.source || '会议纪要',
-    evidence_quote: item.evidence_quote || item.evidence || '待确认',
-    confidence: typeof item.confidence === 'number' ? item.confidence : 0.8,
-    needs_confirmation: Boolean(item.needs_confirmation),
-    extraction_type: item.extraction_type || (item.needs_confirmation ? 'inferred' : 'explicit'),
-    task_type: item.task_type || (item.needs_confirmation ? 'follow_up' : 'action_item'),
-    item_type: item.item_type || 'today_new_task',
-    should_create_task: item.should_create_task !== false,
-    reason: item.reason || '',
-    assignee_source: item.assignee_source || 'unclear',
-    source_speaker: item.source_speaker || '',
-    source_time: item.source_time || ''
-  }));
+  return tasks.map((item) => {
+    const attribution = normalizeAssigneeAttribution(item);
+
+    return {
+      task_name: item.task_name || item.title || item.task || item.todo || '未命名任务',
+      title: item.task_name || item.title || item.task || item.todo || '未命名任务',
+      task_brief: item.task_brief || item.brief || item.title || item.task || item.todo || '',
+      task_description: item.task_description || item.description || item.detail || item.summary || '',
+      description: item.task_description || item.description || item.detail || item.summary || '',
+      assignee: attribution.assignee,
+      owner: attribution.assignee,
+      deadline: item.deadline || item.dueDate || item.due || '待确认',
+      priority: item.priority || '中',
+      status: item.status || '待开始',
+      project: item.project || 'AI会议助手',
+      source: item.source || '会议纪要',
+      evidence_quote: item.evidence_quote || item.evidence || '待确认',
+      confidence: typeof item.confidence === 'number' ? item.confidence : 0.8,
+      needs_confirmation: attribution.needs_confirmation,
+      extraction_type: item.extraction_type || 'explicit',
+      task_type: item.task_type || (['follow_up', 'inferred'].includes(item.extraction_type) ? 'follow_up' : 'action_item'),
+      item_type: item.item_type || 'today_new_task',
+      should_create_task: item.should_create_task !== false,
+      reason: item.reason || '',
+      assignee_source: attribution.assignee_source,
+      source_speaker: item.source_speaker || '',
+      source_time: item.source_time || '',
+      source_speaker_status: item.source_speaker_status || item.speaker_status || '',
+      source_speaker_confidence: item.source_speaker_confidence ?? item.speaker_confidence ?? null,
+      attribution_warnings: getAttributionWarnings(item)
+    };
+  });
 }
 
 function normalizeProgressUpdates(items) {
@@ -144,7 +259,7 @@ function normalizeDiscardedItems(items) {
   }));
 }
 
-function normalizeTaskExtractionResult(result) {
+export function normalizeTaskExtractionResult(result) {
   if (Array.isArray(result)) {
     return {
       today_tasks: normalizeTasks(result),
@@ -248,10 +363,10 @@ function buildMeetingText(input) {
     ? `\n\nGet笔记自带 summary（仅辅助参考，不得覆盖原文）：\n${normalized.getnote_summary}`
     : '';
   const segmentText = Array.isArray(input?.segments) && input.segments.length
-    ? `\n\n结构化发言记录：\n${input.segments.map((segment) => `[${segment.time || '未提供'}] ${segment.speaker || '待确认'}：${String(segment.text || '').trim()}`).join('\n')}`
+    ? `\n\n结构化发言记录（发言人标签只是转写系统给出的证据，不是事实真值；speaker_status/speaker_confidence/review_required/attribution_warnings 表示归属可靠性）：\n${formatSegmentsForPrompt(input.segments)}`
     : '';
   const discardedSegmentText = Array.isArray(input?.discarded_segments) && input.discarded_segments.length
-    ? `\n\n以下断续且无逻辑联系的低质量识别片段已忽略，不要据此生成任务：\n${input.discarded_segments.map((segment) => `- [${segment.time || '未提供'}] ${segment.speaker || '待确认'}：${String(segment.text || '').trim()}`).join('\n')}`
+    ? `\n\n以下断续且无逻辑联系或归属不可靠的片段已忽略，不要据此生成确定任务；如内容必须保留，只能标记为待确认：\n${formatSegmentsForPrompt(input.discarded_segments).split('\n').map((line) => `- ${line}`).join('\n')}`
     : '';
 
   return {
@@ -267,7 +382,7 @@ export async function generateMeetingSummary(meetingText) {
     return fallbackSummary(meetingInput.content);
   }
 
-  const prompt = `请根据以下会议内容，生成结构化会议纪要 JSON。\n\n重要规则：\n1. 你正在分析的是会议转写原文，而不是会议摘要。\n2. 必须以原文中明确表达的信息为依据。\n3. Get笔记自带 summary 只能作为辅助参考，不能作为唯一依据。\n4. 不要因为 summary 中提到某个结论，就在原文没有依据时生成确定结论。\n5. 必须返回合法 JSON，不要返回 Markdown，不要添加额外解释。\n6. 字段必须包含 title、overview、keyPoints、decisions、actionItems、risks。\n\nJSON 格式：\n{\n  "title": "会议标题",\n  "overview": "会议概述",\n  "keyPoints": ["要点1"],\n  "decisions": ["决策1"],\n  "actionItems": [\n    {\n      "task": "任务内容",\n      "owner": "负责人",\n      "deadline": "截止时间"\n    }\n  ],\n  "risks": ["风险1"]\n}\n\n会议内容：\n${meetingInput.promptText}`;
+  const prompt = `请根据以下会议内容，生成结构化会议纪要 JSON。\n\n重要规则：\n1. 你正在分析的是会议转写原文，而不是会议摘要。\n2. 必须以原文中明确表达的信息为依据。\n3. Get笔记自带 summary 只能作为辅助参考，不能作为唯一依据。\n4. 不要因为 summary 中提到某个结论，就在原文没有依据时生成确定结论。\n5. 结构化发言记录里的 speaker 只是证据，不是事实真值；当 speaker_status 不是 provided、speaker_confidence 低、review_required=true 或存在 attribution_warnings 时，不得把该段文本确定归属给该 speaker。\n6. 发言归属不确定、疑似串音/抢话/开放麦泄漏时，owner 必须填 "待确认"，并在内容里保留不确定性。\n7. 必须返回合法 JSON，不要返回 Markdown，不要添加额外解释。\n8. 字段必须包含 title、overview、keyPoints、decisions、actionItems、risks。\n\nJSON 格式：\n{\n  "title": "会议标题",\n  "overview": "会议概述",\n  "keyPoints": ["要点1"],\n  "decisions": ["决策1"],\n  "actionItems": [\n    {\n      "task": "任务内容",\n      "owner": "负责人",\n      "deadline": "截止时间"\n    }\n  ],\n  "risks": ["风险1"]\n}\n\n会议内容：\n${meetingInput.promptText}`;
 
   return normalizeSummary(await callAi(prompt, 'generateMeetingSummary'));
 }
@@ -293,7 +408,7 @@ export async function generateMeetingTasks(meetingText) {
 
    const prompt = `请根据以下会议转写原文和结构化发言记录，严格区分“今日新增任务”和“历史任务进展”，并生成结构化 JSON 对象。
 
-重要规则：
+ 重要规则：
 1. 你正在分析的是会议转写原文，而不是会议摘要。
 2. 必须以原文中明确表达的信息为依据。
 3. Get笔记自带 summary 只能作为辅助参考，不能作为唯一依据。
@@ -306,9 +421,14 @@ export async function generateMeetingTasks(meetingText) {
 10. task_name 必须让未参会的人一眼看懂“哪个项目/模块/业务对象 + 要交付什么”。
 11. 禁止输出“完成版本12验收”“活动上线”“品类运营”“功能优化”“处理问题”“完成测试”这类泛化短名；如果原文没有足够上下文补全项目/模块/交付结果，放入 discarded_items。
 12. 不要把“提到过的动词 + 名词”当作任务；只有明确交付物、负责人/角色或明确时间信号的事项才进入 today_tasks。
-13. 优先使用结构化发言记录中的发言人姓名作为负责人候选；如果正文明确指派别人，则用被指派人覆盖发言人。
-14. 如果说话文本断断续续，但和上下文能形成逻辑联系，可结合上下文理解；如果无法建立逻辑联系，则忽略该段，不要据此生成任务。
-15. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
+  13. 结构化发言记录中的发言人标签只是证据，不是事实真值；不得仅凭文本风格、短句、口头禅或相邻上下文把文本改归属给另一个人。
+  14. 负责人归属默认规则：speaker_status=provided、speaker_confidence 较高，且该发言人用第一人称/行动者语言描述具体可执行任务时，默认把该发言人作为负责人，assignee_source="speaker"，source_speaker/source_time 填原标签和时间。
+  15. 显式执行人优先级最高：正文明确说“某人负责/某人来做/交给某人执行/某角色处理”时，用被明确指派的执行人覆盖发言人，assignee_source="explicit_mention"。
+  16. 讨论/评审参与者或收件人不是执行人：如“跟嘉华/伟填讨论”“请嘉华/伟填 review”“发给坤哥/同步给坤哥/抄送坤哥”只表示参与讨论、评审或接收材料，不得把这些姓名选为负责人；若发言人是可靠行动者，仍以发言人为负责人。
+  17. 低风险归属提示不得单独降级负责人：仅有 same_speaker_not_merged_time_gap 这类低风险 attribution_warnings，且 speaker_status=provided、speaker_confidence 不低、文本仍是同一发言人的具体执行动作时，可以继续使用发言人作为负责人，可将 needs_confirmation=true 保留为轻量复核，但 assignee 不要改为 "待确认"。
+  18. 高风险归属问题必须待确认：speaker_status 不是 provided、speaker_confidence 很低、缺少/未知发言人、多个候选说话人冲突、疑似串音/抢话/开放麦泄漏、跨人文本重叠/归属泄漏、review_required=true 且包含 embedded_speaker_header_detected/missing_initial_speaker_header/embedded_header_split_before/embedded_header_trailing_text/speaker_conflict 等高风险 warning，或正文显式执行人存在未解决冲突时，负责人填 "待确认"，needs_confirmation=true，assignee_source="unclear"，source_speaker 可以保留原标签但不得当成确定负责人。
+  19. 如果说话文本断断续续，但和上下文能形成逻辑联系，可结合上下文理解；如果无法建立逻辑联系，则忽略该段，不要据此生成任务。
+  20. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
 
 分类枚举：
 - today_new_task：今天会议中新安排的任务，或者会后明确开始执行的任务。只有这一类进入 today_tasks。

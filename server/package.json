@@ -9,6 +9,8 @@
     "test": "node scripts/test-feishu-task-cards.js",
     "test:feishu-task-cards": "node scripts/test-feishu-task-cards.js",
     "test:feishu-docx-note-sources": "node scripts/test-feishu-docx-note-sources.js",
+    "test:transcript-attribution": "node scripts/test-transcript-attribution.js",
+    "test:ownership-attribution": "node scripts/test-ownership-attribution.js",
     "test:getnote-import": "node scripts/test-getnote-import.js",
     "debug:feishu-create-table": "node scripts/debug-feishu-create-table.ts",
     "debug:feishu-permission": "node scripts/debug-feishu-bitable-permission.ts",
