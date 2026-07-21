@@ -157,7 +157,7 @@ function taskActionSet({ draft, assignee, itemId }) {
         weight: 1,
         elements: [callbackButton({
           name: `edit_${itemId}`,
-          text: '修改',
+          text: '保存修改',
           type: 'default',
           value: { action: 'edit_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
         })]

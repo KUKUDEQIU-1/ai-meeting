@@ -47,6 +47,7 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.match(text, /完成日期\/截止时间/);
   assert.match(text, /备注/);
   assert.match(text, /只读展示/);
+  assert.match(text, /保存修改/);
   assert.match(text, /confirm_assignee_tasks/);
   assert.match(text, /task_a/);
   assert.doesNotMatch(text, /"tag":"action"/);
