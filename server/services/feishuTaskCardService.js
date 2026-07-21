@@ -6,6 +6,23 @@ import { getDraftAssigneeState, getMeetingTaskDraftById, updateDraftAssigneeDeli
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
 
+function configuredTaskCardTestReceiveOpenId() {
+  return process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID?.trim() || '';
+}
+
+export function resolveTaskCardRecipients(assignees) {
+  const testReceiveOpenId = configuredTaskCardTestReceiveOpenId();
+
+  if (!testReceiveOpenId) return assignees;
+
+  return assignees.map((assignee) => ({
+    ...assignee,
+    receive_id: testReceiveOpenId,
+    original_receive_id: assignee.receive_id,
+    test_mode: true
+  }));
+}
+
 async function postFeishuMessage({ receiveId, card }) {
   const tenantAccessToken = await getTenantAccessToken();
   const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type=open_id`;
@@ -131,7 +148,7 @@ export async function dispatchDraftTaskCards(draft) {
 
   await persistUnmappedAssignees(draft.id, grouped.deliveryFailures);
 
-  for (const assignee of grouped.deliverable) {
+  for (const assignee of resolveTaskCardRecipients(grouped.deliverable)) {
     results.push(await sendAssigneeCard(draft, assignee));
   }
 

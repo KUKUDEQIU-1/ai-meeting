@@ -203,6 +203,11 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     { tag: 'hr' }
   ];
 
+  if (assignee.test_mode) {
+    elements.push({ tag: 'markdown', content: `**测试模式：** 此卡片仅发送给测试接收人，任务负责人仍为 ${truncateText(assignee.assignee_name, 40)}。` });
+    elements.push({ tag: 'hr' });
+  }
+
   elements.push({
     tag: 'markdown',
     content: '**字段说明**\n- 任务名称：唯一可编辑字段\n- 完成日期/截止时间：只读展示\n- 备注：只读展示'
@@ -233,7 +238,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     config: { wide_screen_mode: true, update_multi: true },
     header: {
       template: 'blue',
-      title: { tag: 'plain_text', content: '会议任务待确认' }
+      title: { tag: 'plain_text', content: assignee.test_mode ? `测试转发｜${truncateText(assignee.assignee_name, 20)}的会议任务` : '会议任务待确认' }
     },
     body: {
       elements: [{
@@ -277,7 +282,4 @@ export function parseFeishuCardActionPayload(payload = {}) {
 export function validateCallbackActor(state, parsed) {
   return Boolean(state?.receive_id && parsed?.operator_open_id && state.receive_id === parsed.operator_open_id);
 }
-
-export function isReplayCallback(state, parsed) {
-  return Boolean(state?.last_callback_id && parsed?.callback_id && state.last_callback_id === parsed.callback_id);
-}
+export function isReplayCallback(state, parsed) { return Boolean(state?.last_callback_id && parsed?.callback_id && state.last_callback_id === parsed.callback_id); }
