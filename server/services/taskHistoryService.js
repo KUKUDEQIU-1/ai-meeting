@@ -12,6 +12,7 @@ const ACTION_SYNONYMS = [
 ];
 
 const STOP_WORDS = ['相关', '一下', '一些', '这个', '那个', '进行', '继续', '后续', '当前', '需要', '可以'];
+const PROGRESS_WORDS = ['完成', '推进', '验收', '预发布', '发版', '上线', '配置', '活动', '处理', '确认', '跟进', '版本', '继续', '和', '及', '与'];
 
 function normalizeTaskText(value) {
   let text = String(value || '')
@@ -28,6 +29,16 @@ function normalizeTaskText(value) {
   }
 
   return text;
+}
+
+function normalizeTaskIdentityText(value) {
+  let text = normalizeTaskText(value).replace(/挂彩/g, '刮彩').replace(/v\d+/gi, '').replace(/版本\d+/g, '').replace(/第?\d+版/g, '');
+
+  for (const word of PROGRESS_WORDS) {
+    text = text.replaceAll(word, '');
+  }
+
+  return text.replace(/(.{2})\1+/g, '$1');
 }
 
 function taskText(task) {
@@ -55,9 +66,38 @@ function bigrams(value) {
   return grams;
 }
 
+function identityBigrams(value) {
+  const text = normalizeTaskIdentityText(value);
+  const grams = new Set();
+
+  if (text.length <= 2) {
+    if (text) grams.add(text);
+    return grams;
+  }
+
+  for (let index = 0; index < text.length - 1; index += 1) {
+    grams.add(text.slice(index, index + 2));
+  }
+
+  return grams;
+}
+
 function jaccardSimilarity(left, right) {
   const leftSet = bigrams(left);
   const rightSet = bigrams(right);
+
+  if (leftSet.size === 0 || rightSet.size === 0) {
+    return 0;
+  }
+
+  const intersection = [...leftSet].filter((item) => rightSet.has(item)).length;
+  const union = new Set([...leftSet, ...rightSet]).size;
+  return intersection / union;
+}
+
+function identitySimilarity(left, right) {
+  const leftSet = identityBigrams(left);
+  const rightSet = identityBigrams(right);
 
   if (leftSet.size === 0 || rightSet.size === 0) {
     return 0;
@@ -288,7 +328,8 @@ function bestHistoryMatch(task, historyRows) {
     const score = Math.max(
       jaccardSimilarity(task.task_name || '', row.task_name || ''),
       jaccardSimilarity(task.task_brief || '', row.task_brief || ''),
-      jaccardSimilarity(taskText(task), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`)
+      jaccardSimilarity(taskText(task), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`),
+      identitySimilarity(taskText(task), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`)
     );
 
     if (score > bestScore) {
@@ -297,7 +338,7 @@ function bestHistoryMatch(task, historyRows) {
     }
   }
 
-  return bestScore >= 0.82 ? { row: best, similarity: bestScore } : null;
+  return bestScore >= 0.65 ? { row: best, similarity: bestScore } : null;
 }
 
 export async function classifyTaskHistory(tasks, context = {}) {

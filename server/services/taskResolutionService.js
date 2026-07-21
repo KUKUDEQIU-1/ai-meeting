@@ -10,6 +10,16 @@ function normalizeText(value) {
   return String(value || '').toLowerCase().replace(/[\s\r\n\t，。；：、“”‘’！？,.!?;:()（）【】\[\]{}《》<>/\\|-]/g, '').trim();
 }
 
+function normalizeIdentityText(value) {
+  let text = normalizeText(value).replace(/挂彩/g, '刮彩').replace(/v\d+/gi, '').replace(/版本\d+/g, '').replace(/第?\d+版/g, '');
+
+  for (const word of ['完成', '推进', '验收', '预发布', '发版', '上线', '配置', '活动', '处理', '确认', '跟进', '版本', '继续', '和', '及', '与']) {
+    text = text.replaceAll(word, '');
+  }
+
+  return text.replace(/(.{2})\1+/g, '$1');
+}
+
 function bigrams(value) {
   const text = normalizeText(value);
   const grams = new Set();
@@ -33,13 +43,23 @@ function similarity(left, right) {
   return intersection / union;
 }
 
+function identitySimilarity(left, right) {
+  const leftSet = bigrams(normalizeIdentityText(left));
+  const rightSet = bigrams(normalizeIdentityText(right));
+  if (!leftSet.size || !rightSet.size) return 0;
+  const intersection = [...leftSet].filter((item) => rightSet.has(item)).length;
+  const union = new Set([...leftSet, ...rightSet]).size;
+  return intersection / union;
+}
+
 export async function findHistoricalTaskCandidates(taskDraft, { limit = 5 } = {}) {
   const rows = await all('SELECT * FROM getnote_task_history ORDER BY updated_at DESC LIMIT 200');
   const scored = rows.map((row) => {
     const score = Math.max(
       similarity(taskDraft.task_name || '', row.task_name || ''),
       similarity(taskDraft.task_brief || '', row.task_brief || ''),
-      similarity(textOfTask(taskDraft), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`)
+      similarity(textOfTask(taskDraft), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`),
+      identitySimilarity(textOfTask(taskDraft), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`)
     );
     return {
       row,
@@ -78,7 +98,7 @@ export async function resolveDraftTasksAgainstHistory(tasks = [], context = {}) 
       continue;
     }
 
-    if (topScore >= 0.88) {
+    if (topScore >= 0.65) {
       existing_matches.push({
         ...task,
         resolution_status: 'matched_existing',

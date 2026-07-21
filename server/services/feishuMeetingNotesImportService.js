@@ -278,6 +278,21 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       meeting_title: meetingTitle
     });
     aiResult.tasks = resolutionResult.tasks;
+    aiResult.progress_updates = [
+      ...(aiResult.progress_updates || []),
+      ...resolutionResult.existing_matches.map((task) => ({
+        task_name: task.task_name || task.title || '未命名事项',
+        progress_type: 'existing_task_progress',
+        progress_summary: task.task_brief || task.task_description || task.task_name || '',
+        evidence_quote: task.evidence_quote || '待确认',
+        matched_history_task_key: task.matched_history_task_key || task.resolved_task_key || '',
+        matched_first_note_id: task.history_candidates?.[0]?.first_note_id || '',
+        matched_first_meeting_title: task.history_candidates?.[0]?.first_meeting_title || '',
+        matched_first_table_url: task.history_candidates?.[0]?.first_table_url || '',
+        confidence: task.resolution_confidence || task.confidence || 0.85,
+        reason: task.resolution_reason || '历史任务进展'
+      }))
+    ];
 
     const rawTasksCount = countRawTasks(aiResult);
     const candidateTasksCount = aiResult.tasks.length;
