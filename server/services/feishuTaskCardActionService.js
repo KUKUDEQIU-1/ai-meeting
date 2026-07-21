@@ -37,6 +37,17 @@ function validateEditableValues(values) {
   return { taskName };
 }
 
+function validateOptionalTaskName(value) {
+  const taskName = String(value || '').trim();
+
+  if (!taskName) return '';
+  if (taskName.length > MAX_TASK_NAME_LENGTH) {
+    reject('任务字段长度超限', 400);
+  }
+
+  return taskName;
+}
+
 function feishuCallbackToast(content) {
   return { toast: { type: 'info', content } };
 }
@@ -123,8 +134,10 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
 
   try {
     for (const task of ownedTasks.filter((item) => item.status === 'pending')) {
+      const submittedTaskName = validateOptionalTaskName(parsed.form_values?.task_names?.[task.item_id]);
       await updateMeetingTaskDraftItem(parsed.draft_id, task.item_id, (item) => ({
         ...item,
+        ...(submittedTaskName ? { task_name: submittedTaskName } : {}),
         status: 'confirmed',
         confirmed_by: parsed.operator_open_id,
         confirmed_at: timestamp,

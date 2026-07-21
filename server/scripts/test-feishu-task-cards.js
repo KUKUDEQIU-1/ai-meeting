@@ -87,6 +87,7 @@ function testCallbackParsingAndSafety() {
   assert.equal(parsed.message_id, 'om_1');
   assert.equal(parsed.action, 'edit_task');
   assert.equal(parsed.form_values.task_name, '新任务');
+  assert.deepEqual(parsed.form_values.task_names, { task_a: '新任务' });
   assert.equal('deadline' in parsed.form_values, false);
   assert.equal('comment' in parsed.form_values, false);
   assert.equal(parsed.form_values.assignee, undefined);
@@ -196,10 +197,70 @@ async function testEditAndDiscardPreserveStoredFields() {
   assert.equal(discardedDraft.draft_tasks[0].comment, '原备注');
 }
 
+async function testConfirmUsesCurrentFormTaskName() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `task-card-confirm-${Date.now()}`,
+    meetingTitle: '会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{
+      item_id: 'item_confirm',
+      task_name: '原任务',
+      assignee: '张三',
+      deadline: '明天',
+      comment: '原备注'
+    }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_1',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  const confirmed = await handleFeishuCardAction({
+    header: { event_id: 'evt_confirm_form', token: 'secret' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' },
+        form_value: {
+          task_name_item_confirm: '确认前直接修改后的任务名'
+        }
+      }
+    }
+  }, {
+    finalizeAssignee: async () => ({ status: 'synced', created_count: 1 }),
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(confirmed.toast.content, '你的任务已确认入总表');
+  assert.equal(updatedDraft.draft_tasks[0].task_name, '确认前直接修改后的任务名');
+  assert.equal(updatedDraft.draft_tasks[0].status, 'confirmed');
+}
+
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
 testCallbackParsingAndSafety();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
+await testConfirmUsesCurrentFormTaskName();
 
 console.log('feishu task card pure-function tests passed');

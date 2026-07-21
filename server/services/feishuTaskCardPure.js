@@ -253,9 +253,20 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
 function extractAllowedFormValues(formValue, itemId) {
   const safeItemId = String(itemId || '');
   const suffix = safeItemId ? `_${safeItemId}` : '';
+  const taskNames = {};
+
+  for (const [key, value] of Object.entries(formValue || {})) {
+    if (!key.startsWith('task_name_')) continue;
+    const scopedItemId = key.slice('task_name_'.length);
+    const taskName = firstString(value);
+    if (scopedItemId && taskName) {
+      taskNames[scopedItemId] = taskName;
+    }
+  }
 
   return {
     task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
+    task_names: taskNames
   };
 }
 
