@@ -7,10 +7,12 @@ import {
   validateCallbackActor
 } from './feishuTaskCardPure.js';
 import {
+  claimDraftAssigneeConfirmation,
   getDraftAssigneeState,
   getDraftAssigneeStateByMessageId,
   getMeetingTaskDraftById,
   markDraftAssigneeConfirmed,
+  resetDraftAssigneeConfirmationAfterFailure,
   updateDraftAssigneeCallbackId,
   updateMeetingTaskDraftItem
 } from './taskDraftService.js';
@@ -39,6 +41,13 @@ function feishuCallbackToast(content) {
   return { toast: { type: 'info', content } };
 }
 
+function dependencySet(overrides = {}) {
+  return {
+    finalizeAssignee: overrides.finalizeAssignee || finalizeMeetingTaskDraftForAssignee,
+    updateCard: overrides.updateCard || updateFeishuTaskCard
+  };
+}
+
 async function loadAuthorizedState(parsed) {
   if (!Number.isFinite(parsed.draft_id) || parsed.draft_id <= 0 || !parsed.assignee_key) {
     reject('飞书卡片回调缺少 draft_id 或 assignee_key', 400);
@@ -64,7 +73,11 @@ function assertOwnedItem(item, assigneeKey, message) {
   }
 }
 
-async function editTask(parsed, state) {
+async function editTask(parsed, state, dependencies) {
+  if (state.confirmation_status === 'processing' || state.confirmation_status === 'confirmed') {
+    return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能修改' : '已确认，不能再修改');
+  }
+
   const values = validateEditableValues(parsed.form_values);
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
     ...task,
@@ -75,11 +88,15 @@ async function editTask(parsed, state) {
 
   assertOwnedItem(result?.item, state.assignee_key, '只能修改本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, callbackId: parsed.callback_id });
-  await updateFeishuTaskCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key });
   return feishuCallbackToast('任务已更新');
 }
 
-async function discardTask(parsed, state) {
+async function discardTask(parsed, state, dependencies) {
+  if (state.confirmation_status === 'processing' || state.confirmation_status === 'confirmed') {
+    return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能丢弃' : '已确认，不能再丢弃');
+  }
+
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
     ...task,
     status: 'discarded',
@@ -89,51 +106,94 @@ async function discardTask(parsed, state) {
 
   assertOwnedItem(result?.item, state.assignee_key, '只能丢弃本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, callbackId: parsed.callback_id });
-  await updateFeishuTaskCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key });
   return feishuCallbackToast('任务已丢弃');
 }
 
-async function confirmAssigneeTasks(parsed, state) {
+async function confirmAssigneeTasks(parsed, state, dependencies) {
+  const claim = await claimDraftAssigneeConfirmation({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, callbackId: parsed.callback_id });
+
+  if (!claim.claimed) {
+    return feishuCallbackToast('已处理，无需重复操作');
+  }
+
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const ownedTasks = (draft?.draft_tasks || []).filter((task) => normalizeAssigneeKey(assigneeNameOf(task)) === state.assignee_key);
   const timestamp = new Date().toISOString();
 
-  for (const task of ownedTasks.filter((item) => item.status === 'pending')) {
-    await updateMeetingTaskDraftItem(parsed.draft_id, task.item_id, (item) => ({
-      ...item,
-      status: 'confirmed',
-      confirmed_by: parsed.operator_open_id,
-      confirmed_at: timestamp,
-      updated_by: parsed.operator_open_id,
-      updated_at: timestamp
-    }));
-  }
+  try {
+    for (const task of ownedTasks.filter((item) => item.status === 'pending')) {
+      await updateMeetingTaskDraftItem(parsed.draft_id, task.item_id, (item) => ({
+        ...item,
+        status: 'confirmed',
+        confirmed_by: parsed.operator_open_id,
+        confirmed_at: timestamp,
+        updated_by: parsed.operator_open_id,
+        updated_at: timestamp
+      }));
+    }
 
-  await finalizeMeetingTaskDraftForAssignee({
-    draftId: parsed.draft_id,
-    assigneeKey: state.assignee_key,
-    confirmedBy: parsed.operator_open_id
-  });
-  await markDraftAssigneeConfirmed({
-    draftId: parsed.draft_id,
-    assigneeKey: state.assignee_key,
-    confirmedBy: parsed.operator_open_id,
-    callbackId: parsed.callback_id
-  });
-  await updateFeishuTaskCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, terminal: true });
-  return feishuCallbackToast('你的任务已确认入总表');
+    await dependencies.finalizeAssignee({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      confirmedBy: parsed.operator_open_id
+    });
+    await markDraftAssigneeConfirmed({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      confirmedBy: parsed.operator_open_id,
+      callbackId: parsed.callback_id
+    });
+    await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, terminal: true });
+    return feishuCallbackToast('你的任务已确认入总表');
+  } catch (error) {
+    await resetDraftAssigneeConfirmationAfterFailure({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      callbackId: parsed.callback_id
+    });
+    throw error;
+  }
 }
 
-export async function handleFeishuCardAction(payload) {
+export async function prepareFeishuCardAction(payload) {
   const parsed = parseFeishuCardActionPayload(payload);
   const state = await loadAuthorizedState(parsed);
 
-  if (isReplayCallback(state, parsed) || state.confirmation_status === 'confirmed' && parsed.action === 'confirm_assignee_tasks') {
-    return feishuCallbackToast('已处理，无需重复操作');
+  if (isReplayCallback(state, parsed)) {
+    return { parsed, state, response: feishuCallbackToast('已处理，无需重复操作'), shouldProcess: false };
   }
-  if (parsed.action === 'edit_task') return editTask(parsed, state);
-  if (parsed.action === 'discard_task') return discardTask(parsed, state);
-  if (parsed.action === 'confirm_assignee_tasks') return confirmAssigneeTasks(parsed, state);
+  if (parsed.action === 'confirm_assignee_tasks' && (state.confirmation_status === 'confirmed' || state.confirmation_status === 'processing')) {
+    return { parsed, state, response: feishuCallbackToast('已处理，无需重复操作'), shouldProcess: false };
+  }
+  if ((parsed.action === 'edit_task' || parsed.action === 'discard_task') && state.confirmation_status === 'processing') {
+    return { parsed, state, response: feishuCallbackToast(parsed.action === 'edit_task' ? '确认处理中，暂不能修改' : '确认处理中，暂不能丢弃'), shouldProcess: false };
+  }
+  if ((parsed.action === 'edit_task' || parsed.action === 'discard_task') && state.confirmation_status === 'confirmed') {
+    return { parsed, state, response: feishuCallbackToast(parsed.action === 'edit_task' ? '已确认，不能再修改' : '已确认，不能再丢弃'), shouldProcess: false };
+  }
+  if (parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'confirm_assignee_tasks') {
+    return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
+  }
 
   reject('不支持的卡片操作', 400);
+}
+
+export async function processPreparedFeishuCardAction(prepared, overrides = {}) {
+  const dependencies = dependencySet(overrides);
+
+  if (!prepared.shouldProcess) {
+    return prepared.response;
+  }
+  if (prepared.parsed.action === 'edit_task') return editTask(prepared.parsed, prepared.state, dependencies);
+  if (prepared.parsed.action === 'discard_task') return discardTask(prepared.parsed, prepared.state, dependencies);
+  if (prepared.parsed.action === 'confirm_assignee_tasks') return confirmAssigneeTasks(prepared.parsed, prepared.state, dependencies);
+
+  reject('不支持的卡片操作', 400);
+}
+
+export async function handleFeishuCardAction(payload, overrides = {}) {
+  const prepared = await prepareFeishuCardAction(payload);
+  return processPreparedFeishuCardAction(prepared, overrides);
 }

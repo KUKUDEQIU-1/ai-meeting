@@ -273,6 +273,7 @@ function migrateDatabase() {
     delivery_status TEXT NOT NULL DEFAULT 'pending',
     delivery_error TEXT,
     confirmation_status TEXT NOT NULL DEFAULT 'pending',
+    confirmation_error TEXT,
     confirmed_at TEXT,
     confirmed_by TEXT,
     last_callback_id TEXT,
@@ -280,6 +281,13 @@ function migrateDatabase() {
     updated_at TEXT NOT NULL,
     UNIQUE(draft_id, assignee_key)
   )`);
+
+  const draftAssigneeColumns = db.exec('PRAGMA table_info(meeting_task_draft_assignees)')[0]?.values || [];
+  const draftAssigneeColumnNames = draftAssigneeColumns.map((column) => column[1]);
+
+  if (!draftAssigneeColumnNames.includes('confirmation_error')) {
+    db.run('ALTER TABLE meeting_task_draft_assignees ADD COLUMN confirmation_error TEXT');
+  }
 }
 
 export function run(sql, params = []) {

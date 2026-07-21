@@ -1,7 +1,13 @@
 import express from 'express';
-import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.js';
+import { createFeishuCardActionDispatcher } from '../services/feishuCardActionDispatcher.js';
+import { prepareFeishuCardAction, processPreparedFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 
 const router = express.Router();
+const dispatchFeishuCardAction = createFeishuCardActionDispatcher({
+  onError: (error) => {
+    console.error('[Feishu Card Action] background processing failed', error);
+  }
+});
 
 function configuredVerificationToken() {
   return process.env.FEISHU_EVENT_VERIFICATION_TOKEN?.trim() || '';
@@ -36,8 +42,14 @@ router.post('/card-action', async (req, res, next) => {
       return;
     }
 
-    const response = await handleFeishuCardAction(payload);
-    res.json(response || {});
+    const prepared = await prepareFeishuCardAction(payload);
+    const response = prepared.response || {};
+
+    if (prepared.shouldProcess) {
+      dispatchFeishuCardAction(response, () => processPreparedFeishuCardAction(prepared));
+    }
+
+    res.json(response);
   } catch (error) {
     next(error);
   }

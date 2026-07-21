@@ -217,11 +217,31 @@ export async function markDraftAssigneeConfirmed({ draftId, assigneeKey, confirm
 
   await run(
     `UPDATE meeting_task_draft_assignees
-     SET confirmation_status = 'confirmed', confirmed_at = COALESCE(confirmed_at, ?), confirmed_by = COALESCE(confirmed_by, ?), last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
+     SET confirmation_status = 'confirmed', confirmation_error = '', confirmed_at = COALESCE(confirmed_at, ?), confirmed_by = COALESCE(confirmed_by, ?), last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
      WHERE draft_id = ? AND assignee_key = ?`,
     [timestamp, confirmedBy || '', callbackId || null, nowIso(), draftId, assigneeKey]
   );
 
+  return getDraftAssigneeState(draftId, assigneeKey);
+}
+
+export async function claimDraftAssigneeConfirmation({ draftId, assigneeKey, callbackId }) {
+  const result = await run(
+    `UPDATE meeting_task_draft_assignees
+     SET confirmation_status = 'processing', confirmation_error = '', last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
+     WHERE draft_id = ? AND assignee_key = ? AND confirmation_status = 'pending'`,
+    [callbackId || null, nowIso(), draftId, assigneeKey]
+  );
+  return { claimed: result.changes === 1, state: await getDraftAssigneeState(draftId, assigneeKey) };
+}
+
+export async function resetDraftAssigneeConfirmationAfterFailure({ draftId, assigneeKey, errorMessage, callbackId }) {
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET confirmation_status = 'pending', confirmation_error = ?, last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
+     WHERE draft_id = ? AND assignee_key = ? AND confirmation_status = 'processing'`,
+    [String(errorMessage || '').slice(0, 500), callbackId || null, nowIso(), draftId, assigneeKey]
+  );
   return getDraftAssigneeState(draftId, assigneeKey);
 }
 
@@ -234,9 +254,7 @@ export async function updateDraftAssigneeCallbackId({ draftId, assigneeKey, call
   return getDraftAssigneeState(draftId, assigneeKey);
 }
 
-export async function getDraftAssigneeState(draftId, assigneeKey) {
-  return get('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ? AND assignee_key = ?', [draftId, assigneeKey]);
-}
+export async function getDraftAssigneeState(draftId, assigneeKey) { return get('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ? AND assignee_key = ?', [draftId, assigneeKey]); }
 
 export async function getDraftAssigneeStateByMessageId(messageId) {
   if (!messageId) return null;

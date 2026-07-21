@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS meeting_task_draft_assignees (
   delivery_status TEXT NOT NULL DEFAULT 'pending',
   delivery_error TEXT,
   confirmation_status TEXT NOT NULL DEFAULT 'pending',
+  confirmation_error TEXT,
   confirmed_at TEXT,
   confirmed_by TEXT,
   last_callback_id TEXT,
