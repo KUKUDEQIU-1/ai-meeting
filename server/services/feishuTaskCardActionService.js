@@ -17,8 +17,6 @@ import {
 import { updateFeishuTaskCard } from './feishuTaskCardService.js';
 
 const MAX_TASK_NAME_LENGTH = 120;
-const MAX_DEADLINE_LENGTH = 40;
-const MAX_COMMENT_LENGTH = 300;
 
 function reject(message, status) {
   const error = new Error(message);
@@ -28,15 +26,13 @@ function reject(message, status) {
 
 function validateEditableValues(values) {
   const taskName = String(values.task_name || '').trim();
-  const deadline = String(values.deadline || '').trim();
-  const comment = String(values.comment || '').trim();
 
   if (!taskName) reject('task_name 不能为空', 400);
-  if (taskName.length > MAX_TASK_NAME_LENGTH || deadline.length > MAX_DEADLINE_LENGTH || comment.length > MAX_COMMENT_LENGTH) {
+  if (taskName.length > MAX_TASK_NAME_LENGTH) {
     reject('任务字段长度超限', 400);
   }
 
-  return { taskName, deadline: deadline || '待确认', comment };
+  return { taskName };
 }
 
 function feishuCallbackToast(content) {
@@ -73,8 +69,6 @@ async function editTask(parsed, state) {
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
     ...task,
     task_name: values.taskName,
-    deadline: values.deadline,
-    comment: values.comment,
     updated_by: parsed.operator_open_id,
     updated_at: new Date().toISOString()
   }));
@@ -89,7 +83,6 @@ async function discardTask(parsed, state) {
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
     ...task,
     status: 'discarded',
-    comment: parsed.form_values.comment || task.comment || '',
     updated_by: parsed.operator_open_id,
     updated_at: new Date().toISOString()
   }));

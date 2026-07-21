@@ -129,6 +129,54 @@ function inputElement({ tag, label, value }) {
   };
 }
 
+function labelElement(content) {
+  return {
+    tag: 'markdown',
+    content
+  };
+}
+
+function callbackButton({ name, text, type, value }) {
+  return {
+    tag: 'button',
+    name,
+    form_action_type: 'submit',
+    type,
+    text: { tag: 'plain_text', content: text },
+    behaviors: [{ type: 'callback', value }]
+  };
+}
+
+function taskActionSet({ draft, assignee, itemId }) {
+  return {
+    tag: 'column_set',
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
+          name: `edit_${itemId}`,
+          text: '修改',
+          type: 'default',
+          value: { action: 'edit_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+        })]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
+          name: `discard_${itemId}`,
+          text: '丢弃',
+          type: 'danger',
+          value: { action: 'discard_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+        })]
+      }
+    ]
+  };
+}
+
 export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false }) {
   if (terminal) {
     return {
@@ -155,41 +203,30 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     { tag: 'hr' }
   ];
 
+  elements.push({
+    tag: 'markdown',
+    content: '**字段说明**\n- 任务名称：唯一可编辑字段\n- 完成日期/截止时间：只读展示\n- 备注：只读展示'
+  });
+  elements.push({ tag: 'hr' });
+
   for (const task of tasks) {
     const itemId = String(task.item_id || '');
     elements.push({ tag: 'markdown', content: `**任务 ${truncateText(itemId, 24)}**` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '任务名称', value: taskNameOf(task) }));
-    elements.push(inputElement({ tag: `deadline_${itemId}`, label: '完成日期/截止时间', value: task.deadline || '待确认' }));
-    elements.push(inputElement({ tag: `comment_${itemId}`, label: '备注', value: task.comment || '' }));
-    elements.push({
-      tag: 'action',
-      actions: [
-        {
-          tag: 'button',
-          text: { tag: 'plain_text', content: '修改' },
-          type: 'default',
-          value: { action: 'edit_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
-        },
-        {
-          tag: 'button',
-          text: { tag: 'plain_text', content: '丢弃' },
-          type: 'danger',
-          value: { action: 'discard_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
-        }
-      ]
-    });
+    elements.push(labelElement(`**完成日期/截止时间：** ${truncateText(task.deadline || '待确认', 80)}`));
+    if (String(task.comment || '').trim()) {
+      elements.push(labelElement(`**备注：** ${truncateText(task.comment, 180)}`));
+    }
+    elements.push(taskActionSet({ draft, assignee, itemId }));
     elements.push({ tag: 'hr' });
   }
 
-  elements.push({
-    tag: 'action',
-    actions: [{
-      tag: 'button',
-      text: { tag: 'plain_text', content: '确认我的任务入总表' },
-      type: 'primary',
-      value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: assignee.assignee_key }
-    }]
-  });
+  elements.push(callbackButton({
+    name: 'confirm_tasks',
+    text: '确认我的任务入总表',
+    type: 'primary',
+    value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: assignee.assignee_key }
+  }));
 
   return {
     schema: '2.0',
@@ -214,8 +251,6 @@ function extractAllowedFormValues(formValue, itemId) {
 
   return {
     task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
-    deadline: firstString(formValue?.[`deadline${suffix}`], formValue?.deadline),
-    comment: firstString(formValue?.[`comment${suffix}`], formValue?.comment)
   };
 }
 
