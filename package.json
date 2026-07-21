@@ -8,6 +8,7 @@
     "start": "npm run start --prefix server",
     "build": "npm run build --prefix client",
     "test": "node server/scripts/test-getnote-import.js",
+    "test:feishu-docx-note-sources": "npm run test:feishu-docx-note-sources --prefix server",
     "debug:feishu-create-table": "node server/scripts/debug-feishu-create-table.ts",
     "debug:feishu-permission": "node server/scripts/debug-feishu-bitable-permission.ts",
     "debug:getnote-one": "node server/scripts/debug-getnote-one.ts",

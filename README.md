@@ -82,6 +82,7 @@ FEISHU_BITABLE_APP_TOKEN=
 FEISHU_BITABLE_TABLE_ID=
 FEISHU_ASSIGNEE_MAP_JSON={"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}
 FEISHU_EVENT_VERIFICATION_TOKEN=
+FEISHU_DOCX_SOURCE_API_TOKEN=
 ```
 
 如果暂时不配置 `AI_API_KEY`，后端会返回本地示例总结，方便先验证上传和页面展示流程。
@@ -429,6 +430,44 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 - `FEISHU_EVENT_VERIFICATION_TOKEN=`：飞书事件订阅/卡片回调 verification token。配置后 `/api/feishu/card-action` 会拒绝 token 不匹配的回调。
 - `FEISHU_NOTIFY_RECEIVE_ID_TYPE=email`：飞书私发通知的接收 ID 类型，默认 `email`。
 - `FEISHU_NOTIFY_RECEIVE_ID=`：飞书私发通知接收人。配置后，worker 启动首次扫描若 `imported=0` 会私发“未读取到会议内容”。
+- `FEISHU_DOCX_SOURCE_API_TOKEN=`：在线维护飞书 docx 来源列表的可选 API Token。为空时 `GET/POST /api/meeting/feishu-docx-note-sources` 不需要鉴权；配置后必须使用 `Authorization: Bearer <token>`。
+
+## 飞书 docx 在线来源管理
+
+部署后可以通过 API 维护自动同步的飞书 docx 文档来源，不需要进入服务器执行脚本。该接口只保存文档 URL、文档 ID、标题和启用状态，不读取或返回文档正文；原有 `POST /api/meeting/sync-feishu-docx` 同步接口和飞书私聊卡片确认流程保持不变。
+
+如果配置了 `FEISHU_DOCX_SOURCE_API_TOKEN`，请求必须携带 Bearer Token；未配置时以下 curl 示例可删除 `Authorization` 这一行。
+
+新增或更新一个来源：
+
+```bash
+curl -X POST "https://huiyiai.yourtest.top/api/meeting/feishu-docx-note-sources" \
+  -H "Authorization: Bearer $FEISHU_DOCX_SOURCE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://qcn65gkeqmrk.feishu.cn/docx/P7Mrd5fyQopXOpxsSjlcSlsknEQ?dcuId=7637087314937891772",
+    "title": "飞书会议智能纪要 docx",
+    "enabled": true
+  }'
+```
+
+也可以只提交 `document_id`：
+
+```bash
+curl -X POST "https://huiyiai.yourtest.top/api/meeting/feishu-docx-note-sources" \
+  -H "Authorization: Bearer $FEISHU_DOCX_SOURCE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"document_id":"P7Mrd5fyQopXOpxsSjlcSlsknEQ","enabled":true}'
+```
+
+查看已配置来源：
+
+```bash
+curl "https://huiyiai.yourtest.top/api/meeting/feishu-docx-note-sources" \
+  -H "Authorization: Bearer $FEISHU_DOCX_SOURCE_API_TOKEN"
+```
+
+校验规则：`url` 必须是 `http` 或 `https` URL；`document_id` 只能包含英文字母和数字；`enabled` 必须是 JSON boolean，不能传字符串 `"true"` 或 `"false"`。
 
 ### 正式使用方式一：手动同步
 

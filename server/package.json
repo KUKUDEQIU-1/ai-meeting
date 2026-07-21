@@ -8,6 +8,7 @@
     "start": "node index.js",
     "test": "node scripts/test-feishu-task-cards.js",
     "test:feishu-task-cards": "node scripts/test-feishu-task-cards.js",
+    "test:feishu-docx-note-sources": "node scripts/test-feishu-docx-note-sources.js",
     "test:getnote-import": "node scripts/test-getnote-import.js",
     "debug:feishu-create-table": "node scripts/debug-feishu-create-table.ts",
     "debug:feishu-permission": "node scripts/debug-feishu-bitable-permission.ts",
