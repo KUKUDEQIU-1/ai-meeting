@@ -109,6 +109,12 @@ export async function listPendingMeetingTaskDrafts() {
   return rows.map(hydrateDraft);
 }
 
+export async function getLatestMeetingTaskDraft() {
+  const row = await get('SELECT * FROM meeting_task_drafts ORDER BY id DESC LIMIT 1');
+  if (!row) return null;
+  return hydrateDraft(row);
+}
+
 export async function updateMeetingTaskDraftStatus(id, status, extra = {}) {
   const existing = await get('SELECT * FROM meeting_task_drafts WHERE id = ?', [id]);
   if (!existing) return null;
