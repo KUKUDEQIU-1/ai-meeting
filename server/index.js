@@ -23,7 +23,11 @@ app.get('/', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: 'latest-draft-v2' });
+  res.json({
+    status: 'ok',
+    version: 'latest-draft-v2',
+    task_card_test_receive_enabled: Boolean(process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID?.trim())
+  });
 });
 
 app.use('/api/meetings', meetingsRouter);
