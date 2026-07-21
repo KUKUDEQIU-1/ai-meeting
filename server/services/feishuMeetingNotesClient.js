@@ -73,10 +73,14 @@ async function requestFeishuJson(path, { query = {}, method = 'GET', body } = {}
   return data;
 }
 
-function toUnixSeconds(value) {
-  const date = value ? new Date(String(value).replace(' ', 'T')) : new Date();
+function toIsoTime(value) {
+  const date = value instanceof Date
+    ? value
+    : value
+      ? new Date(String(value).replace(' ', 'T'))
+      : new Date();
   const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
-  return Math.floor(safeDate.getTime() / 1000);
+  return safeDate.toISOString();
 }
 
 function normalizeList(data) {
@@ -117,7 +121,15 @@ function normalizeContentValue(value) {
 }
 
 function getNoteId(note) {
-  return note?.note_id || note?.note?.note_id || note?.minutes_id || note?.minute_id || note?.id || note?.object_id || note?.url;
+  const isMeetingSearchItem = Boolean(note?.display_info || note?.meta_data?.app_link);
+
+  return note?.note_id
+    || note?.note?.note_id
+    || note?.minutes_id
+    || note?.minute_id
+    || (!isMeetingSearchItem ? note?.id : '')
+    || note?.object_id
+    || note?.url;
 }
 
 function getMeetingId(meeting) {
@@ -148,8 +160,9 @@ export async function getFeishuMeetingNoteList(params = {}) {
   }
 
   const searchPath = getOpenApiPath('FEISHU_MEETING_SEARCH_PATH', '/open-apis/vc/v1/meetings/search');
-  const endTime = toUnixSeconds(params.end_time || new Date());
-  const startTime = toUnixSeconds(params.start_time || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+  const lookbackDays = Number(params.maxLookbackDays || params.max_lookback_days) || 7;
+  const endTime = toIsoTime(params.end_time || new Date());
+  const startTime = toIsoTime(params.start_time || new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000));
   const data = await requestFeishuJson(searchPath, {
     method: 'POST',
     query: {
@@ -158,8 +171,12 @@ export async function getFeishuMeetingNoteList(params = {}) {
     body: {
       page_size: params.limit || params.page_size || 20,
       page_token: params.page_token || params.pageToken || undefined,
-      start_time: String(startTime),
-      end_time: String(endTime)
+      meeting_filter: {
+        start_time: {
+          start_time: startTime,
+          end_time: endTime
+        }
+      }
     }
   }, '飞书会议搜索失败');
 
@@ -196,7 +213,43 @@ export async function getFeishuMeetingNoteDetail(noteId) {
   return data.data?.minute || data.data?.note || data.data || data.minute || data.note || data;
 }
 
-export function extractFeishuMeetingNoteContentWithMeta(note) {
+export async function getFeishuMeetingArtifactContent(note, artifactType = 2) {
+  const artifact = Array.isArray(note?.artifacts)
+    ? note.artifacts.find((item) => Number(item?.artifact_type) === artifactType && item?.doc_token)
+    : null;
+
+  if (!artifact?.doc_token) {
+    const error = new Error(`飞书会议产物不存在：artifact_type=${artifactType}`);
+    error.status = 404;
+    throw error;
+  }
+
+  const data = await requestFeishuJson('/open-apis/docs/v1/content', {
+    query: {
+      doc_token: artifact.doc_token,
+      doc_type: 'docx',
+      content_type: 'markdown'
+    }
+  }, '飞书会议产物正文获取失败');
+  const content = String(data.data?.content || '').trim();
+
+  if (!content) {
+    const error = new Error(`飞书会议产物正文为空：artifact_type=${artifactType}`);
+    error.status = 400;
+    throw error;
+  }
+
+  return {
+    content,
+    source: artifactType === 2 ? 'transcript_artifact' : 'summary_artifact',
+    length: content.length,
+    artifact_type: artifactType,
+    doc_token: artifact.doc_token
+  };
+}
+
+export function extractFeishuMeetingNoteContentWithMeta(note, options = {}) {
+  const includeSummary = options.includeSummary !== false;
   const summary = normalizeContentValue(note?.summary || note?.smart_summary || note?.meeting_summary).trim();
   const candidates = [
     ['artifacts', note?.artifacts],
@@ -206,7 +259,7 @@ export function extractFeishuMeetingNoteContentWithMeta(note) {
     ['content', note?.content],
     ['body', note?.body],
     ['minutes', note?.minutes],
-    ['summary', summary]
+    ...(includeSummary ? [['summary', summary]] : [])
   ].map(([source, value]) => [source, normalizeContentValue(value)]);
   const matched = candidates.find(([, content]) => content.trim());
 

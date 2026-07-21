@@ -21,7 +21,9 @@ async function main() {
 
   const result = await syncRecentFeishuMeetingNotes({
     limit: Number(getArg('limit')) || undefined,
-    reanalyze: getArg('reanalyze') === 'true'
+    reanalyze: getArg('reanalyze') === 'true',
+    transcriptOnly: getArg('transcript_only') === 'true',
+    maxLookbackDays: Number(getArg('max_lookback_days')) || undefined
   });
 
   console.log(JSON.stringify(result, null, 2));

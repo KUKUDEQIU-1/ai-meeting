@@ -2,7 +2,7 @@ import { get, run } from '../db/database.js';
 import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser } from './feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
 import { saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
-import { extractFeishuMeetingNoteContentWithMeta, findMeetingNoteId, getFeishuMeetingDetail, getFeishuMeetingNoteDetail, getFeishuMeetingNoteList, normalizeFeishuMeetingNote } from './feishuMeetingNotesClient.js';
+import { extractFeishuMeetingNoteContentWithMeta, findMeetingNoteId, getFeishuMeetingArtifactContent, getFeishuMeetingDetail, getFeishuMeetingNoteDetail, getFeishuMeetingNoteList, normalizeFeishuMeetingNote } from './feishuMeetingNotesClient.js';
 import { formatSegmentsForPrompt, normalizeMeetingTranscript } from './meetingTranscriptService.js';
 import { createMeetingTaskDraft } from './taskDraftService.js';
 import { resolveDraftTasksAgainstHistory } from './taskResolutionService.js';
@@ -60,7 +60,8 @@ function isWithinLookback(note, maxLookbackDays) {
 }
 
 function hasTranscriptContent(meta) {
-  return ['transcript', 'transcripts', 'segments', 'content', 'body', 'minutes'].includes(meta.source) && Boolean(meta.content?.trim());
+  return ['transcript', 'transcripts', 'segments', 'content', 'body', 'minutes', 'transcript_artifact'].includes(meta.source)
+    && Boolean(meta.content?.trim());
 }
 
 function countRawTasks(analysis) {
@@ -230,7 +231,9 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
 
     await upsertSyncRecord({ noteId: normalizedNoteId, title: meetingTitle, status: 'processing', notifyTargetType, notifyTargetId, notifyStatus, notifyError });
 
-    contentMeta = extractFeishuMeetingNoteContentWithMeta(rawNote);
+    contentMeta = options.transcriptOnly === true
+      ? await getFeishuMeetingArtifactContent(rawNote, 2)
+      : extractFeishuMeetingNoteContentWithMeta(rawNote, { includeSummary: true });
     rawText = contentMeta.content;
     const usedTranscript = hasTranscriptContent(contentMeta);
 
@@ -478,11 +481,11 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
   }
 }
 
-export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false } = {}) {
+export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false, transcriptOnly = false, maxLookbackDays } = {}) {
   const scanLimit = Number(limit) || envNumber('FEISHU_MEETING_NOTES_SCAN_LIMIT', 10);
   const minNoteAgeMinutes = envNumber('FEISHU_MEETING_NOTES_MIN_AGE_MINUTES', 5);
-  const maxLookbackDays = envNumber('FEISHU_MEETING_NOTES_MAX_LOOKBACK_DAYS', 7);
-  const { notes } = await getFeishuMeetingNoteList({ limit: scanLimit });
+  const effectiveMaxLookbackDays = Number(maxLookbackDays) || envNumber('FEISHU_MEETING_NOTES_MAX_LOOKBACK_DAYS', 7);
+  const { notes } = await getFeishuMeetingNoteList({ limit: scanLimit, maxLookbackDays: effectiveMaxLookbackDays });
   const imported = [];
   const skipped = [];
   const failed = [];
@@ -492,7 +495,7 @@ export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false } 
   for (const rawNote of notes.slice(0, scanLimit)) {
     const note = normalizeFeishuMeetingNote(rawNote);
     let noteId = note.note_id;
-    const meetingId = note.meeting_id;
+    const meetingId = note.meeting_id || (rawNote?.display_info || rawNote?.meta_data?.app_link ? rawNote.id : '');
     const title = note.title;
 
     if (!noteId && meetingId) {
@@ -511,7 +514,7 @@ export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false } 
     }
 
     try {
-      if (!isWithinLookback(rawNote, maxLookbackDays)) {
+      if (!isWithinLookback(rawNote, effectiveMaxLookbackDays)) {
         skipped.push({ note_id: noteId, title, reason: 'outside_lookback' });
         continue;
       }
@@ -533,7 +536,9 @@ export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false } 
 
       try {
         detailNote = await getFeishuMeetingNoteDetail(noteId);
-        meta = extractFeishuMeetingNoteContentWithMeta(detailNote);
+        meta = extractFeishuMeetingNoteContentWithMeta(detailNote, {
+          includeSummary: transcriptOnly !== true
+        });
 
         if (!hasTranscriptContent(meta) && noteAgeMinutes(detailNote) < minNoteAgeMinutes) {
           skipped.push({ note_id: noteId, title, reason: 'transcript_not_ready', table_url: null });
@@ -548,7 +553,13 @@ export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false } 
         throw error;
       }
 
-      const result = await importFeishuMeetingNote(noteId, { note: detailNote, skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze });
+      const result = await importFeishuMeetingNote(noteId, {
+        note: detailNote,
+        skipIfTranscriptNotReady: true,
+        minNoteAgeMinutes,
+        reanalyze,
+        transcriptOnly
+      });
 
       if (result.status === 'skipped') {
         skipped.push({ note_id: noteId, title, reason: result.reason || 'already_synced', table_url: result.table_url || null });

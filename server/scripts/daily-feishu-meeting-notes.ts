@@ -38,12 +38,13 @@ async function main() {
   const { syncRecentFeishuMeetingNotes } = await import('../services/feishuMeetingNotesImportService.js');
   const limit = Number(getArg('limit')) || 10;
   const reanalyze = getBoolArg('reanalyze', false);
+  const transcriptOnly = getBoolArg('transcript_only', false);
 
   await initDatabase();
 
-  console.log(`[Daily Feishu Meeting Notes] start limit=${limit} reanalyze=${reanalyze}`);
+  console.log(`[Daily Feishu Meeting Notes] start limit=${limit} reanalyze=${reanalyze} transcript_only=${transcriptOnly}`);
 
-  const result = await syncRecentFeishuMeetingNotes({ limit, reanalyze });
+  const result = await syncRecentFeishuMeetingNotes({ limit, reanalyze, transcriptOnly });
 
   console.log('');
   console.log('飞书会议智能纪要每日同步完成：');
