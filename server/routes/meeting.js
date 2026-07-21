@@ -2,11 +2,13 @@ import express from 'express';
 import { createTaskRecord } from '../services/feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingService.js';
 import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImportService.js';
+import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 
 const router = express.Router();
 
 router.use('/feishu-docx-note-sources', feishuDocxNoteSourcesRouter);
+router.use('/sync-feishu-meeting-notes', feishuMeetingNotesSyncRouter);
 
 router.post('/sync-feishu', async (req, res, next) => {
   try {
