@@ -128,14 +128,22 @@ export async function getMeetingTaskDraftById(id) {
   return hydrateDraft(row);
 }
 
-export async function getMeetingTaskDraftBySource(sourceType, sourceId) {
-  const row = await get(
-    `SELECT * FROM meeting_task_drafts
-     WHERE source_type = ? AND source_id = ? AND confirmation_status = ?
-     ORDER BY updated_at DESC, id DESC
-     LIMIT 1`,
-    [sourceType || '', sourceId || '', 'pending_confirmation']
-  );
+export async function getMeetingTaskDraftBySource(sourceType, sourceId, options = {}) {
+  const row = options.includeAnyStatus
+    ? await get(
+      `SELECT * FROM meeting_task_drafts
+       WHERE source_type = ? AND source_id = ?
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`,
+      [sourceType || '', sourceId || '']
+    )
+    : await get(
+      `SELECT * FROM meeting_task_drafts
+       WHERE source_type = ? AND source_id = ? AND confirmation_status = ?
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`,
+      [sourceType || '', sourceId || '', 'pending_confirmation']
+    );
   if (!row) return null;
   return hydrateDraft(row);
 }

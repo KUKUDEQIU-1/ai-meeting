@@ -13,6 +13,7 @@ import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.
 import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
 import { createTaskRecord, formatTaskForMasterTable } from '../services/feishuBitableClient.js';
+import { repairDraftAssigneesFromPreviousDraft } from '../services/feishuMeetingNotesImportService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 
@@ -313,6 +314,20 @@ function testConfirmedProgressBuildsFollowerField() {
   }, '2026-07-22');
 
   assert.equal(update.fields.跟进人, 'ou_progress_actor');
+}
+
+function testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [{ task_name: '完成小程序登录联调', task_brief: '登录链路联调', assignee: '待确认' }],
+    progressUpdates: [{ task_name: 'AI会议助手历史任务', progress_summary: '继续推进', assignee: '待确认' }],
+    previousDraft: {
+      draft_tasks: [{ task_name: '完成小程序登录联调', task_brief: '登录链路联调', assignee: '简学勤' }],
+      progress_updates: [{ task_name: 'AI会议助手历史任务', progress_summary: '上次推进', assignee: '简学勤' }]
+    }
+  });
+
+  assert.equal(repaired.tasks[0].assignee, '简学勤');
+  assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
 }
 
 
@@ -836,6 +851,7 @@ testCallbackParsingAndSafety();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
 testConfirmedProgressBuildsFollowerField();
+testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();

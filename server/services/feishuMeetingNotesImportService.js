@@ -1,7 +1,7 @@
 import { get, run } from '../db/database.js';
 import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser } from './feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
-import { saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
+import { buildTaskKey, saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
 import { extractFeishuMeetingNoteContentWithMeta, findMeetingNoteId, getFeishuMeetingArtifactContent, getFeishuMeetingDetail, getFeishuMeetingNoteDetail, getFeishuMeetingNoteList, normalizeFeishuMeetingNote } from './feishuMeetingNotesClient.js';
 import { formatSegmentsForPrompt, normalizeMeetingTranscript } from './meetingTranscriptService.js';
 import { createMeetingTaskDraft, getMeetingTaskDraftBySource } from './taskDraftService.js';
@@ -66,6 +66,48 @@ function hasTranscriptContent(meta) {
 
 function countRawTasks(analysis) {
   return analysis.raw_tasks?.length || analysis.tasks?.length || 0;
+}
+
+function assigneeOf(item) {
+  return String(item?.assignee || item?.owner || item?.assignee_name || '').trim();
+}
+
+function isUnknownAssignee(value) {
+  return !value || /^(待确认|未提供|未知|不明确|无|暂无)$/.test(value);
+}
+
+function previousAssigneeByTaskKey(items) {
+  const assignees = new Map();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const assignee = assigneeOf(item);
+    if (isUnknownAssignee(assignee)) continue;
+    assignees.set(buildTaskKey({ task_name: item.task_name }), assignee);
+    assignees.set(buildTaskKey({ task_name: item.task_name, task_brief: item.task_brief || item.progress_summary, task_description: item.task_description }), assignee);
+  }
+
+  return assignees;
+}
+
+function repairItemsAssignees(items, previousItems) {
+  const previousAssignees = previousAssigneeByTaskKey(previousItems);
+
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const assignee = assigneeOf(item);
+    const previousAssignee = previousAssignees.get(buildTaskKey({ task_name: item.task_name }))
+      || previousAssignees.get(buildTaskKey({ task_name: item.task_name, task_brief: item.task_brief || item.progress_summary, task_description: item.task_description }));
+
+    if (!isUnknownAssignee(assignee) || !previousAssignee) return item;
+
+    return { ...item, assignee: previousAssignee };
+  });
+}
+
+export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, previousDraft } = {}) {
+  return {
+    tasks: repairItemsAssignees(tasks, previousDraft?.draft_tasks || []),
+    progressUpdates: repairItemsAssignees(progressUpdates, previousDraft?.progress_updates || [])
+  };
 }
 
 async function notifyUserSafe(params) {
@@ -326,6 +368,12 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
     const existingPendingDraft = !options.force && !options.reanalyze
       ? await getMeetingTaskDraftBySource('feishu_meeting_note', normalizedNoteId)
       : null;
+    const previousDraft = existingPendingDraft || await getMeetingTaskDraftBySource('feishu_meeting_note', normalizedNoteId, { includeAnyStatus: true });
+    const repairedDraftItems = repairDraftAssigneesFromPreviousDraft({
+      tasks: resolutionResult.tasks,
+      progressUpdates: aiResult.progress_updates,
+      previousDraft
+    });
     const draft = existingPendingDraft || await createMeetingTaskDraft({
       sourceType: 'feishu_meeting_note',
       sourceId: normalizedNoteId,
@@ -335,10 +383,10 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       summary: aiResult.summary,
       segments: transcriptResult.usable_segments,
       discardedSegments: transcriptResult.discarded_segments,
-      draftTasks: resolutionResult.tasks,
+      draftTasks: repairedDraftItems.tasks,
       existingMatches: resolutionResult.existing_matches,
       uncertainTasks: resolutionResult.uncertain_tasks,
-      progressUpdates: aiResult.progress_updates,
+      progressUpdates: repairedDraftItems.progressUpdates,
       discardedItems: aiResult.discarded_items,
       contentSource: contentMeta.source,
       contentLength: contentMeta.length,
