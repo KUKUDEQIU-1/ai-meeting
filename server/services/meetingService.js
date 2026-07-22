@@ -182,7 +182,15 @@ function taskToProgressUpdate(task, progressType = 'existing_task_progress', rea
     progress_summary: task.progress_summary || task.task_brief || task.task_description || getTaskName(task) || '',
     evidence_quote: getEvidence(task) || task.evidence_quote || '待确认',
     confidence: task.confidence ?? 0,
-    reason
+    reason,
+    assignee: task.assignee || task.owner || task.assignee_name || '待确认',
+    owner: task.assignee || task.owner || task.assignee_name || '待确认',
+    assignee_source: task.assignee_source || '',
+    source_speaker: task.source_speaker || '',
+    source_time: task.source_time || '',
+    source_speaker_status: task.source_speaker_status || task.speaker_status || '',
+    source_speaker_confidence: task.source_speaker_confidence ?? task.speaker_confidence ?? null,
+    attribution_warnings: Array.isArray(task.attribution_warnings) ? task.attribution_warnings : []
   };
 }
 

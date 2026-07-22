@@ -14,6 +14,8 @@ import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
 import { createTaskRecord, formatTaskForMasterTable } from '../services/feishuBitableClient.js';
 import { repairDraftAssigneesFromPreviousDraft } from '../services/feishuMeetingNotesImportService.js';
+import { normalizeTaskExtractionResult } from '../services/aiService.js';
+import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 
@@ -328,6 +330,49 @@ function testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown() {
 
   assert.equal(repaired.tasks[0].assignee, '简学勤');
   assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
+}
+
+function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {
+  const result = normalizeTaskExtractionResult({
+    today_tasks: [],
+    progress_updates: [{
+      task_name: 'AI智能会议助手接入总表',
+      progress_type: 'existing_task_progress',
+      progress_summary: '继续收尾工具应用并测试后接入总表',
+      evidence_quote: '我今天的任务就是，继续收尾 AI 智能会议助手',
+      assignee: '待确认',
+      assignee_source: 'speaker',
+      source_speaker: '简学勤',
+      source_time: '00:06:45',
+      source_speaker_status: 'provided',
+      source_speaker_confidence: 0.8
+    }]
+  });
+  const grouped = groupDraftTasksByAssignee(result.progress_updates, parseAssigneeMap(JSON.stringify({ 简学勤: 'ou_jian' })));
+
+  assert.equal(result.progress_updates[0].assignee, '简学勤');
+  assert.equal(result.progress_updates[0].owner, '简学勤');
+  assert.equal(grouped.deliverable.length, 1);
+  assert.equal(grouped.deliveryFailures.length, 0);
+  assert.equal(grouped.deliverable[0].assignee_key, '简学勤');
+}
+
+function testProgressSuppressionKeepsTaskAssigneeForPrivateCard() {
+  const result = filterActionableTasks([{ 
+    task_name: 'AI智能会议助手接入总表',
+    task_brief: '已完成接入总表',
+    task_description: '已完成接入事务管理需求总表',
+    evidence_quote: '已经完成 AI 智能会议助手接入总表',
+    assignee: '简学勤',
+    owner: '简学勤',
+    item_type: 'completed_update',
+    task_type: 'action_item',
+    confidence: 0.8
+  }]);
+
+  assert.equal(result.tasks.length, 0);
+  assert.equal(result.progress_updates.length, 1);
+  assert.equal(result.progress_updates[0].assignee, '简学勤');
 }
 
 
@@ -852,6 +897,8 @@ testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
 testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
+testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
+testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();

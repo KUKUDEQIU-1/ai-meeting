@@ -237,14 +237,27 @@ function normalizeProgressUpdates(items) {
     return [];
   }
 
-  return items.map((item) => ({
-    task_name: item.task_name || item.title || item.task || '未命名事项',
-    progress_type: item.progress_type || item.item_type || 'existing_task_progress',
-    progress_summary: item.progress_summary || item.summary || item.description || '',
-    evidence_quote: item.evidence_quote || item.evidence || '待确认',
-    confidence: typeof item.confidence === 'number' ? item.confidence : 0.8,
-    reason: item.reason || ''
-  }));
+  return items.map((item) => {
+    const attribution = normalizeAssigneeAttribution(item);
+
+    return {
+      task_name: item.task_name || item.title || item.task || '未命名事项',
+      progress_type: item.progress_type || item.item_type || 'existing_task_progress',
+      progress_summary: item.progress_summary || item.summary || item.description || '',
+      evidence_quote: item.evidence_quote || item.evidence || '待确认',
+      confidence: typeof item.confidence === 'number' ? item.confidence : 0.8,
+      reason: item.reason || '',
+      assignee: attribution.assignee,
+      owner: attribution.assignee,
+      assignee_source: attribution.assignee_source,
+      source_speaker: item.source_speaker || '',
+      source_time: item.source_time || '',
+      source_speaker_status: item.source_speaker_status || item.speaker_status || '',
+      source_speaker_confidence: item.source_speaker_confidence ?? item.speaker_confidence ?? null,
+      attribution_warnings: getAttributionWarnings(item),
+      needs_confirmation: attribution.needs_confirmation
+    };
+  });
 }
 
 function normalizeDiscardedItems(items) {
