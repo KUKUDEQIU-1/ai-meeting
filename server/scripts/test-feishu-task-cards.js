@@ -679,6 +679,7 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
     finalizeProgress: async ({ draftId, assigneeKey }) => {
       finalizedProgress = draftId === draft.id && assigneeKey === '张三';
     },
+    masterTaskNameExists: async () => true,
     updateCard: async () => ({ status: 'updated' })
   });
   const confirmedDraft = await getMeetingTaskDraftById(draft.id);
@@ -942,6 +943,101 @@ async function testFinalConfirmUsesCurrentOldTaskNameInput() {
       }, { updateCard: async () => ({ status: 'updated' }) }),
       /不能填写原表格没有的任务/
     );
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousMasterTableId;
+    process.env.FEISHU_MASTER_TASK_APP_TOKEN = previousMasterAppToken;
+  }
+}
+
+async function testFinalConfirmInfersOldProgressFromOldTaskNameInput() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+  let createRecordCalls = 0;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `confirm-old-input-infer-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'infer_old_1', task_name: '简学勤今日工作生成', assignee: '张三', progress_summary: '推进进展' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'tbl_infer_old_input',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
+  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'app_infer_old_input';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_infer_old_input';
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/records') && String(options.method || 'GET').toUpperCase() === 'POST') {
+      createRecordCalls += 1;
+      return new Response(JSON.stringify({ code: 0, data: { record: { record_id: 'rec_created' } } }), { status: 200 });
+    }
+
+    if (href.includes('/records')) {
+      return new Response(JSON.stringify({ code: 0, data: { items: [] } }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    await assert.rejects(
+      () => handleFeishuCardAction({
+        header: { event_id: 'evt_confirm_old_input_infer' },
+        event: {
+          operator: { open_id: 'ou_actor' },
+          action: {
+            value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' },
+            form_value: {
+              task_name_infer_old_1: '简学勤今日工作生成',
+              matched_task_name_infer_old_1: '111',
+              progress_summary_infer_old_1: '推进进展'
+            }
+          }
+        }
+      }, { updateCard: async () => ({ status: 'updated' }) }),
+      /不能填写原表格没有的任务/
+    );
+
+    assert.equal(createRecordCalls, 0);
+    const latestDraft = await getMeetingTaskDraftById(draft.id);
+    assert.equal(latestDraft.draft_tasks[0].status, 'pending');
   } finally {
     globalThis.fetch = previousFetch;
     process.env.FEISHU_APP_ID = previousAppId;
@@ -1546,6 +1642,7 @@ await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
 await testOldProgressConfirmRejectsTaskNameOutsideMasterTable();
 await testFinalConfirmUsesCurrentOldTaskNameInput();
+await testFinalConfirmInfersOldProgressFromOldTaskNameInput();
 await testMarkOldTaskRejectsNameOutsideMasterTable();
 await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();

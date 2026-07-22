@@ -71,6 +71,27 @@ function taskWithCurrentFormValues(task, formValues) {
   };
 }
 
+function hasCurrentFormValue(formValues, field, itemId) {
+  return Object.prototype.hasOwnProperty.call(formValues || {}, `${field}_${itemId}`);
+}
+
+function taskChoiceFromCurrentForm(task, formValues) {
+  const itemId = String(task.item_id || '');
+  const submittedOldTaskName = hasCurrentFormValue(formValues, 'matched_task_name', itemId)
+    ? formValueForItem(formValues, 'matched_task_name', itemId)
+    : '';
+
+  if (submittedOldTaskName) return 'old_task_progress';
+  return task.task_choice === 'old_task_progress' ? 'old_task_progress' : 'new_task';
+}
+
+async function assertMasterTaskNamesExist(tasks, dependencies, context) {
+  for (const task of tasks) {
+    const exists = await dependencies.masterTaskNameExists(matchedTaskNameOf(task), context);
+    if (!exists) reject('不能填写原表格没有的任务', 400);
+  }
+}
+
 function progressUpdateFromTask(task, operatorOpenId, timestamp) {
   return {
     item_id: `${task.item_id}_progress`,
@@ -218,14 +239,27 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
     const confirmedNewTasks = [];
     const convertedProgressUpdates = [];
 
-    for (const storedTask of ownedTasks.filter((item) => item.status === 'pending')) {
-      const task = taskWithCurrentFormValues(storedTask, parsed.raw_form_values);
+    const pendingTasks = ownedTasks
+      .filter((item) => item.status === 'pending')
+      .map((storedTask) => {
+        const task = taskWithCurrentFormValues(storedTask, parsed.raw_form_values);
+        return { ...task, task_choice: taskChoiceFromCurrentForm(task, parsed.raw_form_values) };
+      });
+    const oldProgressTasks = pendingTasks.filter((task) => task.task_choice === 'old_task_progress');
+
+    await assertMasterTaskNamesExist(oldProgressTasks, dependencies, {
+      table_id: draft?.table_id,
+      app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
+    });
+
+    for (const task of pendingTasks) {
       const nextStatus = task.task_choice === 'old_task_progress' ? 'discarded' : 'confirmed';
       await updateMeetingTaskDraftItem(parsed.draft_id, task.item_id, (item) => ({
         ...item,
         task_name: task.task_name,
         progress_summary: task.progress_summary,
         matched_task_name: task.matched_task_name,
+        task_choice: task.task_choice,
         status: nextStatus,
         confirmed_by: parsed.operator_open_id,
         confirmed_at: timestamp,
