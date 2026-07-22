@@ -141,7 +141,9 @@ export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, ass
   const linkedProgressResult = await updateTaskInstancesFromProgress(ownedProgressUpdates, {
     note_id: draft.source_id,
     meeting_title: draft.meeting_title,
-    meeting_time: draft.meeting_time
+    meeting_time: draft.meeting_time,
+    table_id: draft.table_id,
+    app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
   });
 
   if (linkedProgressResult.updated_count === 0) {

@@ -182,17 +182,17 @@ function taskNameFieldValue(fields) {
   return String(fields?.事务需求名称 || fields?.任务名称 || fields?.task_name || '').trim();
 }
 
-function masterTaskTableId() {
-  return process.env.FEISHU_MASTER_TASK_TABLE_ID?.trim() || process.env.FEISHU_BITABLE_TABLE_ID?.trim() || '';
+function masterTaskTableId(context = {}) {
+  return context.table_id || context.tableId || process.env.FEISHU_MASTER_TASK_TABLE_ID?.trim() || process.env.FEISHU_BITABLE_TABLE_ID?.trim() || '';
 }
 
-function masterTaskAppToken() {
-  return process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || '';
+function masterTaskAppToken(context = {}) {
+  return context.app_token || context.appToken || process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || '';
 }
 
-async function findMasterTaskRecordByName(item, tenantAccessToken) {
-  const appToken = masterTaskAppToken();
-  const tableId = masterTaskTableId();
+async function findMasterTaskRecordByName(item, tenantAccessToken, context = {}) {
+  const appToken = masterTaskAppToken(context);
+  const tableId = masterTaskTableId(context);
 
   if (!appToken || !tableId) return null;
 
@@ -557,7 +557,7 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
   for (const { item, statusUpdate } of candidates) {
     if (item.require_exact_task_name) {
       try {
-        const masterRecord = await findMasterTaskRecordByName(item, tenantAccessToken);
+        const masterRecord = await findMasterTaskRecordByName(item, tenantAccessToken, context);
 
         if (!masterRecord?.recordId) throw exactOldTaskNameError();
 
@@ -583,7 +583,7 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
           task_name: item.task_name || '',
           matched_task_name: '',
           status: statusUpdate.status,
-          table_id: masterTaskTableId(),
+          table_id: masterTaskTableId(context),
           record_id: '',
           reason: error.message
         });
@@ -596,7 +596,7 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
 
     if (!match) {
       try {
-        const masterRecord = await findMasterTaskRecordByName(item, tenantAccessToken);
+        const masterRecord = await findMasterTaskRecordByName(item, tenantAccessToken, context);
 
         if (masterRecord?.recordId) {
           const fields = await normalizeProgressFieldName({
@@ -630,7 +630,7 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
           task_name: item.task_name || '',
           matched_task_name: '',
           status: statusUpdate.status,
-          table_id: masterTaskTableId(),
+          table_id: masterTaskTableId(context),
           record_id: '',
           reason: error.message
         });

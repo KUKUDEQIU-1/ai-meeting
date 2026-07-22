@@ -1142,6 +1142,76 @@ async function testConfirmedProgressUpdatesMasterRecordWhenLocalInstanceMissing(
   }
 }
 
+async function testConfirmedProgressUsesDraftMasterTableWhenFallbackEnvDiffers() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+  const updates = [];
+  const lists = [];
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_wrong_app';
+  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'env_wrong_app';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_wrong_env';
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/tables/tbl_draft_master/fields')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ field_name: '事务需求名称' }, { field_name: '需求状态' }, { field_name: '进度评估' }, { field_name: '任务进展描述' }, { field_name: '跟进人' }] }
+      }), { status: 200 });
+    }
+
+    if (href.includes('/tables/tbl_draft_master/records/rec_draft_master') && options.method === 'PUT') {
+      updates.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ code: 0, data: { record: { record_id: 'rec_draft_master' } } }), { status: 200 });
+    }
+
+    if (href.includes('/tables/tbl_draft_master/records') && options.method === 'GET') {
+      lists.push(href);
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ record_id: 'rec_draft_master', fields: { 事务需求名称: '草稿总表旧任务' } }] }
+      }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const result = await updateTaskInstancesFromProgress([{ 
+      task_name: '草稿总表旧任务',
+      progress_type: 'existing_task_progress',
+      progress_summary: '已完成进展',
+      status: 'confirmed',
+      confirmed_by: 'ou_progress_actor',
+      require_exact_task_name: true
+    }], { meeting_time: '2026-07-22', table_id: 'tbl_draft_master', app_token: 'app_draft_master' });
+
+    assert.equal(result.updated_count, 1);
+    assert.equal(lists.length, 1);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].fields.任务进展描述, '已完成进展');
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousMasterTableId;
+    process.env.FEISHU_MASTER_TASK_APP_TOKEN = previousMasterAppToken;
+  }
+}
+
 async function testConfirmedNewTaskCreateRecordWritesFollowerField() {
   const previousFetch = globalThis.fetch;
   const previousAppId = process.env.FEISHU_APP_ID;
@@ -1289,6 +1359,7 @@ await testDeliveryDiagnosticsHideRecipientIds();
 await testProgressFinalizerRejectsUnmatchedProgressWithoutCreatingTasks();
 await testConfirmedProgressUpdatesExistingTaskProgressDescriptionField();
 await testConfirmedProgressUpdatesMasterRecordWhenLocalInstanceMissing();
+await testConfirmedProgressUsesDraftMasterTableWhenFallbackEnvDiffers();
 await testConfirmedNewTaskCreateRecordWritesFollowerField();
 await testProgressConfirmationUsesProgressOnlyAction();
 
