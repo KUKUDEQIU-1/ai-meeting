@@ -7,6 +7,7 @@ import feishuCardActionRouter from './routes/feishuCardAction.js';
 import { initDatabase } from './db/database.js';
 import { feishuResidentWorker } from './services/feishuResidentWorker.js';
 import { getMeetingNotesTokenStatus } from './services/feishuOAuthTokenService.js';
+import { listFeishuWikiDocxSources } from './services/feishuWikiDocxImportService.js';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -31,7 +32,11 @@ app.get('/api/health', async (req, res, next) => {
     status: 'ok',
     version: 'latest-draft-v2',
     feishu_resident_worker: feishuResidentWorker.snapshot(),
-    feishu_meeting_notes_token: await getMeetingNotesTokenStatus()
+    feishu_meeting_notes_token: await getMeetingNotesTokenStatus(),
+    feishu_wiki_sources: {
+      configured: Boolean((process.env.FEISHU_WIKI_SOURCE_NODE_TOKEN || process.env.FEISHU_WIKI_SOURCE_NODE_URL || '').trim()),
+      recent: await listFeishuWikiDocxSources({ limit: 5 })
+    }
   });
   } catch (error) {
     next(error);

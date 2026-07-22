@@ -1,6 +1,7 @@
 import { syncConfiguredFeishuDocxNotes } from './feishuDocxNoteImportService.js';
 import { syncRecentFeishuMeetingNotes } from './feishuMeetingNotesImportService.js';
 import { feishuScanCoordinator } from './feishuScanCoordinator.js';
+import { syncFeishuWikiDocxNotes } from './feishuWikiDocxImportService.js';
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 const RETRY_DELAY_MS = 60 * 1000;
@@ -56,8 +57,12 @@ export function createFeishuResidentWorker({
   const requireTestRecipient = envEnabled(env, 'FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT', true);
   const hasTestRecipient = Boolean(String(env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim());
   const intervalMinutes = envPositiveNumber(env, 'FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES', DEFAULT_INTERVAL_MINUTES);
+  const meetingScanEnabled = envEnabled(env, 'FEISHU_RESIDENT_MEETING_SCAN_ENABLED', true);
+  const docxScanEnabled = envEnabled(env, 'FEISHU_RESIDENT_DOCX_SCAN_ENABLED', true);
+  const wikiScanEnabled = envEnabled(env, 'FEISHU_WIKI_SCAN_ENABLED', Boolean(String(env.FEISHU_WIKI_SOURCE_NODE_TOKEN || env.FEISHU_WIKI_SOURCE_NODE_URL || '').trim()));
   const meetingScan = scans.meeting || ((options) => syncRecentFeishuMeetingNotes(options));
   const docxScan = scans.docx || ((options) => syncConfiguredFeishuDocxNotes(options));
+  const wikiScan = scans.wiki || ((options) => syncFeishuWikiDocxNotes(options));
   let running = false;
   let stopped = false;
   let timer = null;
@@ -79,6 +84,9 @@ export function createFeishuResidentWorker({
       require_test_recipient: requireTestRecipient,
       test_recipient_configured: hasTestRecipient,
       interval_minutes: intervalMinutes,
+      meeting_scan_enabled: meetingScanEnabled,
+      docx_scan_enabled: docxScanEnabled,
+      wiki_scan_enabled: wikiScanEnabled,
       last_cycle: lastCycle,
       coordinator: coordinator.snapshot()
     };
@@ -110,15 +118,17 @@ export function createFeishuResidentWorker({
     const startedAt = nowIso();
 
     try {
-      const meeting = await runScan('meeting', () => meetingScan({}));
-      const docx = await runScan('docx', () => docxScan({}));
-      const failed = meeting.status === 'failed' || docx.status === 'failed';
+      const meeting = meetingScanEnabled ? await runScan('meeting', () => meetingScan({})) : { status: 'disabled', imported_count: 0, skipped_count: 0, failed_count: 0 };
+      const docx = docxScanEnabled ? await runScan('docx', () => docxScan({})) : { status: 'disabled', imported_count: 0, skipped_count: 0, failed_count: 0 };
+      const wiki = wikiScanEnabled ? await runScan('wiki', () => wikiScan({})) : { status: 'disabled', imported_count: 0, skipped_count: 0, failed_count: 0 };
+      const failed = meeting.status === 'failed' || docx.status === 'failed' || wiki.status === 'failed';
       lastCycle = {
         started_at: startedAt,
         finished_at: nowIso(),
         status: failed ? 'partial_failed' : 'success',
         meeting,
-        docx
+        docx,
+        wiki
       };
       status = 'idle';
       scheduleNext(failed ? RETRY_DELAY_MS : intervalMinutes * 60 * 1000);
