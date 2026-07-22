@@ -16,6 +16,7 @@ export const MEETING_TASK_TABLE_SCHEMA = [
 export const MEETING_INDEX_TABLE_SCHEMA = ['会议标题', '会议时间', '会议来源', '任务数', '今日新增任务数', '历史进展数', '历史进展摘要', '过滤事项数', '会议摘要短版', '任务表链接', 'note_id', '同步状态', '内容来源', '内容长度', '是否使用原文', '待确认任务数', '创建时间'];
 export const MASTER_TASK_TABLE_SCHEMA_VERSION = 'master_task_v1';
 export const MASTER_TASK_TABLE_REQUIRED_FIELDS = ['事务需求名称', '开始日期'];
+const FOLLOWER_FIELD_NAME = '跟进人';
 
 function requiredEnv(name) {
   const value = process.env[name]?.trim();
@@ -221,6 +222,33 @@ function taskNameOf(task) {
   return task.task_name || task.title || task.task || task.name || '未命名任务';
 }
 
+function fieldNameOf(field) {
+  return field.field_name || field.name;
+}
+
+function followerValueForField(field, follower) {
+  const value = String(follower || '').trim();
+
+  if (!value) return null;
+
+  const fieldType = String(field?.type || field?.ui_type || field?.field_type || '');
+
+  if (fieldType === '11' || /user|person|人员|联系人/i.test(fieldType)) {
+    return [{ id: value }];
+  }
+
+  return value;
+}
+
+export function addFollowerField(fields, follower, bitableFields = []) {
+  const field = bitableFields.find((item) => fieldNameOf(item) === FOLLOWER_FIELD_NAME);
+  const value = followerValueForField(field, follower);
+
+  if (!value || (bitableFields.length && !field)) return fields;
+
+  return { ...fields, [FOLLOWER_FIELD_NAME]: value };
+}
+
 export function formatTaskForBitable(task, context = {}) {
   const taskName = truncateText(taskNameOf(task), 30) || '未命名任务';
   const description = task.task_description || task.description || task.detail || task.summary || task.task || task.title || taskName;
@@ -249,7 +277,7 @@ export function formatTaskForMasterTable(task, context = {}) {
 
   console.log(`[GetNote Sync] format master task done task_name=${formatted.事务需求名称} start_date=${formatted.开始日期 ? formatDateOnly(context.meeting_time || context.meetingTime || context.created_at) : 'empty'}`);
 
-  return formatted;
+  return addFollowerField(formatted, task.confirmed_by || task.confirmedBy || context.confirmed_by || context.confirmedBy, context.bitable_fields || context.bitableFields || []);
 }
 
 function buildTableUrl(tableId) {
@@ -410,10 +438,6 @@ export async function listBitableFields({ appToken, tableId, tenantAccessToken }
 
 function fieldIdOf(field) {
   return field.field_id || field.id;
-}
-
-function fieldNameOf(field) {
-  return field.field_name || field.name;
 }
 
 function isPrimaryField(field, index) {
@@ -746,6 +770,7 @@ export async function createTaskRecord(task, meetingMeta, options = {}) {
   const appToken = options.app_token || meetingMeta.app_token || appTokenForTable(tableId);
   const tenantAccessToken = await getTenantAccessToken();
   const taskName = normalizeTaskName(task).trim();
+  let masterFields = options.masterFields || [];
 
   if (!taskName) {
     const error = new Error('task_name 不能为空');
@@ -761,11 +786,12 @@ export async function createTaskRecord(task, meetingMeta, options = {}) {
     await validateMeetingTaskTableSchema(tableId, { appToken, tenantAccessToken, throwOnInvalid: true });
   } else if (options.masterTaskTable && !options.schemaValidated) {
     console.log(`[GetNote Sync] validate master task table schema before write table_id=${tableId}`);
-    await validateMasterTaskTableSchema(tableId, { appToken, tenantAccessToken, throwOnInvalid: true });
+    const schema = await validateMasterTaskTableSchema(tableId, { appToken, tenantAccessToken, throwOnInvalid: true });
+    masterFields = Object.values(schema.fields || {});
   }
 
   const fields = options.masterTaskTable
-    ? formatTaskForMasterTable(task, meetingMeta)
+    ? formatTaskForMasterTable(task, { ...meetingMeta, bitable_fields: masterFields })
     : options.optimizedFields
     ? formatTaskForBitable(task, meetingMeta)
     : {

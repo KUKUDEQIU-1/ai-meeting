@@ -11,7 +11,10 @@ export async function finalizeMeetingTaskDraft({ draftId, confirmedBy = '待确�
     throw error;
   }
 
-  const tasks = Array.isArray(confirmedTasks) ? confirmedTasks : draft.draft_tasks || [];
+  const tasks = (Array.isArray(confirmedTasks) ? confirmedTasks : draft.draft_tasks || []).map((task) => ({
+    ...task,
+    confirmed_by: task.confirmed_by || confirmedBy
+  }));
   const feishuResult = await syncTasksToFeishu(tasks, {
     meeting_title: draft.meeting_title,
     meeting_source: draft.meeting_source,
@@ -121,7 +124,10 @@ export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, ass
 
   const ownedProgressUpdates = (draft.progress_updates || []).filter((item) => (
     normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey && item.status === 'confirmed'
-  ));
+  )).map((item) => ({
+    ...item,
+    confirmed_by: item.confirmed_by || confirmedBy
+  }));
 
   if (!ownedProgressUpdates.length) {
     return {

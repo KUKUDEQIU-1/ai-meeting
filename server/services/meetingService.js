@@ -508,15 +508,17 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
   let createdCount = 0;
   let existingRecords = [];
   let masterSchemaValidated = false;
+  let masterFields = [];
 
   if (options.masterTaskTable) {
     try {
       const tenantAccessToken = await getTenantAccessToken();
-      await validateMasterTaskTableSchema(tableId, {
+      const schema = await validateMasterTaskTableSchema(tableId, {
         appToken: options.app_token || meetingMeta.app_token,
         tenantAccessToken,
         throwOnInvalid: true
       });
+      masterFields = Object.values(schema.fields || {});
       masterSchemaValidated = true;
       existingRecords = await listBitableRecords({
         appToken: options.app_token || meetingMeta.app_token,
@@ -562,7 +564,8 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
         app_token: options.app_token || meetingMeta.app_token,
         optimizedFields: options.optimizedFields,
         masterTaskTable: options.masterTaskTable,
-        schemaValidated: masterSchemaValidated
+        schemaValidated: masterSchemaValidated,
+        masterFields
       };
       const record = await createTaskRecord({ ...cleanedTask, status: '待处理' }, meetingMeta, createOptions).catch(async (error) => {
         if (!options.masterTaskTable || !masterSchemaValidated) {
@@ -571,11 +574,13 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
 
         console.warn(`[Feishu Bitable] create retry after schema refresh task=${cleanedTask.task_name} error=${error.message}`);
         const tenantAccessToken = await getTenantAccessToken();
-        await validateMasterTaskTableSchema(tableId, {
+        const schema = await validateMasterTaskTableSchema(tableId, {
           appToken: options.app_token || meetingMeta.app_token,
           tenantAccessToken,
           throwOnInvalid: true
         });
+        masterFields = Object.values(schema.fields || {});
+        createOptions.masterFields = masterFields;
         return createTaskRecord({ ...cleanedTask, status: '待处理' }, meetingMeta, createOptions);
       });
       createdRecords.push({

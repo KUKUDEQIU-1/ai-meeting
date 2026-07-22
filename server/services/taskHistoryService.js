@@ -1,5 +1,5 @@
 import { all, get, run } from '../db/database.js';
-import { getTenantAccessToken, listBitableFields, updateBitableRecord } from './feishuBitableClient.js';
+import { addFollowerField, getTenantAccessToken, listBitableFields, updateBitableRecord } from './feishuBitableClient.js';
 
 const ACTION_SYNONYMS = [
   [/继续|持续|后续|推进|跟进|处理|执行/g, '处理'],
@@ -171,7 +171,7 @@ export function buildProgressUpdateFields(item, meetingTime) {
     delete fields.__setCompletedDate;
   }
 
-  return { status: statusUpdate.status, fields };
+  return { status: statusUpdate.status, fields: addFollowerField(fields, item.confirmed_by || item.confirmedBy) };
 }
 
 function fieldNameOf(field) {
@@ -180,17 +180,25 @@ function fieldNameOf(field) {
 
 async function normalizeProgressFieldName({ appToken, tableId, tenantAccessToken, fields }) {
   const progressSummary = fields.任务进展;
+  const follower = fields.跟进人;
 
-  if (!progressSummary) return fields;
+  if (!progressSummary && !follower) return fields;
 
   const bitableFields = await listBitableFields({ appToken, tableId, tenantAccessToken });
   const names = new Set(bitableFields.map(fieldNameOf).filter(Boolean));
   const progressFieldName = PROGRESS_FIELD_CANDIDATES.find((name) => names.has(name));
+  let nextFields = { ...fields };
 
-  if (!progressFieldName || progressFieldName === '任务进展') return fields;
+  if (follower) {
+    delete nextFields.跟进人;
+    nextFields = addFollowerField(nextFields, follower, bitableFields);
+  }
 
-  const nextFields = { ...fields, [progressFieldName]: progressSummary };
-  delete nextFields.任务进展;
+  if (progressSummary && progressFieldName && progressFieldName !== '任务进展') {
+    nextFields = { ...nextFields, [progressFieldName]: progressSummary };
+    delete nextFields.任务进展;
+  }
+
   return nextFields;
 }
 
