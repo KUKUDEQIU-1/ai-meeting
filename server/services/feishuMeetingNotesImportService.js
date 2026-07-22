@@ -131,10 +131,6 @@ function isReliableSpeakerSegment(segment) {
   return !(typeof segment?.speaker_confidence === 'number' && segment.speaker_confidence < 0.65);
 }
 
-function isDailyWorkSegment(segment) {
-  return /我今天|今天.*任务|今天.*主要|今天.*工作|我这边.*今天/.test(String(segment?.text || ''));
-}
-
 function coveredAssignees(tasks, progressUpdates) {
   const assignees = new Set();
 
@@ -151,7 +147,7 @@ function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
   const fallbackItems = [];
 
   for (const segment of Array.isArray(segments) ? segments : []) {
-    if (!isReliableSpeakerSegment(segment) || !isDailyWorkSegment(segment)) continue;
+    if (!isReliableSpeakerSegment(segment)) continue;
 
     const speaker = assigneeOf({ assignee: segment.speaker });
     if (covered.has(speaker)) continue;

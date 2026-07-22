@@ -395,6 +395,37 @@ function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
   assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
 }
 
+function testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [],
+    progressUpdates: [],
+    previousDraft: null,
+    segments: [{
+      speaker: '胡涌昌',
+      speaker_status: 'provided',
+      speaker_confidence: 0.8,
+      time: '00:08:12',
+      text: '这边继续处理积分商城的小程序验收，晚点同步测试结果。'
+    }]
+  });
+  const grouped = groupDraftTasksByAssignee(repaired.tasks, parseAssigneeMap(JSON.stringify({ 胡涌昌: 'ou_hu' })));
+  const huGroup = grouped.deliverable.find((item) => item.assignee_key === '胡涌昌');
+  const card = buildAssigneeTaskCard({
+    draft: { id: 10, meeting_title: '早会', meeting_source: '飞书 Wiki' },
+    assignee: huGroup,
+    tasks: huGroup.tasks
+  });
+  const cardText = JSON.stringify(card);
+
+  assert.equal(repaired.tasks.length, 1);
+  assert.equal(repaired.tasks[0].assignee, '胡涌昌');
+  assert.equal(grouped.deliverable.length, 1);
+  assert.match(cardText, /任务归类待确认/);
+  assert.match(cardText, /标记为新任务/);
+  assert.match(cardText, /标记为旧任务进展/);
+  assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
+}
+
 function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {
   const result = normalizeTaskExtractionResult({
     today_tasks: [],
@@ -962,6 +993,7 @@ testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
 testMissingDailySpeakerGetsFallbackConfirmationCardItem();
+testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword();
 testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 await initDatabase();
