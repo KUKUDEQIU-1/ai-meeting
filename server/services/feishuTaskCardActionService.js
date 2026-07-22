@@ -18,6 +18,7 @@ import {
   updateMeetingTaskDraftProgressUpdates
 } from './taskDraftService.js';
 import { updateFeishuTaskCard } from './feishuTaskCardService.js';
+import { masterTaskNameExists } from './taskHistoryService.js';
 
 const MAX_TASK_NAME_LENGTH = 120;
 const MAX_MATCHED_TASK_NAME_LENGTH = 120;
@@ -100,7 +101,8 @@ function dependencySet(overrides = {}) {
   return {
     finalizeAssignee: overrides.finalizeAssignee || finalizeMeetingTaskDraftForAssignee,
     finalizeProgress: overrides.finalizeProgress || finalizeMeetingTaskDraftProgressForAssignee,
-    updateCard: overrides.updateCard || updateFeishuTaskCard
+    updateCard: overrides.updateCard || updateFeishuTaskCard,
+    masterTaskNameExists: overrides.masterTaskNameExists || masterTaskNameExists
   };
 }
 
@@ -156,6 +158,17 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
   }
 
   const values = validateEditableValues(parsed.form_values);
+
+  if (taskChoice === 'old_task_progress') {
+    const draft = await getMeetingTaskDraftById(parsed.draft_id);
+    const exists = await dependencies.masterTaskNameExists(values.matchedTaskName, {
+      table_id: draft?.table_id,
+      app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
+    });
+
+    if (!exists) reject('不能填写原表格没有的任务', 400);
+  }
+
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
     ...task,
     task_name: values.taskName,

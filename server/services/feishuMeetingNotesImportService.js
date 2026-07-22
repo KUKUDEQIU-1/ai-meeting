@@ -206,7 +206,7 @@ function taskItemFromProgressUpdate(item) {
     task_brief: item?.task_brief || item?.progress_summary || taskName,
     task_description: item?.task_description || item?.progress_summary || taskName,
     progress_summary: item?.progress_summary || item?.task_description || item?.task_brief || taskName,
-    matched_task_name: item?.matched_task_name || item?.matched_history?.task_name || item?.matched_first_task_name || taskName,
+    matched_task_name: item?.matched_task_name || item?.matched_history?.task_name || item?.matched_first_task_name || '',
     deadline: item?.deadline || '待确认',
     priority: item?.priority || '中',
     task_choice: 'old_task_progress'

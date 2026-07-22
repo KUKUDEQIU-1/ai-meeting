@@ -289,7 +289,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     } else {
       elements.push(labelElement('**对应旧任务名称：** 未识别到对应旧任务，请修改旧任务名称。'));
     }
-    elements.push(inputElement({ tag: `matched_task_name_${itemId}`, label: '对应旧任务名称', value: matchedTaskName || taskNameOf(task) }));
+    elements.push(inputElement({ tag: `matched_task_name_${itemId}`, label: '对应旧任务名称', value: matchedTaskName }));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '旧任务进展备注', value: progressSummaryOf(task) }));
     elements.push(labelElement(`**完成日期/截止时间：** ${truncateText(task.deadline || '待确认', 80)}`));
     if (String(task.comment || '').trim()) {

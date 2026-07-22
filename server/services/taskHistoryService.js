@@ -205,6 +205,13 @@ async function findMasterTaskRecordByName(item, tenantAccessToken, context = {})
   return record ? { appToken, tableId, recordId: record.record_id || record.id, taskName: taskNameFieldValue(record.fields) } : null;
 }
 
+export async function masterTaskNameExists(taskName, context = {}) {
+  const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
+  const record = await findMasterTaskRecordByName({ task_name: taskName }, tenantAccessToken, context);
+
+  return Boolean(record?.recordId);
+}
+
 function exactOldTaskNameError() {
   const error = new Error('不能填写原表格没有的任务');
   error.status = 400;
