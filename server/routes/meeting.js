@@ -2,6 +2,7 @@ import express from 'express';
 import { createTaskRecord } from '../services/feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingService.js';
 import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImportService.js';
+import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 
@@ -234,11 +235,11 @@ router.post('/sync-feishu-docx', async (req, res, next) => {
     const reanalyze = req.body?.reanalyze === true || req.body?.reanalyze === 'true';
     const { syncConfiguredFeishuDocxNotes } = await import('../services/feishuDocxNoteImportService.js');
 
-    const result = await syncConfiguredFeishuDocxNotes({
+    const result = await feishuScanCoordinator.runScan('docx', () => syncConfiguredFeishuDocxNotes({
       limit,
       force,
       reanalyze
-    });
+    }));
 
     res.json(result);
   } catch (error) {
