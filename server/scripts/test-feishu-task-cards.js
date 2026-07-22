@@ -332,6 +332,29 @@ function testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown() {
   assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
 }
 
+function testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [],
+    progressUpdates: [{
+      task_name: 'AI智能会议助手接入总表',
+      progress_summary: '继续收尾工具应用并接入总表',
+      evidence_quote: '我今天的任务就是，继续收尾 AI 智能会议助手',
+      assignee: '待确认'
+    }],
+    previousDraft: null,
+    segments: [{
+      speaker: '简学勤',
+      speaker_status: 'provided',
+      speaker_confidence: 0.8,
+      text: '我今天的任务就是，继续收尾 AI 智能会议助手的工具的那个应用，根据大家的想法，再继续优化到它的。'
+    }]
+  });
+
+  assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
+  assert.equal(repaired.progressUpdates[0].owner, '简学勤');
+  assert.equal(repaired.progressUpdates[0].assignee_source, 'speaker');
+}
+
 function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {
   const result = normalizeTaskExtractionResult({
     today_tasks: [],
@@ -897,6 +920,7 @@ testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
 testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
+testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
 testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 await initDatabase();

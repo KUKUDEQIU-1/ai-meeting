@@ -103,10 +103,49 @@ function repairItemsAssignees(items, previousItems) {
   });
 }
 
-export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, previousDraft } = {}) {
+function normalizeEvidenceText(value) {
+  return String(value || '').replace(/\s+/g, '').trim();
+}
+
+function segmentSpeakerForEvidence(item, segments) {
+  const evidence = normalizeEvidenceText(item?.evidence_quote || item?.evidence || item?.progress_summary || '');
+
+  if (!evidence) return '';
+
+  const segment = (Array.isArray(segments) ? segments : []).find((candidate) => {
+    const speaker = assigneeOf({ assignee: candidate?.speaker });
+    if (isUnknownAssignee(speaker)) return false;
+    if (candidate?.speaker_status && candidate.speaker_status !== 'provided') return false;
+    if (typeof candidate?.speaker_confidence === 'number' && candidate.speaker_confidence < 0.65) return false;
+    return normalizeEvidenceText(candidate?.text).includes(evidence) || evidence.includes(normalizeEvidenceText(candidate?.text).slice(0, Math.min(20, normalizeEvidenceText(candidate?.text).length)));
+  });
+
+  return segment?.speaker || '';
+}
+
+function repairProgressAssigneesFromEvidence(progressUpdates, segments) {
+  return (Array.isArray(progressUpdates) ? progressUpdates : []).map((item) => {
+    const assignee = assigneeOf(item);
+    const speaker = segmentSpeakerForEvidence(item, segments);
+
+    if (!isUnknownAssignee(assignee) || !speaker) return item;
+
+    return {
+      ...item,
+      assignee: speaker,
+      owner: speaker,
+      assignee_source: item.assignee_source || 'speaker',
+      source_speaker: item.source_speaker || speaker
+    };
+  });
+}
+
+export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, previousDraft, segments } = {}) {
+  const progressWithSpeaker = repairProgressAssigneesFromEvidence(progressUpdates, segments);
+
   return {
     tasks: repairItemsAssignees(tasks, previousDraft?.draft_tasks || []),
-    progressUpdates: repairItemsAssignees(progressUpdates, previousDraft?.progress_updates || [])
+    progressUpdates: repairItemsAssignees(progressWithSpeaker, previousDraft?.progress_updates || [])
   };
 }
 
@@ -372,7 +411,8 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
     const repairedDraftItems = repairDraftAssigneesFromPreviousDraft({
       tasks: resolutionResult.tasks,
       progressUpdates: aiResult.progress_updates,
-      previousDraft
+      previousDraft,
+      segments: transcriptResult.usable_segments
     });
     const draft = existingPendingDraft || await createMeetingTaskDraft({
       sourceType: 'feishu_meeting_note',
