@@ -138,14 +138,21 @@ export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, ass
     };
   }
 
-  await saveTaskProgress(ownedProgressUpdates, {
-    note_id: draft.source_id,
-    meeting_title: draft.meeting_title
-  });
   const linkedProgressResult = await updateTaskInstancesFromProgress(ownedProgressUpdates, {
     note_id: draft.source_id,
     meeting_title: draft.meeting_title,
     meeting_time: draft.meeting_time
+  });
+
+  if (linkedProgressResult.updated_count === 0) {
+    const error = new Error('未找到可更新的旧任务，请改选新任务或填写总表中已存在的旧任务名称');
+    error.status = 400;
+    throw error;
+  }
+
+  await saveTaskProgress(ownedProgressUpdates, {
+    note_id: draft.source_id,
+    meeting_title: draft.meeting_title
   });
 
   await updateMeetingTaskDraftStatus(draftId, 'progress_synced', {

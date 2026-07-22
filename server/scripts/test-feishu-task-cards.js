@@ -672,6 +672,95 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
   assert.equal(confirmedDraft.progress_updates[0].status, 'confirmed');
 }
 
+async function testOldProgressConfirmFailsWhenMasterTaskIsMissing() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+  const sourceId = `missing-old-progress-${Date.now()}`;
+  const taskName = `不存在的旧任务-${Date.now()}`;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'missing_old_1', task_name: taskName, matched_task_name: taskName, task_choice: 'old_task_progress', assignee: '张三', progress_summary: '推进进展' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_missing_old',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
+  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'app_master_missing';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_master_missing';
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/records')) {
+      return new Response(JSON.stringify({ code: 0, data: { items: [] } }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    await assert.rejects(
+      () => handleFeishuCardAction({
+        header: { event_id: 'evt_confirm_missing_old' },
+        event: {
+          operator: { open_id: 'ou_actor' },
+          action: {
+            value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
+          }
+        }
+      }, { updateCard: async () => ({ status: 'updated' }) }),
+      /未找到可更新的旧任务/
+    );
+
+    const state = await getDraftAssigneeState(draft.id, '张三', 'tasks');
+    const progressRows = await all('SELECT * FROM getnote_task_progress WHERE note_id = ?', [sourceId]);
+
+    assert.equal(state.confirmation_status, 'pending');
+    assert.match(state.confirmation_error, /未找到可更新的旧任务/);
+    assert.equal(progressRows.length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousMasterTableId;
+    process.env.FEISHU_MASTER_TASK_APP_TOKEN = previousMasterAppToken;
+  }
+}
+
 async function testAssigneeCardStatesAreIndependentByKind() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -778,7 +867,7 @@ async function testDeliveryDiagnosticsHideRecipientIds() {
   assert.equal(JSON.stringify(visibleRows).includes('ou_secret_actor'), false);
 }
 
-async function testProgressFinalizerPersistsProgressWithoutCreatingTasks() {
+async function testProgressFinalizerRejectsUnmatchedProgressWithoutCreatingTasks() {
   const sourceId = `progress-finalizer-${Date.now()}`;
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -804,14 +893,15 @@ async function testProgressFinalizerPersistsProgressWithoutCreatingTasks() {
   const beforeHistory = await all('SELECT * FROM getnote_task_history WHERE first_note_id = ? OR last_note_id = ?', [sourceId, sourceId]);
   const beforeInstances = await all('SELECT * FROM getnote_task_instances WHERE note_id = ?', [sourceId]);
 
-  const result = await finalizeMeetingTaskDraftProgressForAssignee({ draftId: draft.id, assigneeKey: '张三', confirmedBy: 'ou_actor' });
+  await assert.rejects(
+    () => finalizeMeetingTaskDraftProgressForAssignee({ draftId: draft.id, assigneeKey: '张三', confirmedBy: 'ou_actor' }),
+    /未找到可更新的旧任务/
+  );
   const progressRows = await all('SELECT * FROM getnote_task_progress WHERE note_id = ?', [sourceId]);
   const afterHistory = await all('SELECT * FROM getnote_task_history WHERE first_note_id = ? OR last_note_id = ?', [sourceId, sourceId]);
   const afterInstances = await all('SELECT * FROM getnote_task_instances WHERE note_id = ?', [sourceId]);
 
-  assert.equal(result.status, 'progress_synced');
-  assert.equal(progressRows.length, 1);
-  assert.equal(progressRows[0].task_name, '旧任务');
+  assert.equal(progressRows.length, 0);
   assert.equal(afterHistory.length, beforeHistory.length);
   assert.equal(afterInstances.length, beforeInstances.length);
 }
@@ -1107,9 +1197,10 @@ testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
+await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
 await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();
-await testProgressFinalizerPersistsProgressWithoutCreatingTasks();
+await testProgressFinalizerRejectsUnmatchedProgressWithoutCreatingTasks();
 await testConfirmedProgressUpdatesExistingTaskProgressDescriptionField();
 await testConfirmedProgressUpdatesMasterRecordWhenLocalInstanceMissing();
 await testConfirmedNewTaskCreateRecordWritesFollowerField();
