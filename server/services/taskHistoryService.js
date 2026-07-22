@@ -1,5 +1,5 @@
 import { all, get, run } from '../db/database.js';
-import { addFollowerField, getTenantAccessToken, listBitableFields, updateBitableRecord } from './feishuBitableClient.js';
+import { addFollowerField, getTenantAccessToken, listBitableFields, listBitableRecords, updateBitableRecord } from './feishuBitableClient.js';
 
 const ACTION_SYNONYMS = [
   [/继续|持续|后续|推进|跟进|处理|执行/g, '处理'],
@@ -176,6 +176,33 @@ export function buildProgressUpdateFields(item, meetingTime) {
 
 function fieldNameOf(field) {
   return field.field_name || field.name;
+}
+
+function taskNameFieldValue(fields) {
+  return String(fields?.事务需求名称 || fields?.任务名称 || fields?.task_name || '').trim();
+}
+
+function masterTaskTableId() {
+  return process.env.FEISHU_MASTER_TASK_TABLE_ID?.trim() || process.env.FEISHU_BITABLE_TABLE_ID?.trim() || '';
+}
+
+function masterTaskAppToken() {
+  return process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || '';
+}
+
+async function findMasterTaskRecordByName(item, tenantAccessToken) {
+  const appToken = masterTaskAppToken();
+  const tableId = masterTaskTableId();
+
+  if (!appToken || !tableId) return null;
+
+  const targetKey = buildTaskKey({ task_name: item.task_name });
+  if (!targetKey) return null;
+
+  const records = await listBitableRecords({ appToken, tableId, tenantAccessToken });
+  const record = records.find((candidate) => buildTaskKey({ task_name: taskNameFieldValue(candidate.fields) }) === targetKey);
+
+  return record ? { appToken, tableId, recordId: record.record_id || record.id, taskName: taskNameFieldValue(record.fields) } : null;
 }
 
 async function normalizeProgressFieldName({ appToken, tableId, tenantAccessToken, fields }) {
@@ -525,13 +552,47 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
     const match = bestTaskInstanceMatch(item, rows, context);
 
     if (!match) {
-      skippedCount += 1;
-      const candidate = bestTaskInstanceCandidate(item, rows, context);
-      const candidateText = candidate
-        ? ` best=${candidate.row.task_name || ''} similarity=${candidate.similarity.toFixed(2)} threshold=${TASK_INSTANCE_MATCH_THRESHOLD}`
-        : ` threshold=${TASK_INSTANCE_MATCH_THRESHOLD}`;
-      console.log(`[Task Progress Link] skipped progress task=${item.task_name || ''} status=${statusUpdate.status} reason=no_high_confidence_match${candidateText}`);
-      continue;
+      try {
+        const masterRecord = await findMasterTaskRecordByName(item, tenantAccessToken);
+
+        if (masterRecord?.recordId) {
+          const fields = await normalizeProgressFieldName({
+            appToken: masterRecord.appToken,
+            tableId: masterRecord.tableId,
+            tenantAccessToken,
+            fields: statusUpdate.fields
+          });
+
+          await updateBitableRecord({
+            appToken: masterRecord.appToken,
+            tableId: masterRecord.tableId,
+            tenantAccessToken,
+            recordId: masterRecord.recordId,
+            fields
+          });
+          updatedCount += 1;
+          console.log(`[Task Progress Link] updated master task=${masterRecord.taskName} status=${statusUpdate.status} progress=${item.task_name || ''} reason=master_table_name_match`);
+          continue;
+        }
+
+        skippedCount += 1;
+        const candidate = bestTaskInstanceCandidate(item, rows, context);
+        const candidateText = candidate
+          ? ` best=${candidate.row.task_name || ''} similarity=${candidate.similarity.toFixed(2)} threshold=${TASK_INSTANCE_MATCH_THRESHOLD}`
+          : ` threshold=${TASK_INSTANCE_MATCH_THRESHOLD}`;
+        console.log(`[Task Progress Link] skipped progress task=${item.task_name || ''} status=${statusUpdate.status} reason=no_high_confidence_match${candidateText}`);
+        continue;
+      } catch (error) {
+        failed.push({
+          task_name: item.task_name || '',
+          matched_task_name: '',
+          status: statusUpdate.status,
+          table_id: masterTaskTableId(),
+          record_id: '',
+          reason: error.message
+        });
+        continue;
+      }
     }
 
     if (match.row.status === 'completed' && statusUpdate.status === '已完成') {

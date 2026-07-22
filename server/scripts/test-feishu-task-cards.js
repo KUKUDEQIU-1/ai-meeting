@@ -896,6 +896,77 @@ async function testConfirmedProgressUpdatesExistingTaskProgressDescriptionField(
   }
 }
 
+async function testConfirmedProgressUpdatesMasterRecordWhenLocalInstanceMissing() {
+  const taskName = `只存在总表的旧任务-${Date.now()}`;
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+  const updates = [];
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
+  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'app_master_progress';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_master_progress';
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/fields')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ field_name: '事务需求名称' }, { field_name: '需求状态' }, { field_name: '进度评估' }, { field_name: '任务进展描述' }, { field_name: '跟进人' }] }
+      }), { status: 200 });
+    }
+
+    if (href.includes('/records/rec_master_1') && options.method === 'PUT') {
+      updates.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ code: 0, data: { record: { record_id: 'rec_master_1' } } }), { status: 200 });
+    }
+
+    if (href.includes('/records') && options.method === 'GET') {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ record_id: 'rec_master_1', fields: { 事务需求名称: taskName } }] }
+      }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const result = await updateTaskInstancesFromProgress([{ 
+      task_name: taskName,
+      progress_type: 'existing_task_progress',
+      progress_summary: '已完成接入总表并进入测试',
+      status: 'confirmed',
+      confirmed_by: 'ou_progress_actor'
+    }], { meeting_time: '2026-07-22' });
+
+    assert.equal(result.updated_count, 1);
+    assert.equal(result.skipped_count, 0);
+    assert.equal(result.failed.length, 0);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].fields.需求状态, '已完成');
+    assert.equal(updates[0].fields.任务进展描述, '已完成接入总表并进入测试');
+    assert.equal(updates[0].fields.跟进人, 'ou_progress_actor');
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousMasterTableId;
+    process.env.FEISHU_MASTER_TASK_APP_TOKEN = previousMasterAppToken;
+  }
+}
+
 async function testConfirmedNewTaskCreateRecordWritesFollowerField() {
   const previousFetch = globalThis.fetch;
   const previousAppId = process.env.FEISHU_APP_ID;
@@ -1040,6 +1111,7 @@ await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();
 await testProgressFinalizerPersistsProgressWithoutCreatingTasks();
 await testConfirmedProgressUpdatesExistingTaskProgressDescriptionField();
+await testConfirmedProgressUpdatesMasterRecordWhenLocalInstanceMissing();
 await testConfirmedNewTaskCreateRecordWritesFollowerField();
 await testProgressConfirmationUsesProgressOnlyAction();
 
