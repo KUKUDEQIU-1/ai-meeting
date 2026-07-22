@@ -1,4 +1,5 @@
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
+import { withMeetingNotesTokenRefresh } from './feishuOAuthTokenService.js';
 
 function optionalEnv(name) {
   return process.env[name]?.trim() || '';
@@ -19,10 +20,12 @@ function getOpenApiPath(name, defaultPath) {
 }
 
 async function requestFeishuJson(path, { query = {}, method = 'GET', body } = {}, failureMessage = '飞书会议智能纪要接口请求失败') {
-  const userAccessToken = optionalEnv('FEISHU_MEETING_NOTES_USER_ACCESS_TOKEN') || optionalEnv('FEISHU_USER_ACCESS_TOKEN');
+  return withMeetingNotesTokenRefresh((userAccessToken) => requestFeishuJsonWithToken(userAccessToken, path, { query, method, body }, failureMessage));
+}
 
+async function requestFeishuJsonWithToken(userAccessToken, path, { query = {}, method = 'GET', body } = {}, failureMessage = '飞书会议智能纪要接口请求失败') {
   if (!userAccessToken) {
-    const error = new Error('FEISHU_MEETING_NOTES_USER_ACCESS_TOKEN 未配置，飞书会议智能纪要接口需要 user_access_token');
+    const error = new Error('FEISHU_MEETING_NOTES_USER_ACCESS_TOKEN 或 FEISHU_MEETING_NOTES_REFRESH_TOKEN 未配置，飞书会议智能纪要接口需要用户授权凭证');
     error.status = 401;
     throw error;
   }

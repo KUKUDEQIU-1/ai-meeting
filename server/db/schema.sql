@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS feishu_docx_note_sources (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS feishu_oauth_tokens (
+  token_key TEXT PRIMARY KEY,
+  access_token TEXT,
+  refresh_token TEXT,
+  access_token_expires_at TEXT,
+  refresh_token_expires_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS getnote_task_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_key TEXT NOT NULL UNIQUE,

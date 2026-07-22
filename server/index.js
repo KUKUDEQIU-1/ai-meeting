@@ -6,6 +6,7 @@ import meetingRouter from './routes/meeting.js';
 import feishuCardActionRouter from './routes/feishuCardAction.js';
 import { initDatabase } from './db/database.js';
 import { feishuResidentWorker } from './services/feishuResidentWorker.js';
+import { getMeetingNotesTokenStatus } from './services/feishuOAuthTokenService.js';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -24,12 +25,17 @@ app.get('/', (req, res) => {
   ].join('\n'));
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res, next) => {
+  try {
   res.json({
     status: 'ok',
     version: 'latest-draft-v2',
-    feishu_resident_worker: feishuResidentWorker.snapshot()
+    feishu_resident_worker: feishuResidentWorker.snapshot(),
+    feishu_meeting_notes_token: await getMeetingNotesTokenStatus()
   });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use('/api/meetings', meetingsRouter);
