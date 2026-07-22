@@ -46,7 +46,9 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.doesNotMatch(text, /李四/);
   assert.match(text, /字段说明/);
   assert.match(text, /任务名称/);
+  assert.match(text, /如果这是新安排的任务，请在这里改任务标题/);
   assert.match(text, /旧任务进展备注/);
+  assert.match(text, /如果这是以前任务的后续，请在这里写本次进展/);
   assert.match(text, /完成日期\/截止时间/);
   assert.match(text, /备注/);
   assert.match(text, /标记为新任务/);

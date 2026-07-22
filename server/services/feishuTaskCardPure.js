@@ -251,7 +251,9 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
   for (const task of tasks) {
     const itemId = String(task.item_id || '');
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceLabel(task)}**` });
+    elements.push(labelElement('**任务名称：** 如果这是新安排的任务，请在这里改任务标题；选择“新任务”后会写入总任务表。'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '任务名称', value: taskNameOf(task) }));
+    elements.push(labelElement('**旧任务进展备注：** 如果这是以前任务的后续，请在这里写本次进展；选择“旧任务进展”后不会新增任务。'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '旧任务进展备注', value: progressSummaryOf(task) }));
     elements.push(labelElement(`**完成日期/截止时间：** ${truncateText(task.deadline || '待确认', 80)}`));
     if (String(task.comment || '').trim()) {
