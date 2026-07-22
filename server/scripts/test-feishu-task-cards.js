@@ -355,6 +355,37 @@ function testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee() {
   assert.equal(repaired.progressUpdates[0].assignee_source, 'speaker');
 }
 
+function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [{ task_name: '完成嘉华的明确任务', task_brief: '今日工作', assignee: '李嘉华' }],
+    progressUpdates: [],
+    previousDraft: null,
+    segments: [{
+      speaker: '李嘉华',
+      speaker_status: 'provided',
+      speaker_confidence: 0.8,
+      time: '00:01:00',
+      text: '我今天的任务是完成明确任务。'
+    }, {
+      speaker: '简学勤',
+      speaker_status: 'provided',
+      speaker_confidence: 0.8,
+      time: '00:06:45',
+      text: '我今天的任务就是，继续收尾 AI 智能会议助手的工具应用，测试后接入总表。'
+    }]
+  });
+  const grouped = groupDraftTasksByAssignee([
+    ...repaired.tasks,
+    ...repaired.progressUpdates
+  ], parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li', 简学勤: 'ou_jian' })));
+
+  assert.equal(repaired.progressUpdates.length, 1);
+  assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
+  assert.equal(repaired.progressUpdates[0].progress_type, 'speaker_daily_update');
+  assert.equal(grouped.deliverable.length, 2);
+  assert.equal(grouped.deliveryFailures.length, 0);
+}
+
 function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {
   const result = normalizeTaskExtractionResult({
     today_tasks: [],
@@ -921,6 +952,7 @@ testConfirmedNewTaskBuildsFollowerField();
 testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
+testMissingDailySpeakerGetsFallbackConfirmationCardItem();
 testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 await initDatabase();

@@ -123,6 +123,63 @@ function segmentSpeakerForEvidence(item, segments) {
   return segment?.speaker || '';
 }
 
+function isReliableSpeakerSegment(segment) {
+  const speaker = assigneeOf({ assignee: segment?.speaker });
+
+  if (isUnknownAssignee(speaker)) return false;
+  if (segment?.speaker_status && segment.speaker_status !== 'provided') return false;
+  return !(typeof segment?.speaker_confidence === 'number' && segment.speaker_confidence < 0.65);
+}
+
+function isDailyWorkSegment(segment) {
+  return /我今天|今天.*任务|今天.*主要|今天.*工作|我这边.*今天/.test(String(segment?.text || ''));
+}
+
+function coveredAssignees(tasks, progressUpdates) {
+  const assignees = new Set();
+
+  for (const item of [...(Array.isArray(tasks) ? tasks : []), ...(Array.isArray(progressUpdates) ? progressUpdates : [])]) {
+    const assignee = assigneeOf(item);
+    if (!isUnknownAssignee(assignee)) assignees.add(assignee);
+  }
+
+  return assignees;
+}
+
+function speakerCoverageProgressItems({ tasks, progressUpdates, segments }) {
+  const covered = coveredAssignees(tasks, progressUpdates);
+  const fallbackItems = [];
+
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    if (!isReliableSpeakerSegment(segment) || !isDailyWorkSegment(segment)) continue;
+
+    const speaker = assigneeOf({ assignee: segment.speaker });
+    if (covered.has(speaker)) continue;
+
+    covered.add(speaker);
+    fallbackItems.push({
+      item_id: `speaker_${fallbackItems.length + 1}_${normalizeEvidenceText(speaker)}`,
+      task_name: `${speaker}今日工作确认`,
+      progress_type: 'speaker_daily_update',
+      suggested_status: '进行中',
+      progress_summary: String(segment.text || '').trim().slice(0, 120),
+      evidence_quote: String(segment.text || '').trim().slice(0, 120),
+      confidence: 0.65,
+      reason: '可靠说话人汇报今日工作但AI未生成对应确认项，补发负责人确认卡片',
+      assignee: speaker,
+      owner: speaker,
+      assignee_source: 'speaker',
+      source_speaker: speaker,
+      source_time: segment.time || '',
+      source_speaker_status: segment.speaker_status || 'provided',
+      source_speaker_confidence: segment.speaker_confidence ?? 0.8,
+      needs_confirmation: true
+    });
+  }
+
+  return fallbackItems;
+}
+
 function repairProgressAssigneesFromEvidence(progressUpdates, segments) {
   return (Array.isArray(progressUpdates) ? progressUpdates : []).map((item) => {
     const assignee = assigneeOf(item);
@@ -142,10 +199,13 @@ function repairProgressAssigneesFromEvidence(progressUpdates, segments) {
 
 export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, previousDraft, segments } = {}) {
   const progressWithSpeaker = repairProgressAssigneesFromEvidence(progressUpdates, segments);
+  const repairedTasks = repairItemsAssignees(tasks, previousDraft?.draft_tasks || []);
+  const repairedProgress = repairItemsAssignees(progressWithSpeaker, previousDraft?.progress_updates || []);
+  const fallbackProgress = speakerCoverageProgressItems({ tasks: repairedTasks, progressUpdates: repairedProgress, segments });
 
   return {
-    tasks: repairItemsAssignees(tasks, previousDraft?.draft_tasks || []),
-    progressUpdates: repairItemsAssignees(progressWithSpeaker, previousDraft?.progress_updates || [])
+    tasks: repairedTasks,
+    progressUpdates: [...repairedProgress, ...fallbackProgress]
   };
 }
 
