@@ -10,8 +10,9 @@ import {
   validateCallbackActor
 } from '../services/feishuTaskCardPure.js';
 import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.js';
-import { all, initDatabase } from '../db/database.js';
+import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
+import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 
 function testMappingAndGrouping() {
@@ -224,6 +225,22 @@ function testCallbackParsingUsesItemScopedTaskNameOnly() {
   assert.equal(parsed.form_values.task_name, 'scoped name');
   assert.equal('deadline' in parsed.form_values, false);
   assert.equal('comment' in parsed.form_values, false);
+}
+
+function testConfirmedManualProgressBuildsBitableProgressFields() {
+  const item = {
+    task_name: 'AI会议助手历史任务',
+    progress_type: 'existing_task_progress',
+    progress_summary: '已完成接入总表并进入测试',
+    status: 'confirmed'
+  };
+  const update = buildProgressUpdateFields(item, '2026-07-22');
+
+  assert.equal(progressIsReadyForTaskInstanceUpdate(item), true);
+  assert.equal(update.status, '已完成');
+  assert.equal(update.fields.需求状态, '已完成');
+  assert.equal(update.fields.进度评估, 1);
+  assert.equal(update.fields.任务进展, '已完成接入总表并进入测试');
 }
 
 
@@ -537,6 +554,84 @@ async function testProgressFinalizerPersistsProgressWithoutCreatingTasks() {
   assert.equal(afterInstances.length, beforeInstances.length);
 }
 
+async function testConfirmedProgressUpdatesExistingTaskProgressDescriptionField() {
+  const timestamp = new Date().toISOString();
+  await run(
+    `INSERT OR REPLACE INTO getnote_task_instances
+      (note_id, meeting_title, task_key, task_name, task_description, table_id, table_url, record_id, app_token, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      `task-progress-update-${Date.now()}`,
+      '历史会议',
+      'ai会议助手历史任务',
+      'AI会议助手历史任务',
+      '接入总表',
+      'tbl_master_progress',
+      'https://example.com/table',
+      'rec_progress_1',
+      'app_master_progress',
+      'open',
+      timestamp,
+      timestamp
+    ]
+  );
+
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const updates = [];
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/fields')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ field_name: '需求状态' }, { field_name: '进度评估' }, { field_name: '任务进展描述' }] }
+      }), { status: 200 });
+    }
+
+    if (href.includes('/records/rec_progress_1') && options.method === 'PUT') {
+      updates.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ code: 0, data: { record: { record_id: 'rec_progress_1' } } }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const result = await updateTaskInstancesFromProgress([{ 
+      task_name: 'AI会议助手历史任务',
+      progress_type: 'existing_task_progress',
+      progress_summary: '已完成接入总表并进入测试',
+      status: 'confirmed'
+    }], { meeting_time: '2026-07-22' });
+
+    assert.equal(result.updated_count, 1);
+    assert.equal(result.skipped_count, 0);
+    assert.equal(result.failed.length, 0);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].fields.需求状态, '已完成');
+    assert.equal(updates[0].fields.进度评估, 1);
+    assert.equal(updates[0].fields.任务进展描述, '已完成接入总表并进入测试');
+    assert.equal('任务进展' in updates[0].fields, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+  }
+}
+
 async function testProgressConfirmationUsesProgressOnlyAction() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -607,12 +702,14 @@ testTaskChoiceButtonsShowCurrentSelection();
 testOldTaskMappingHintUsesMatchedNameOrEditableInput();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();
+testConfirmedManualProgressBuildsBitableProgressFields();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();
 await testProgressFinalizerPersistsProgressWithoutCreatingTasks();
+await testConfirmedProgressUpdatesExistingTaskProgressDescriptionField();
 await testProgressConfirmationUsesProgressOnlyAction();
 
 console.log('feishu task card pure-function tests passed');

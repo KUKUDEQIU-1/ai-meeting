@@ -1,5 +1,5 @@
 import { all, get, run } from '../db/database.js';
-import { getTenantAccessToken, updateBitableRecord } from './feishuBitableClient.js';
+import { getTenantAccessToken, listBitableFields, updateBitableRecord } from './feishuBitableClient.js';
 
 const ACTION_SYNONYMS = [
   [/继续|持续|后续|推进|跟进|处理|执行/g, '处理'],
@@ -12,7 +12,6 @@ const ACTION_SYNONYMS = [
 ];
 
 const STOP_WORDS = ['相关', '一下', '一些', '这个', '那个', '进行', '继续', '后续', '当前', '需要', '可以'];
-const PROGRESS_WORDS = ['完成', '推进', '验收', '预发布', '发版', '上线', '配置', '活动', '处理', '确认', '跟进', '版本', '继续', '和', '及', '与'];
 
 function normalizeTaskText(value) {
   let text = String(value || '')
@@ -31,16 +30,6 @@ function normalizeTaskText(value) {
   return text;
 }
 
-function normalizeTaskIdentityText(value) {
-  let text = normalizeTaskText(value).replace(/挂彩/g, '刮彩').replace(/v\d+/gi, '').replace(/版本\d+/g, '').replace(/第?\d+版/g, '');
-
-  for (const word of PROGRESS_WORDS) {
-    text = text.replaceAll(word, '');
-  }
-
-  return text.replace(/(.{2})\1+/g, '$1');
-}
-
 function taskText(task) {
   return [task.task_name, task.task_brief, task.task_description].filter(Boolean).join(' ');
 }
@@ -48,6 +37,10 @@ function taskText(task) {
 export function buildTaskKey(task) {
   const normalized = normalizeTaskText(taskText(task));
   return normalized.slice(0, 80);
+}
+
+export function progressIsReadyForTaskInstanceUpdate(item) {
+  return item?.status === 'confirmed' || Number(item?.confidence || 0) >= 0.85;
 }
 
 function bigrams(value) {
@@ -66,38 +59,9 @@ function bigrams(value) {
   return grams;
 }
 
-function identityBigrams(value) {
-  const text = normalizeTaskIdentityText(value);
-  const grams = new Set();
-
-  if (text.length <= 2) {
-    if (text) grams.add(text);
-    return grams;
-  }
-
-  for (let index = 0; index < text.length - 1; index += 1) {
-    grams.add(text.slice(index, index + 2));
-  }
-
-  return grams;
-}
-
 function jaccardSimilarity(left, right) {
   const leftSet = bigrams(left);
   const rightSet = bigrams(right);
-
-  if (leftSet.size === 0 || rightSet.size === 0) {
-    return 0;
-  }
-
-  const intersection = [...leftSet].filter((item) => rightSet.has(item)).length;
-  const union = new Set([...leftSet, ...rightSet]).size;
-  return intersection / union;
-}
-
-function identitySimilarity(left, right) {
-  const leftSet = identityBigrams(left);
-  const rightSet = identityBigrams(right);
 
   if (leftSet.size === 0 || rightSet.size === 0) {
     return 0;
@@ -131,6 +95,7 @@ const VALID_TASK_STATUSES = new Set([
 ]);
 
 const TASK_INSTANCE_MATCH_THRESHOLD = 0.55;
+const PROGRESS_FIELD_CANDIDATES = ['任务进展描述', '任务进展'];
 
 function inferStatusFromText(item) {
   const text = `${item.suggested_status || ''} ${item.progress_type || ''} ${item.task_name || ''} ${item.progress_summary || ''} ${item.evidence_quote || ''} ${item.reason || ''}`;
@@ -188,6 +153,45 @@ function normalizeProgressStatus(item) {
   }
 
   return { status, fields };
+}
+
+export function buildProgressUpdateFields(item, meetingTime) {
+  const statusUpdate = normalizeProgressStatus(item);
+
+  if (!statusUpdate) return null;
+
+  const fields = { ...statusUpdate.fields };
+  const progressSummary = String(item?.progress_summary || '').trim();
+
+  if (progressSummary) {
+    fields.任务进展 = progressSummary;
+  }
+  if (fields.__setCompletedDate) {
+    fields.完成日期 = dateOnlyTimestamp(meetingTime || new Date());
+    delete fields.__setCompletedDate;
+  }
+
+  return { status: statusUpdate.status, fields };
+}
+
+function fieldNameOf(field) {
+  return field.field_name || field.name;
+}
+
+async function normalizeProgressFieldName({ appToken, tableId, tenantAccessToken, fields }) {
+  const progressSummary = fields.任务进展;
+
+  if (!progressSummary) return fields;
+
+  const bitableFields = await listBitableFields({ appToken, tableId, tenantAccessToken });
+  const names = new Set(bitableFields.map(fieldNameOf).filter(Boolean));
+  const progressFieldName = PROGRESS_FIELD_CANDIDATES.find((name) => names.has(name));
+
+  if (!progressFieldName || progressFieldName === '任务进展') return fields;
+
+  const nextFields = { ...fields, [progressFieldName]: progressSummary };
+  delete nextFields.任务进展;
+  return nextFields;
 }
 
 function formatDateOnly(value) {
@@ -328,8 +332,7 @@ function bestHistoryMatch(task, historyRows) {
     const score = Math.max(
       jaccardSimilarity(task.task_name || '', row.task_name || ''),
       jaccardSimilarity(task.task_brief || '', row.task_brief || ''),
-      jaccardSimilarity(taskText(task), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`),
-      identitySimilarity(taskText(task), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`)
+      jaccardSimilarity(taskText(task), `${row.task_name || ''} ${row.task_brief || ''} ${row.task_description || ''}`)
     );
 
     if (score > bestScore) {
@@ -338,7 +341,7 @@ function bestHistoryMatch(task, historyRows) {
     }
   }
 
-  return bestScore >= 0.65 ? { row: best, similarity: bestScore } : null;
+  return bestScore >= 0.82 ? { row: best, similarity: bestScore } : null;
 }
 
 export async function classifyTaskHistory(tasks, context = {}) {
@@ -485,12 +488,21 @@ export async function saveTaskInstances(tasks, createdRecords = [], context = {}
 
 export async function updateTaskInstancesFromProgress(progressUpdates, context = {}) {
   const candidates = (progressUpdates || [])
-    .filter((item) => Number(item.confidence || 0) >= 0.85)
-    .map((item) => ({ item, statusUpdate: normalizeProgressStatus(item) }))
+    .filter(progressIsReadyForTaskInstanceUpdate)
+    .map((item) => ({ item, statusUpdate: buildProgressUpdateFields(item, context.meeting_time || new Date()) }))
     .filter(({ statusUpdate }) => Boolean(statusUpdate));
 
   if (!candidates.length) {
     return { updated_count: 0, skipped_count: 0, failed: [] };
+  }
+
+  const rows = await findTaskInstances();
+  const failed = [];
+  let updatedCount = 0;
+  let skippedCount = 0;
+
+  if (!rows.length) {
+    return { updated_count: 0, skipped_count: candidates.length, failed: [] };
   }
 
   const fallbackAppToken = process.env.FEISHU_BITABLE_APP_TOKEN?.trim();
@@ -500,11 +512,6 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
   }
 
   const tenantAccessToken = await getTenantAccessToken();
-  const rows = await findTaskInstances();
-  const completedDate = dateOnlyTimestamp(context.meeting_time || new Date());
-  const failed = [];
-  let updatedCount = 0;
-  let skippedCount = 0;
 
   for (const { item, statusUpdate } of candidates) {
     const match = bestTaskInstanceMatch(item, rows, context);
@@ -527,12 +534,12 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
 
     try {
       const appToken = match.row.app_token || fallbackAppToken;
-      const fields = { ...statusUpdate.fields };
-
-      if (fields.__setCompletedDate) {
-        fields.完成日期 = completedDate;
-        delete fields.__setCompletedDate;
-      }
+      const fields = await normalizeProgressFieldName({
+        appToken,
+        tableId: match.row.table_id,
+        tenantAccessToken,
+        fields: statusUpdate.fields
+      });
 
       await updateBitableRecord({
         appToken,
