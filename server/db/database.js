@@ -266,6 +266,7 @@ function migrateDatabase() {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     draft_id INTEGER NOT NULL,
     assignee_key TEXT NOT NULL,
+    card_kind TEXT NOT NULL DEFAULT 'tasks',
     assignee_name TEXT NOT NULL,
     receive_id_type TEXT NOT NULL DEFAULT 'open_id',
     receive_id TEXT NOT NULL DEFAULT '',
@@ -279,14 +280,55 @@ function migrateDatabase() {
     last_callback_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    UNIQUE(draft_id, assignee_key)
+    UNIQUE(draft_id, assignee_key, card_kind)
   )`);
 
   const draftAssigneeColumns = db.exec('PRAGMA table_info(meeting_task_draft_assignees)')[0]?.values || [];
   const draftAssigneeColumnNames = draftAssigneeColumns.map((column) => column[1]);
 
+  if (!draftAssigneeColumnNames.includes('card_kind')) {
+    db.run("ALTER TABLE meeting_task_draft_assignees ADD COLUMN card_kind TEXT NOT NULL DEFAULT 'tasks'");
+  }
+
   if (!draftAssigneeColumnNames.includes('confirmation_error')) {
     db.run('ALTER TABLE meeting_task_draft_assignees ADD COLUMN confirmation_error TEXT');
+  }
+
+  const draftAssigneeIndexes = db.exec('PRAGMA index_list(meeting_task_draft_assignees)')[0]?.values || [];
+  const hasKindUnique = draftAssigneeIndexes.some((indexRow) => {
+    if (Number(indexRow[2]) !== 1) return false;
+    const indexName = indexRow[1];
+    const indexInfo = db.exec(`PRAGMA index_info(${indexName})`)[0]?.values || [];
+    return indexInfo.map((item) => item[2]).join(',') === 'draft_id,assignee_key,card_kind';
+  });
+
+  if (!hasKindUnique) {
+    db.run('ALTER TABLE meeting_task_draft_assignees RENAME TO meeting_task_draft_assignees_old');
+    db.run(`CREATE TABLE meeting_task_draft_assignees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      draft_id INTEGER NOT NULL,
+      assignee_key TEXT NOT NULL,
+      card_kind TEXT NOT NULL DEFAULT 'tasks',
+      assignee_name TEXT NOT NULL,
+      receive_id_type TEXT NOT NULL DEFAULT 'open_id',
+      receive_id TEXT NOT NULL DEFAULT '',
+      card_message_id TEXT,
+      delivery_status TEXT NOT NULL DEFAULT 'pending',
+      delivery_error TEXT,
+      confirmation_status TEXT NOT NULL DEFAULT 'pending',
+      confirmation_error TEXT,
+      confirmed_at TEXT,
+      confirmed_by TEXT,
+      last_callback_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(draft_id, assignee_key, card_kind)
+    )`);
+    db.run(`INSERT OR IGNORE INTO meeting_task_draft_assignees
+      (id, draft_id, assignee_key, card_kind, assignee_name, receive_id_type, receive_id, card_message_id, delivery_status, delivery_error, confirmation_status, confirmation_error, confirmed_at, confirmed_by, last_callback_id, created_at, updated_at)
+      SELECT id, draft_id, assignee_key, COALESCE(NULLIF(card_kind, ''), 'tasks'), assignee_name, receive_id_type, receive_id, card_message_id, delivery_status, delivery_error, confirmation_status, confirmation_error, confirmed_at, confirmed_by, last_callback_id, created_at, updated_at
+      FROM meeting_task_draft_assignees_old`);
+    db.run('DROP TABLE meeting_task_draft_assignees_old');
   }
 }
 

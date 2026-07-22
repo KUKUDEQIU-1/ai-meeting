@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS meeting_task_draft_assignees (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   draft_id INTEGER NOT NULL,
   assignee_key TEXT NOT NULL,
+  card_kind TEXT NOT NULL DEFAULT 'tasks',
   assignee_name TEXT NOT NULL,
   receive_id_type TEXT NOT NULL DEFAULT 'open_id',
   receive_id TEXT NOT NULL DEFAULT '',
@@ -185,5 +186,5 @@ CREATE TABLE IF NOT EXISTS meeting_task_draft_assignees (
   last_callback_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(draft_id, assignee_key)
+  UNIQUE(draft_id, assignee_key, card_kind)
 );
