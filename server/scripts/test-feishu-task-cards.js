@@ -374,16 +374,25 @@ function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
       text: '我今天的任务就是，继续收尾 AI 智能会议助手的工具应用，测试后接入总表。'
     }]
   });
-  const grouped = groupDraftTasksByAssignee([
-    ...repaired.tasks,
-    ...repaired.progressUpdates
-  ], parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li', 简学勤: 'ou_jian' })));
+  const grouped = groupDraftTasksByAssignee(repaired.tasks, parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li', 简学勤: 'ou_jian' })));
+  const jianCard = buildAssigneeTaskCard({
+    draft: { id: 9, meeting_title: '早会', meeting_source: '飞书 Wiki' },
+    assignee: grouped.deliverable.find((item) => item.assignee_key === '简学勤'),
+    tasks: grouped.deliverable.find((item) => item.assignee_key === '简学勤').tasks
+  });
+  const cardText = JSON.stringify(jianCard);
 
-  assert.equal(repaired.progressUpdates.length, 1);
-  assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
-  assert.equal(repaired.progressUpdates[0].progress_type, 'speaker_daily_update');
+  assert.equal(repaired.progressUpdates.length, 0);
+  assert.equal(repaired.tasks.length, 2);
+  assert.equal(repaired.tasks[1].assignee, '简学勤');
   assert.equal(grouped.deliverable.length, 2);
   assert.equal(grouped.deliveryFailures.length, 0);
+  assert.match(cardText, /任务归类待确认/);
+  assert.match(cardText, /保存修改/);
+  assert.match(cardText, /标记为新任务/);
+  assert.match(cardText, /标记为旧任务进展/);
+  assert.match(cardText, /按以上选择确认/);
+  assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
 }
 
 function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {

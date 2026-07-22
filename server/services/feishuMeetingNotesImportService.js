@@ -146,7 +146,7 @@ function coveredAssignees(tasks, progressUpdates) {
   return assignees;
 }
 
-function speakerCoverageProgressItems({ tasks, progressUpdates, segments }) {
+function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
   const covered = coveredAssignees(tasks, progressUpdates);
   const fallbackItems = [];
 
@@ -160,10 +160,13 @@ function speakerCoverageProgressItems({ tasks, progressUpdates, segments }) {
     fallbackItems.push({
       item_id: `speaker_${fallbackItems.length + 1}_${normalizeEvidenceText(speaker)}`,
       task_name: `${speaker}今日工作确认`,
-      progress_type: 'speaker_daily_update',
-      suggested_status: '进行中',
+      task_brief: String(segment.text || '').trim().slice(0, 120),
+      task_description: String(segment.text || '').trim(),
       progress_summary: String(segment.text || '').trim().slice(0, 120),
       evidence_quote: String(segment.text || '').trim().slice(0, 120),
+      deadline: '待确认',
+      priority: '中',
+      task_choice: '',
       confidence: 0.65,
       reason: '可靠说话人汇报今日工作但AI未生成对应确认项，补发负责人确认卡片',
       assignee: speaker,
@@ -201,11 +204,11 @@ export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, 
   const progressWithSpeaker = repairProgressAssigneesFromEvidence(progressUpdates, segments);
   const repairedTasks = repairItemsAssignees(tasks, previousDraft?.draft_tasks || []);
   const repairedProgress = repairItemsAssignees(progressWithSpeaker, previousDraft?.progress_updates || []);
-  const fallbackProgress = speakerCoverageProgressItems({ tasks: repairedTasks, progressUpdates: repairedProgress, segments });
+  const fallbackTasks = speakerCoverageTaskItems({ tasks: repairedTasks, progressUpdates: repairedProgress, segments });
 
   return {
-    tasks: repairedTasks,
-    progressUpdates: [...repairedProgress, ...fallbackProgress]
+    tasks: [...repairedTasks, ...fallbackTasks],
+    progressUpdates: repairedProgress
   };
 }
 
