@@ -28,6 +28,7 @@
     "worker:feishu-docx": "node scripts/worker-feishu-docx.ts",
     "sync:feishu-wiki-docx-notes": "node scripts/sync-feishu-wiki-docx-notes.ts",
     "test:feishu-wiki-docx-scan": "node scripts/test-feishu-wiki-docx-scan.js",
+    "test:feishu-wiki-sync-route": "node scripts/test-feishu-wiki-sync-route.js",
     "list:feishu-group-members": "node scripts/list-feishu-group-members.js",
     "daily:meeting-tasks": "node scripts/daily-meeting-tasks.ts",
     "clear:master-task-table": "node scripts/clear-master-task-table.ts",

@@ -247,4 +247,25 @@ router.post('/sync-feishu-docx', async (req, res, next) => {
   }
 });
 
+router.post('/sync-feishu-wiki-docx', async (req, res, next) => {
+  try {
+    const limit = Number(req.body?.limit) || undefined;
+    const force = req.body?.force === true || req.body?.force === 'true';
+    const reanalyze = req.body?.reanalyze === true || req.body?.reanalyze === 'true';
+    const nodeTokenOrUrl = req.body?.node_url || req.body?.node_token || undefined;
+    const { syncFeishuWikiDocxNotes } = await import('../services/feishuWikiDocxImportService.js');
+
+    const result = await feishuScanCoordinator.runScan('wiki', () => syncFeishuWikiDocxNotes({
+      limit,
+      force,
+      reanalyze,
+      nodeTokenOrUrl
+    }));
+
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;
