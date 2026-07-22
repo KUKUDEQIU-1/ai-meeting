@@ -74,6 +74,27 @@ CREATE TABLE IF NOT EXISTS feishu_docx_note_sources (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS feishu_wiki_docx_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  space_id TEXT NOT NULL,
+  parent_node_token TEXT NOT NULL,
+  node_token TEXT NOT NULL UNIQUE,
+  obj_token TEXT NOT NULL,
+  obj_type TEXT NOT NULL,
+  title TEXT,
+  node_create_time TEXT,
+  obj_edit_time TEXT,
+  last_sync_status TEXT,
+  last_synced_at TEXT,
+  content_hash TEXT,
+  last_content_length INTEGER DEFAULT 0,
+  last_tasks_count INTEGER DEFAULT 0,
+  last_table_url TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS feishu_oauth_tokens (
   token_key TEXT PRIMARY KEY,
   access_token TEXT,
