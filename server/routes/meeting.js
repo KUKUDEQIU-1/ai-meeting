@@ -5,11 +5,52 @@ import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImp
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
+import { getMeetingTaskDraftById, listDraftAssigneeStates } from '../services/taskDraftService.js';
 
 const router = express.Router();
 
 router.use('/feishu-docx-note-sources', feishuDocxNoteSourcesRouter);
 router.use('/sync-feishu-meeting-notes', feishuMeetingNotesSyncRouter);
+
+router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
+  try {
+    const draftId = Number(req.params.draftId);
+
+    if (!Number.isFinite(draftId) || draftId <= 0) {
+      res.status(400).json({ message: 'draftId 必须是正整数' });
+      return;
+    }
+
+    const draft = await getMeetingTaskDraftById(draftId);
+    if (!draft) {
+      res.status(404).json({ message: 'draft 不存在' });
+      return;
+    }
+
+    const deliveries = await listDraftAssigneeStates(draftId);
+    res.json({
+      draft_id: draft.id,
+      meeting_title: draft.meeting_title,
+      confirmation_status: draft.confirmation_status,
+      sent_count: deliveries.filter((row) => row.delivery_status === 'sent').length,
+      failed_count: deliveries.filter((row) => row.delivery_status === 'failed').length,
+      pending_count: deliveries.filter((row) => row.delivery_status === 'pending').length,
+      deliveries: deliveries.map((row) => ({
+        assignee_key: row.assignee_key,
+        assignee_name: row.assignee_name,
+        card_kind: row.card_kind,
+        delivery_status: row.delivery_status,
+        delivery_error: row.delivery_error || '',
+        confirmation_status: row.confirmation_status,
+        confirmation_error: row.confirmation_error || '',
+        has_message_id: Boolean(row.card_message_id),
+        updated_at: row.updated_at
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.post('/sync-feishu', async (req, res, next) => {
   try {

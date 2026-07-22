@@ -12,7 +12,7 @@ import {
 import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 import { all, initDatabase } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
-import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, upsertDraftAssigneeState } from '../services/taskDraftService.js';
+import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 
 function testMappingAndGrouping() {
   const assigneeMap = parseAssigneeMap(JSON.stringify({ 张三: 'ou_zhang', '李 四': { open_id: 'ou_li' } }));
@@ -370,6 +370,61 @@ async function testAssigneeCardStatesAreIndependentByKind() {
   assert.equal(progressState.receive_id, 'ou_actor_progress');
 }
 
+async function testDeliveryDiagnosticsHideRecipientIds() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `delivery-diagnostics-${Date.now()}`,
+    meetingTitle: '投递诊断会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_delivery',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    cardKind: 'tasks',
+    receiveId: 'ou_secret_actor',
+    cardMessageId: 'om_sent',
+    deliveryStatus: 'sent'
+  });
+  const rows = await listDraftAssigneeStates(draft.id);
+  const visibleRows = rows.map((row) => ({
+    assignee_key: row.assignee_key,
+    assignee_name: row.assignee_name,
+    card_kind: row.card_kind,
+    delivery_status: row.delivery_status,
+    delivery_error: row.delivery_error || '',
+    confirmation_status: row.confirmation_status,
+    has_message_id: Boolean(row.card_message_id)
+  }));
+
+  assert.deepEqual(visibleRows, [{
+    assignee_key: '张三',
+    assignee_name: '张三',
+    card_kind: 'tasks',
+    delivery_status: 'sent',
+    delivery_error: '',
+    confirmation_status: 'pending',
+    has_message_id: true
+  }]);
+  assert.equal(JSON.stringify(visibleRows).includes('ou_secret_actor'), false);
+}
+
 async function testProgressFinalizerPersistsProgressWithoutCreatingTasks() {
   const sourceId = `progress-finalizer-${Date.now()}`;
   const draft = await createMeetingTaskDraft({
@@ -480,6 +535,7 @@ await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testAssigneeCardStatesAreIndependentByKind();
+await testDeliveryDiagnosticsHideRecipientIds();
 await testProgressFinalizerPersistsProgressWithoutCreatingTasks();
 await testProgressConfirmationUsesProgressOnlyAction();
 
