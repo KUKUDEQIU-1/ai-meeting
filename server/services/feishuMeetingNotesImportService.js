@@ -4,7 +4,7 @@ import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
 import { saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
 import { extractFeishuMeetingNoteContentWithMeta, findMeetingNoteId, getFeishuMeetingArtifactContent, getFeishuMeetingDetail, getFeishuMeetingNoteDetail, getFeishuMeetingNoteList, normalizeFeishuMeetingNote } from './feishuMeetingNotesClient.js';
 import { formatSegmentsForPrompt, normalizeMeetingTranscript } from './meetingTranscriptService.js';
-import { createMeetingTaskDraft } from './taskDraftService.js';
+import { createMeetingTaskDraft, getMeetingTaskDraftBySource } from './taskDraftService.js';
 import { resolveDraftTasksAgainstHistory } from './taskResolutionService.js';
 import { dispatchDraftTaskCards } from './feishuTaskCardService.js';
 
@@ -278,21 +278,6 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       meeting_title: meetingTitle
     });
     aiResult.tasks = resolutionResult.tasks;
-    aiResult.progress_updates = [
-      ...(aiResult.progress_updates || []),
-      ...resolutionResult.existing_matches.map((task) => ({
-        task_name: task.task_name || task.title || '未命名事项',
-        progress_type: 'existing_task_progress',
-        progress_summary: task.task_brief || task.task_description || task.task_name || '',
-        evidence_quote: task.evidence_quote || '待确认',
-        matched_history_task_key: task.matched_history_task_key || task.resolved_task_key || '',
-        matched_first_note_id: task.history_candidates?.[0]?.first_note_id || '',
-        matched_first_meeting_title: task.history_candidates?.[0]?.first_meeting_title || '',
-        matched_first_table_url: task.history_candidates?.[0]?.first_table_url || '',
-        confidence: task.resolution_confidence || task.confidence || 0.85,
-        reason: task.resolution_reason || '历史任务进展'
-      }))
-    ];
 
     const rawTasksCount = countRawTasks(aiResult);
     const candidateTasksCount = aiResult.tasks.length;
@@ -337,7 +322,11 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       notifyError
     });
 
-    const draft = await createMeetingTaskDraft({
+    // Sync records do not carry draft_id in existing databases; source_type/source_id is the stable implicit link.
+    const existingPendingDraft = !options.force && !options.reanalyze
+      ? await getMeetingTaskDraftBySource('feishu_meeting_note', normalizedNoteId)
+      : null;
+    const draft = existingPendingDraft || await createMeetingTaskDraft({
       sourceType: 'feishu_meeting_note',
       sourceId: normalizedNoteId,
       meetingTitle,

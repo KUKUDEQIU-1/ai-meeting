@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getTenantAccessToken } from './feishuBitableClient.js';
-import { assigneeMembersToMap, assigneeNameOf, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap } from './feishuTaskCardPure.js';
+import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
 import { getDraftAssigneeState, getMeetingTaskDraftById, updateDraftAssigneeDelivery, upsertDraftAssigneeState } from './taskDraftService.js';
 
@@ -21,31 +21,6 @@ export function resolveTaskCardRecipients(assignees) {
     original_receive_id: assignee.receive_id,
     test_mode: true
   }));
-}
-
-export function groupDraftTasksForTestRecipient(tasks, receiveId) {
-  const grouped = new Map();
-
-  for (const task of Array.isArray(tasks) ? tasks : []) {
-    const assigneeName = assigneeNameOf(task);
-    const assigneeKey = normalizeAssigneeKey(assigneeName);
-
-    if (!grouped.has(assigneeKey)) {
-      grouped.set(assigneeKey, {
-        assignee_key: assigneeKey,
-        assignee_name: assigneeName,
-        receive_id_type: 'open_id',
-        receive_id: receiveId,
-        original_receive_id: '',
-        test_mode: true,
-        tasks: []
-      });
-    }
-
-    grouped.get(assigneeKey).tasks.push(task);
-  }
-
-  return [...grouped.values()];
 }
 
 async function postFeishuMessage({ receiveId, card }) {
@@ -76,25 +51,33 @@ async function postFeishuMessage({ receiveId, card }) {
   return data.data?.message_id || data.data?.message?.message_id || '';
 }
 
-export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, terminal = false }) {
-  const state = await getDraftAssigneeState(draftId, assigneeKey);
+function itemsForAssignee(items, assigneeKey) {
+  return (items || []).filter((item) => normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey);
+}
+
+function buildCardForKind({ cardKind, draft, assignee, terminal }) {
+  if (cardKind === 'progress') {
+    return buildAssigneeProgressCard({ draft, assignee, progressUpdates: itemsForAssignee(draft.progress_updates || [], assignee.assignee_key), terminal });
+  }
+
+  return buildAssigneeTaskCard({ draft, assignee, tasks: itemsForAssignee(draft.draft_tasks || [], assignee.assignee_key), terminal });
+}
+
+export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false }) {
+  const state = await getDraftAssigneeState(draftId, assigneeKey, cardKind);
   const draft = await getMeetingTaskDraftById(draftId);
 
   if (!state || !draft || !state.card_message_id) {
     return { status: 'skipped', reason: 'card_state_not_found' };
   }
 
-  const assigneeTasks = (draft.draft_tasks || []).filter((task) => {
-    const name = String(task.assignee || task.owner || task.assignee_name || '待确认').replace(/\s+/g, '').trim() || '待确认';
-    return name === assigneeKey;
-  });
   const assignee = {
     assignee_key: state.assignee_key,
     assignee_name: state.assignee_name,
     receive_id_type: state.receive_id_type,
     receive_id: state.receive_id
   };
-  const card = buildAssigneeTaskCard({ draft, assignee, tasks: assigneeTasks, terminal });
+  const card = buildCardForKind({ cardKind: state.card_kind || cardKind, draft, assignee, terminal });
   const tenantAccessToken = await getTenantAccessToken();
   const targetMessageId = messageId || state.card_message_id;
   const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages/${encodeURIComponent(targetMessageId)}`;
@@ -118,11 +101,12 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, te
   return { status: 'updated', message_id: targetMessageId };
 }
 
-async function persistUnmappedAssignees(draftId, failures) {
+async function persistUnmappedAssignees(draftId, failures, cardKind) {
   for (const failure of failures) {
     await upsertDraftAssigneeState({
       draftId,
       assigneeKey: failure.assignee_key,
+      cardKind,
       assigneeName: failure.assignee_name,
       receiveIdType: 'open_id',
       receiveId: '',
@@ -132,10 +116,17 @@ async function persistUnmappedAssignees(draftId, failures) {
   }
 }
 
-async function sendAssigneeCard(draft, assignee) {
+async function sendAssigneeCard(draft, assignee, cardKind, postMessage = postFeishuMessage) {
+  const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
+
+  if (existingState?.delivery_status === 'sent' && existingState.card_message_id) {
+    return { assignee_key: assignee.assignee_key, status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id };
+  }
+
   await upsertDraftAssigneeState({
     draftId: draft.id,
     assigneeKey: assignee.assignee_key,
+    cardKind,
     assigneeName: assignee.assignee_name,
     receiveIdType: assignee.receive_id_type,
     receiveId: assignee.receive_id,
@@ -143,46 +134,27 @@ async function sendAssigneeCard(draft, assignee) {
   });
 
   try {
-    const card = buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks });
-    const messageId = await postFeishuMessage({ receiveId: assignee.receive_id, card });
-    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, deliveryStatus: 'sent', cardMessageId: messageId });
+    const card = cardKind === 'progress'
+      ? buildAssigneeProgressCard({ draft, assignee, progressUpdates: assignee.tasks })
+      : buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks });
+    const messageId = await postMessage({ receiveId: assignee.receive_id, card });
+    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
     return { assignee_key: assignee.assignee_key, status: 'sent', message_id: messageId };
   } catch (error) {
-    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, deliveryStatus: 'failed', deliveryError: error.message });
+    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
     return { assignee_key: assignee.assignee_key, status: 'failed', error: error.message };
   }
 }
 
-export async function dispatchDraftTaskCards(draft) {
-  const testReceiveOpenId = configuredTaskCardTestReceiveOpenId();
-  const draftTasks = draft?.draft_tasks || [];
-
-  if (testReceiveOpenId) {
-    const results = [];
-
-    for (const assignee of groupDraftTasksForTestRecipient(draftTasks, testReceiveOpenId)) {
-      results.push(await sendAssigneeCard(draft, assignee));
-    }
-
-    const sentCount = results.filter((item) => item.status === 'sent').length;
-    const failedCount = results.filter((item) => item.status === 'failed').length;
-
-    return {
-      status: sentCount > 0 ? 'success' : 'failed',
-      sent_count: sentCount,
-      failed_count: failedCount,
-      results,
-      member_source: 'test_receive_override',
-      delivery_failures: []
-    };
-  }
-
-  const configuredMap = parseAssigneeMap();
+export async function dispatchDraftTaskCards(draft, deps = {}) {
+  const configuredMap = deps.assigneeMap || parseAssigneeMap();
   let assigneeMap = configuredMap;
   let memberSource = 'configured_map';
+  const listGroupMembers = deps.listGroupMembers || listConfiguredFeishuGroupMembers;
+  const postMessage = deps.postMessage || postFeishuMessage;
 
   try {
-    const memberResult = await listConfiguredFeishuGroupMembers();
+    const memberResult = await listGroupMembers();
     if (memberResult.status === 'success') {
       assigneeMap = assigneeMembersToMap(memberResult.members);
       memberSource = 'group_members';
@@ -191,25 +163,32 @@ export async function dispatchDraftTaskCards(draft) {
     console.warn(`[Draft Notify] group member lookup failed; using configured mapping error=${error.message}`);
   }
 
-  const grouped = groupDraftTasksByAssignee(draftTasks, assigneeMap);
+  const taskGrouped = groupDraftTasksByAssignee(draft?.draft_tasks || [], assigneeMap);
+  const progressGrouped = groupDraftTasksByAssignee(draft?.progress_updates || [], assigneeMap);
   const results = [];
 
-  await persistUnmappedAssignees(draft.id, grouped.deliveryFailures);
+  await persistUnmappedAssignees(draft.id, taskGrouped.deliveryFailures, 'tasks');
+  await persistUnmappedAssignees(draft.id, progressGrouped.deliveryFailures, 'progress');
 
-  for (const assignee of resolveTaskCardRecipients(grouped.deliverable)) {
-    results.push(await sendAssigneeCard(draft, assignee));
+  for (const assignee of resolveTaskCardRecipients(taskGrouped.deliverable)) {
+    results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage));
+  }
+  for (const assignee of resolveTaskCardRecipients(progressGrouped.deliverable)) {
+    results.push(await sendAssigneeCard(draft, assignee, 'progress', postMessage));
   }
 
   const sentCount = results.filter((item) => item.status === 'sent').length;
-  const failedCount = grouped.deliveryFailures.length + results.filter((item) => item.status === 'failed').length;
+  const skippedCount = results.filter((item) => item.status === 'skipped').length;
+  const failedCount = taskGrouped.deliveryFailures.length + progressGrouped.deliveryFailures.length + results.filter((item) => item.status === 'failed').length;
 
   return {
-    status: sentCount > 0 ? 'success' : 'failed',
+    status: sentCount > 0 || skippedCount > 0 ? 'success' : 'failed',
     sent_count: sentCount,
+    skipped_count: skippedCount,
     failed_count: failedCount,
     results,
     member_source: memberSource,
-    delivery_failures: grouped.deliveryFailures.map((item) => ({
+    delivery_failures: [...taskGrouped.deliveryFailures, ...progressGrouped.deliveryFailures].map((item) => ({
       assignee_key: item.assignee_key,
       assignee_name: item.assignee_name,
       error: item.delivery_error
