@@ -64,7 +64,77 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.match(text, /"name":"task_name_task_a"/);
   assert.doesNotMatch(text, /"name":"deadline_task_a"/);
   assert.doesNotMatch(text, /"name":"comment_task_a"/);
-  assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
+  assert.equal((text.match(/"tag":"input"/g) || []).length, 3);
+}
+
+function buttonType(card, name) {
+  const stack = [card];
+  while (stack.length) {
+    const item = stack.pop();
+    if (!item || typeof item !== 'object') continue;
+    if (item.tag === 'button' && item.name === name) return item.type;
+    for (const value of Object.values(item)) {
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+  return '';
+}
+
+function testTaskChoiceButtonsShowCurrentSelection() {
+  const draft = { id: 9, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
+  const assignee = { assignee_key: '张三', assignee_name: '张三' };
+  const unselectedCard = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{ item_id: 'task_a', task_name: '未选择事项', assignee: '张三' }]
+  });
+  const newTaskCard = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{ item_id: 'task_b', task_name: '新任务事项', assignee: '张三', task_choice: 'new_task' }]
+  });
+  const progressCard = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{ item_id: 'task_c', task_name: '旧任务事项', assignee: '张三', task_choice: 'old_task_progress' }]
+  });
+
+  assert.equal(buttonType(unselectedCard, 'mark_new_task_a'), 'default');
+  assert.equal(buttonType(unselectedCard, 'mark_old_task_a'), 'default');
+  assert.equal(buttonType(newTaskCard, 'mark_new_task_b'), 'primary');
+  assert.equal(buttonType(newTaskCard, 'mark_old_task_b'), 'default');
+  assert.equal(buttonType(progressCard, 'mark_new_task_c'), 'default');
+  assert.equal(buttonType(progressCard, 'mark_old_task_c'), 'primary');
+  assert.match(JSON.stringify(unselectedCard), /当前选择：待选择/);
+}
+
+function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
+  const draft = { id: 10, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
+  const assignee = { assignee_key: '张三', assignee_name: '张三' };
+  const card = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{
+      item_id: 'matched_task',
+      task_name: '继续优化',
+      assignee: '张三',
+      task_choice: 'old_task_progress',
+      matched_history: { task_name: 'AI会议助手接入总表' }
+    }, {
+      item_id: 'manual_task',
+      task_name: '补充测试',
+      assignee: '张三',
+      task_choice: 'old_task_progress'
+    }]
+  });
+  const text = JSON.stringify(card);
+
+  assert.match(text, /系统匹配旧任务：/);
+  assert.match(text, /AI会议助手接入总表/);
+  assert.match(text, /未识别到对应旧任务，请修改旧任务名称/);
+  assert.match(text, /"name":"matched_task_name_manual_task"/);
+  assert.doesNotMatch(text, /"name":"matched_task_name_matched_task"/);
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -108,6 +178,7 @@ function testCallbackParsingAndSafety() {
             task_name_task_a: '新任务',
             deadline_task_a: '明天',
             progress_summary_task_a: '进展备注',
+            matched_task_name_task_a: '对应旧任务',
             comment_task_a: '恶意备注字段',
             task_name: '全局新任务',
             deadline: '全局截止',
@@ -127,6 +198,7 @@ function testCallbackParsingAndSafety() {
   assert.equal(parsed.form_values.task_name, '新任务');
   assert.equal('deadline' in parsed.form_values, false);
   assert.equal(parsed.form_values.progress_summary, '进展备注');
+  assert.equal(parsed.form_values.matched_task_name, '对应旧任务');
   assert.equal('comment' in parsed.form_values, false);
   assert.equal(parsed.form_values.assignee, undefined);
   assert.equal(validateCallbackActor({ receive_id: 'ou_actor' }, parsed), true);
@@ -276,7 +348,8 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
         value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'choice_1' },
         form_value: {
           task_name_choice_1: '旧任务名',
-          progress_summary_choice_1: '今天已完成接入测试'
+          progress_summary_choice_1: '今天已完成接入测试',
+          matched_task_name_choice_1: 'AI会议助手历史任务'
         }
       }
     }
@@ -287,6 +360,7 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
   assert.equal(markedDraft.draft_tasks[0].task_choice, 'old_task_progress');
   assert.equal(markedDraft.draft_tasks[0].task_name, '旧任务名');
   assert.equal(markedDraft.draft_tasks[0].progress_summary, '今天已完成接入测试');
+  assert.equal(markedDraft.draft_tasks[0].matched_task_name, 'AI会议助手历史任务');
 
   let finalizedNewTasks = false;
   let finalizedProgress = false;
@@ -314,7 +388,7 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
   assert.equal(finalizedProgress, true);
   assert.equal(confirmedDraft.draft_tasks[0].status, 'discarded');
   assert.equal(confirmedDraft.progress_updates.length, 1);
-  assert.equal(confirmedDraft.progress_updates[0].task_name, '旧任务名');
+  assert.equal(confirmedDraft.progress_updates[0].task_name, 'AI会议助手历史任务');
   assert.equal(confirmedDraft.progress_updates[0].progress_summary, '今天已完成接入测试');
   assert.equal(confirmedDraft.progress_updates[0].status, 'confirmed');
 }
@@ -529,6 +603,8 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
+testTaskChoiceButtonsShowCurrentSelection();
+testOldTaskMappingHintUsesMatchedNameOrEditableInput();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();
 await initDatabase();

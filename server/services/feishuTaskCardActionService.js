@@ -20,6 +20,7 @@ import {
 import { updateFeishuTaskCard } from './feishuTaskCardService.js';
 
 const MAX_TASK_NAME_LENGTH = 120;
+const MAX_MATCHED_TASK_NAME_LENGTH = 120;
 const MAX_PROGRESS_SUMMARY_LENGTH = 500;
 
 function reject(message, status) {
@@ -31,6 +32,7 @@ function reject(message, status) {
 function validateEditableValues(values) {
   const taskName = String(values.task_name || '').trim();
   const progressSummary = String(values.progress_summary || '').trim();
+  const matchedTaskName = String(values.matched_task_name || '').trim();
 
   if (!taskName) reject('task_name 不能为空', 400);
   if (taskName.length > MAX_TASK_NAME_LENGTH) {
@@ -39,14 +41,21 @@ function validateEditableValues(values) {
   if (progressSummary.length > MAX_PROGRESS_SUMMARY_LENGTH) {
     reject('进展备注长度超限', 400);
   }
+  if (matchedTaskName.length > MAX_MATCHED_TASK_NAME_LENGTH) {
+    reject('对应旧任务名称长度超限', 400);
+  }
 
-  return { taskName, progressSummary };
+  return { taskName, progressSummary, matchedTaskName };
+}
+
+function matchedTaskNameOf(task) {
+  return task.matched_task_name || task.matched_history?.task_name || task.matched_history?.task_brief || task.matched_history?.task_description || task.matched_first_task_name || '';
 }
 
 function progressUpdateFromTask(task, operatorOpenId, timestamp) {
   return {
     item_id: `${task.item_id}_progress`,
-    task_name: task.task_name || '未命名事项',
+    task_name: matchedTaskNameOf(task) || task.task_name || '未命名事项',
     assignee: assigneeNameOf(task),
     progress_type: 'existing_task_progress',
     progress_summary: task.progress_summary || task.comment || task.task_brief || task.task_description || task.task_name || '',
@@ -111,6 +120,7 @@ async function editTask(parsed, state, dependencies) {
       ...task,
       task_name: values.taskName,
       progress_summary: values.progressSummary || task.progress_summary,
+      matched_task_name: values.matchedTaskName || task.matched_task_name,
       updated_by: parsed.operator_open_id,
       updated_at: new Date().toISOString()
   }));
@@ -131,6 +141,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     ...task,
     task_name: values.taskName,
     progress_summary: values.progressSummary || task.progress_summary,
+    matched_task_name: values.matchedTaskName || task.matched_task_name,
     task_choice: taskChoice,
     updated_by: parsed.operator_open_id,
     updated_at: new Date().toISOString()
