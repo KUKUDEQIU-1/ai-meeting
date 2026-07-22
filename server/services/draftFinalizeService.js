@@ -109,3 +109,49 @@ export async function finalizeMeetingTaskDraftForAssignee({ draftId, assigneeKey
     confirmedTasks: ownedConfirmedTasks
   });
 }
+
+export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, assigneeKey, confirmedBy = '待确认' } = {}) {
+  const draft = await getMeetingTaskDraftById(draftId);
+
+  if (!draft) {
+    const error = new Error(`draft 不存在 id=${draftId}`);
+    error.status = 404;
+    throw error;
+  }
+
+  const ownedProgressUpdates = (draft.progress_updates || []).filter((item) => (
+    normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey && item.status === 'confirmed'
+  ));
+
+  if (!ownedProgressUpdates.length) {
+    return {
+      draft_id: draftId,
+      status: 'no_confirmed_progress',
+      progress_saved_count: 0,
+      progress_updated_count: 0
+    };
+  }
+
+  await saveTaskProgress(ownedProgressUpdates, {
+    note_id: draft.source_id,
+    meeting_title: draft.meeting_title
+  });
+  const linkedProgressResult = await updateTaskInstancesFromProgress(ownedProgressUpdates, {
+    note_id: draft.source_id,
+    meeting_title: draft.meeting_title,
+    meeting_time: draft.meeting_time
+  });
+
+  await updateMeetingTaskDraftStatus(draftId, 'progress_synced', {
+    confirmed_by: confirmedBy,
+    confirmed_at: new Date().toISOString()
+  });
+
+  return {
+    draft_id: draftId,
+    status: 'progress_synced',
+    progress_saved_count: ownedProgressUpdates.length,
+    progress_updated_count: linkedProgressResult.updated_count,
+    progress_result: linkedProgressResult
+  };
+}

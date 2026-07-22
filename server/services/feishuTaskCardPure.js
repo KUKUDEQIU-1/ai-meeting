@@ -18,6 +18,10 @@ export function assigneeNameOf(task) {
   return task.assignee || task.owner || task.assignee_name || '待确认';
 }
 
+function cardTitle({ assignee, label }) {
+  return assignee.test_mode ? `测试转发｜${truncateText(assignee.assignee_name, 20)}的${label}` : label;
+}
+
 export function normalizeAssigneeKey(value) {
   const text = String(value || '').replace(/\s+/g, '').trim();
   return text || '待确认';
@@ -157,7 +161,7 @@ function taskActionSet({ draft, assignee, itemId }) {
         weight: 1,
         elements: [callbackButton({
           name: `edit_${itemId}`,
-          text: '保存修改',
+           text: '保存修改',
           type: 'default',
           value: { action: 'edit_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
         })]
@@ -238,7 +242,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     config: { wide_screen_mode: true, update_multi: true },
     header: {
       template: 'blue',
-      title: { tag: 'plain_text', content: assignee.test_mode ? `测试转发｜${truncateText(assignee.assignee_name, 20)}的会议任务` : '会议任务待确认' }
+      title: { tag: 'plain_text', content: cardTitle({ assignee, label: '新增任务待确认' }) }
     },
     body: {
       elements: [{
@@ -250,23 +254,81 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
   };
 }
 
+export function buildAssigneeProgressCard({ draft, assignee, progressUpdates, terminal = false }) {
+  if (terminal) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: {
+        template: 'green',
+        title: { tag: 'plain_text', content: '旧任务进展已确认' }
+      },
+      body: {
+        elements: [{
+          tag: 'markdown',
+          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的历史任务进展已确认并更新。`
+        }]
+      }
+    };
+  }
+
+  const elements = [
+    {
+      tag: 'markdown',
+      content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**来源：** ${truncateText(draft?.meeting_source || '会议纪要', 40)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}`
+    },
+    { tag: 'hr' }
+  ];
+
+  if (assignee.test_mode) {
+    elements.push({ tag: 'markdown', content: `**测试模式：** 此卡片仅发送给测试接收人，进展负责人仍为 ${truncateText(assignee.assignee_name, 40)}。` });
+    elements.push({ tag: 'hr' });
+  }
+
+  for (const item of progressUpdates) {
+    const itemId = String(item.item_id || '');
+    elements.push({ tag: 'markdown', content: `**进展 ${truncateText(itemId, 24)}**` });
+    elements.push(labelElement(`**历史任务：** ${truncateText(taskNameOf(item), 120)}`));
+    elements.push(labelElement(`**进展摘要：** ${truncateText(item.progress_summary || '待确认', 180)}`));
+    if (String(item.suggested_status || '').trim()) {
+      elements.push(labelElement(`**建议状态：** ${truncateText(item.suggested_status, 40)}`));
+    }
+    if (String(item.evidence_quote || '').trim()) {
+      elements.push(labelElement(`**依据：** ${truncateText(item.evidence_quote, 180)}`));
+    }
+    elements.push({ tag: 'hr' });
+  }
+
+  elements.push(callbackButton({
+    name: 'confirm_progress',
+    text: '确认旧任务进展',
+    type: 'primary',
+    value: { action: 'confirm_assignee_progress', draft_id: draft.id, assignee_key: assignee.assignee_key, card_kind: 'progress' }
+  }));
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: {
+      template: 'purple',
+      title: { tag: 'plain_text', content: cardTitle({ assignee, label: '旧任务进展待确认' }) }
+    },
+    body: {
+      elements: [{
+        tag: 'form',
+        name: 'meeting_task_progress_form',
+        elements
+      }]
+    }
+  };
+}
+
 function extractAllowedFormValues(formValue, itemId) {
   const safeItemId = String(itemId || '');
   const suffix = safeItemId ? `_${safeItemId}` : '';
-  const taskNames = {};
-
-  for (const [key, value] of Object.entries(formValue || {})) {
-    if (!key.startsWith('task_name_')) continue;
-    const scopedItemId = key.slice('task_name_'.length);
-    const taskName = firstString(value);
-    if (scopedItemId && taskName) {
-      taskNames[scopedItemId] = taskName;
-    }
-  }
 
   return {
     task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
-    task_names: taskNames
   };
 }
 
@@ -282,6 +344,7 @@ export function parseFeishuCardActionPayload(payload = {}) {
     operator_open_id: firstString(event.operator?.open_id, event.operator?.operator_id?.open_id, event.operator_id?.open_id, payload.operator?.open_id),
     message_id: firstString(event.context?.open_message_id, event.context?.message_id, event.message_id, payload.message_id),
     action: firstString(actionValue.action, actionValue.action_type, actionPayload.name),
+    card_kind: firstString(actionValue.card_kind, actionValue.cardKind) || 'tasks',
     draft_id: Number(actionValue.draft_id || actionValue.draftId),
     assignee_key: normalizeAssigneeKey(actionValue.assignee_key || actionValue.assigneeKey),
     item_id: itemId,
