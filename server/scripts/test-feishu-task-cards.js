@@ -329,7 +329,9 @@ function testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown() {
   });
 
   assert.equal(repaired.tasks[0].assignee, '简学勤');
-  assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
+  assert.equal(repaired.progressUpdates.length, 0);
+  assert.equal(repaired.tasks[1].assignee, '简学勤');
+  assert.equal(repaired.tasks[1].task_choice, 'old_task_progress');
 }
 
 function testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee() {
@@ -350,9 +352,11 @@ function testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee() {
     }]
   });
 
-  assert.equal(repaired.progressUpdates[0].assignee, '简学勤');
-  assert.equal(repaired.progressUpdates[0].owner, '简学勤');
-  assert.equal(repaired.progressUpdates[0].assignee_source, 'speaker');
+  assert.equal(repaired.progressUpdates.length, 0);
+  assert.equal(repaired.tasks[0].assignee, '简学勤');
+  assert.equal(repaired.tasks[0].owner, '简学勤');
+  assert.equal(repaired.tasks[0].assignee_source, 'speaker');
+  assert.equal(repaired.tasks[0].task_choice, 'old_task_progress');
 }
 
 function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
@@ -449,6 +453,38 @@ function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {
   assert.equal(grouped.deliverable.length, 1);
   assert.equal(grouped.deliveryFailures.length, 0);
   assert.equal(grouped.deliverable[0].assignee_key, '简学勤');
+}
+
+function testAssignedProgressUpdateGetsEditableChoiceCard() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [],
+    progressUpdates: [{
+      item_id: 'progress_1',
+      task_name: 'AI会议助手接入总表',
+      progress_summary: '继续测试并接入总表',
+      assignee: '简学勤'
+    }],
+    previousDraft: null,
+    segments: []
+  });
+  const grouped = groupDraftTasksByAssignee(repaired.tasks, parseAssigneeMap(JSON.stringify({ 简学勤: 'ou_jian' })));
+  const card = buildAssigneeTaskCard({
+    draft: { id: 11, meeting_title: '早会', meeting_source: '飞书 Wiki' },
+    assignee: grouped.deliverable[0],
+    tasks: grouped.deliverable[0].tasks
+  });
+  const cardText = JSON.stringify(card);
+
+  assert.equal(repaired.progressUpdates.length, 0);
+  assert.equal(repaired.tasks.length, 1);
+  assert.equal(repaired.tasks[0].assignee, '简学勤');
+  assert.equal(repaired.tasks[0].task_choice, 'old_task_progress');
+  assert.equal(grouped.deliveryFailures.length, 0);
+  assert.match(cardText, /任务归类待确认/);
+  assert.match(cardText, /保存修改/);
+  assert.match(cardText, /标记为新任务/);
+  assert.match(cardText, /标记为旧任务进展/);
+  assert.ok((cardText.match(/"tag":"input"/g) || []).length >= 2);
 }
 
 function testProgressSuppressionKeepsTaskAssigneeForPrivateCard() {
@@ -995,6 +1031,7 @@ testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
 testMissingDailySpeakerGetsFallbackConfirmationCardItem();
 testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword();
 testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
+testAssignedProgressUpdateGetsEditableChoiceCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();

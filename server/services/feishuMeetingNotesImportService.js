@@ -196,15 +196,33 @@ function repairProgressAssigneesFromEvidence(progressUpdates, segments) {
   });
 }
 
+function taskItemFromProgressUpdate(item) {
+  const taskName = String(item?.task_name || item?.matched_task_name || item?.progress_summary || '未命名事项').trim();
+
+  return {
+    ...item,
+    item_id: item?.item_id ? `${item.item_id}_choice` : '',
+    task_name: taskName,
+    task_brief: item?.task_brief || item?.progress_summary || taskName,
+    task_description: item?.task_description || item?.progress_summary || taskName,
+    progress_summary: item?.progress_summary || item?.task_description || item?.task_brief || taskName,
+    matched_task_name: item?.matched_task_name || item?.matched_history?.task_name || item?.matched_first_task_name || taskName,
+    deadline: item?.deadline || '待确认',
+    priority: item?.priority || '中',
+    task_choice: 'old_task_progress'
+  };
+}
+
 export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, previousDraft, segments } = {}) {
   const progressWithSpeaker = repairProgressAssigneesFromEvidence(progressUpdates, segments);
   const repairedTasks = repairItemsAssignees(tasks, previousDraft?.draft_tasks || []);
   const repairedProgress = repairItemsAssignees(progressWithSpeaker, previousDraft?.progress_updates || []);
-  const fallbackTasks = speakerCoverageTaskItems({ tasks: repairedTasks, progressUpdates: repairedProgress, segments });
+  const progressChoiceTasks = repairedProgress.map(taskItemFromProgressUpdate);
+  const fallbackTasks = speakerCoverageTaskItems({ tasks: [...repairedTasks, ...progressChoiceTasks], progressUpdates: [], segments });
 
   return {
-    tasks: [...repairedTasks, ...fallbackTasks],
-    progressUpdates: repairedProgress
+    tasks: [...repairedTasks, ...progressChoiceTasks, ...fallbackTasks],
+    progressUpdates: []
   };
 }
 
