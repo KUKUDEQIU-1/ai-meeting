@@ -420,6 +420,7 @@ export function parseFeishuCardActionPayload(payload = {}) {
     assignee_key: normalizeAssigneeKey(actionValue.assignee_key || actionValue.assigneeKey),
     item_id: itemId,
     form_values: extractAllowedFormValues(actionPayload.form_value || event.form_value || payload.form_value || {}, itemId),
+    raw_form_values: actionPayload.form_value || event.form_value || payload.form_value || {},
     raw_value: actionValue
   };
 }

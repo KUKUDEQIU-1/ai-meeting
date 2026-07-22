@@ -52,6 +52,24 @@ function matchedTaskNameOf(task) {
   return task.matched_task_name || task.matched_history?.task_name || task.matched_history?.task_brief || task.matched_history?.task_description || task.matched_first_task_name || '';
 }
 
+function formValueForItem(formValues, field, itemId) {
+  return String(formValues?.[`${field}_${itemId}`] || '').trim();
+}
+
+function taskWithCurrentFormValues(task, formValues) {
+  const itemId = String(task.item_id || '');
+  const taskName = formValueForItem(formValues, 'task_name', itemId);
+  const progressSummary = formValueForItem(formValues, 'progress_summary', itemId);
+  const matchedTaskName = formValueForItem(formValues, 'matched_task_name', itemId);
+
+  return {
+    ...task,
+    task_name: taskName || task.task_name,
+    progress_summary: progressSummary || task.progress_summary,
+    matched_task_name: matchedTaskName || task.matched_task_name
+  };
+}
+
 function progressUpdateFromTask(task, operatorOpenId, timestamp) {
   return {
     item_id: `${task.item_id}_progress`,
@@ -187,10 +205,14 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
     const confirmedNewTasks = [];
     const convertedProgressUpdates = [];
 
-    for (const task of ownedTasks.filter((item) => item.status === 'pending')) {
+    for (const storedTask of ownedTasks.filter((item) => item.status === 'pending')) {
+      const task = taskWithCurrentFormValues(storedTask, parsed.raw_form_values);
       const nextStatus = task.task_choice === 'old_task_progress' ? 'discarded' : 'confirmed';
       await updateMeetingTaskDraftItem(parsed.draft_id, task.item_id, (item) => ({
         ...item,
+        task_name: task.task_name,
+        progress_summary: task.progress_summary,
+        matched_task_name: task.matched_task_name,
         status: nextStatus,
         confirmed_by: parsed.operator_open_id,
         confirmed_at: timestamp,
