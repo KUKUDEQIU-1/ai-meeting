@@ -46,11 +46,15 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.doesNotMatch(text, /李四/);
   assert.match(text, /字段说明/);
   assert.match(text, /任务名称/);
+  assert.match(text, /旧任务进展备注/);
   assert.match(text, /完成日期\/截止时间/);
   assert.match(text, /备注/);
-  assert.match(text, /只读展示/);
+  assert.match(text, /标记为新任务/);
+  assert.match(text, /标记为旧任务进展/);
   assert.match(text, /confirm_assignee_tasks/);
   assert.match(text, /保存修改/);
+  assert.match(text, /mark_task_as_new/);
+  assert.match(text, /mark_task_as_progress/);
   assert.match(text, /task_a/);
   assert.doesNotMatch(text, /"tag":"action"/);
   assert.match(text, /form_action_type/);
@@ -58,7 +62,7 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.match(text, /"name":"task_name_task_a"/);
   assert.doesNotMatch(text, /"name":"deadline_task_a"/);
   assert.doesNotMatch(text, /"name":"comment_task_a"/);
-  assert.equal((text.match(/"tag":"input"/g) || []).length, 1);
+  assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -78,7 +82,7 @@ function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
   const taskText = JSON.stringify(taskCard);
   const progressText = JSON.stringify(progressCard);
 
-  assert.equal(taskCard.header.title.content, '新增任务待确认');
+  assert.equal(taskCard.header.title.content, '任务归类待确认');
   assert.equal(progressCard.header.title.content, '旧任务进展待确认');
   assert.match(taskText, /confirm_assignee_tasks/);
   assert.doesNotMatch(taskText, /confirm_assignee_progress/);
@@ -101,7 +105,8 @@ function testCallbackParsingAndSafety() {
           form_value: {
             task_name_task_a: '新任务',
             deadline_task_a: '明天',
-            comment_task_a: '备注',
+            progress_summary_task_a: '进展备注',
+            comment_task_a: '恶意备注字段',
             task_name: '全局新任务',
             deadline: '全局截止',
             comment: '全局备注',
@@ -119,6 +124,7 @@ function testCallbackParsingAndSafety() {
   assert.equal(parsed.action, 'edit_task');
   assert.equal(parsed.form_values.task_name, '新任务');
   assert.equal('deadline' in parsed.form_values, false);
+  assert.equal(parsed.form_values.progress_summary, '进展备注');
   assert.equal('comment' in parsed.form_values, false);
   assert.equal(parsed.form_values.assignee, undefined);
   assert.equal(validateCallbackActor({ receive_id: 'ou_actor' }, parsed), true);
@@ -193,7 +199,7 @@ async function testEditAndDiscardPreserveStoredFields() {
         form_value: {
           task_name_item_1: '新任务名',
           deadline_item_1: '恶意截止',
-          comment_item_1: '恶意备注'
+          progress_summary_item_1: '进展备注'
         }
       }
     }
@@ -206,6 +212,7 @@ async function testEditAndDiscardPreserveStoredFields() {
   assert.equal(editedDraft.draft_tasks[0].task_name, '新任务名');
   assert.equal(editedDraft.draft_tasks[0].deadline, '明天');
   assert.equal(editedDraft.draft_tasks[0].comment, '原备注');
+  assert.equal(editedDraft.draft_tasks[0].progress_summary, '进展备注');
 
   const discardPayload = {
     header: { event_id: 'evt_discard', token: 'secret' },
@@ -226,6 +233,88 @@ async function testEditAndDiscardPreserveStoredFields() {
   assert.equal(discarded.toast.content, '任务已丢弃');
   assert.equal(discardedDraft.draft_tasks[0].status, 'discarded');
   assert.equal(discardedDraft.draft_tasks[0].comment, '原备注');
+}
+
+async function testTaskChoiceCanConvertDraftTaskToProgress() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `task-choice-progress-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'choice_1', task_name: '原任务', assignee: '张三', comment: '原备注' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_choice',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  const markResponse = await handleFeishuCardAction({
+    header: { event_id: 'evt_mark_progress' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'choice_1' },
+        form_value: {
+          task_name_choice_1: '旧任务名',
+          progress_summary_choice_1: '今天已完成接入测试'
+        }
+      }
+    }
+  });
+  const markedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(markResponse.toast.content, '已标记为旧任务进展');
+  assert.equal(markedDraft.draft_tasks[0].task_choice, 'old_task_progress');
+  assert.equal(markedDraft.draft_tasks[0].task_name, '旧任务名');
+  assert.equal(markedDraft.draft_tasks[0].progress_summary, '今天已完成接入测试');
+
+  let finalizedNewTasks = false;
+  let finalizedProgress = false;
+  const confirmResponse = await handleFeishuCardAction({
+    header: { event_id: 'evt_confirm_progress_choice' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
+      }
+    }
+  }, {
+    finalizeAssignee: async () => {
+      finalizedNewTasks = true;
+    },
+    finalizeProgress: async ({ draftId, assigneeKey }) => {
+      finalizedProgress = draftId === draft.id && assigneeKey === '张三';
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const confirmedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(confirmResponse.toast.content, '旧任务进展已确认');
+  assert.equal(finalizedNewTasks, false);
+  assert.equal(finalizedProgress, true);
+  assert.equal(confirmedDraft.draft_tasks[0].status, 'discarded');
+  assert.equal(confirmedDraft.progress_updates.length, 1);
+  assert.equal(confirmedDraft.progress_updates[0].task_name, '旧任务名');
+  assert.equal(confirmedDraft.progress_updates[0].progress_summary, '今天已完成接入测试');
+  assert.equal(confirmedDraft.progress_updates[0].status, 'confirmed');
 }
 
 async function testAssigneeCardStatesAreIndependentByKind() {
@@ -387,6 +476,7 @@ testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
+await testTaskChoiceCanConvertDraftTaskToProgress();
 await testAssigneeCardStatesAreIndependentByKind();
 await testProgressFinalizerPersistsProgressWithoutCreatingTasks();
 await testProgressConfirmationUsesProgressOnlyAction();

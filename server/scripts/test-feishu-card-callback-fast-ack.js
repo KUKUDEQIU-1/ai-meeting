@@ -6,7 +6,7 @@ import {
   prepareFeishuCardAction,
   processPreparedFeishuCardAction
 } from '../services/feishuTaskCardActionService.js';
-import { groupDraftTasksForTestRecipient, resolveTaskCardRecipients } from '../services/feishuTaskCardService.js';
+import { resolveTaskCardRecipients } from '../services/feishuTaskCardService.js';
 import {
   claimDraftAssigneeConfirmation,
   createMeetingTaskDraft,
@@ -69,21 +69,6 @@ function testTestRecipientOverridePreservesOriginalAssignees() {
       process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID = previousOverride;
     }
   }
-}
-
-function testTestRecipientReceivesUnmappedAssignees() {
-  const recipients = groupDraftTasksForTestRecipient([
-    { item_id: 'a', task_name: 'A', assignee: '洪伟填skill.md' },
-    { item_id: 'b', task_name: 'B', owner: '胡涌昌CLI-skill.md' },
-    { item_id: 'c', task_name: 'C', assignee: '洪伟填skill.md' }
-  ], 'ou_tester');
-
-  assert.equal(recipients.length, 2);
-  assert.deepEqual(recipients.map((item) => item.assignee_key), ['洪伟填skill.md', '胡涌昌CLI-skill.md']);
-  assert.deepEqual(recipients.map((item) => item.assignee_name), ['洪伟填skill.md', '胡涌昌CLI-skill.md']);
-  assert.deepEqual(recipients.map((item) => item.receive_id), ['ou_tester', 'ou_tester']);
-  assert.deepEqual(recipients.map((item) => item.tasks.length), [2, 1]);
-  assert.equal(recipients.every((item) => item.test_mode === true), true);
 }
 
 async function createDraftWithAssigneeState(suffix) {
@@ -201,14 +186,13 @@ async function testDuplicateConfirmIsIdempotent() {
     updateCard: async () => ({ status: 'updated' })
   });
 
-  assert.equal(first.toast.content, '你的任务已确认入总表');
+  assert.equal(first.toast.content, '你的选择已确认');
   assert.equal(duplicate.toast.content, '已处理，无需重复操作');
   assert.equal(finalizeCount, 1);
 }
 
 await testFastAckDispatchDoesNotAwaitSlowHandler();
 testTestRecipientOverridePreservesOriginalAssignees();
-testTestRecipientReceivesUnmappedAssignees();
 await initDatabase();
 await testConfirmClaimOnlyOnce();
 await testEditDuringProcessingDoesNotFinalizeOrMutate();

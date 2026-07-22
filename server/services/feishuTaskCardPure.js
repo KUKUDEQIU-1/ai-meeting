@@ -133,6 +133,14 @@ function inputElement({ tag, label, value }) {
   };
 }
 
+function taskChoiceLabel(task) {
+  return task.task_choice === 'old_task_progress' ? '旧任务进展' : '新任务';
+}
+
+function progressSummaryOf(task) {
+  return firstString(task.progress_summary, task.comment, task.task_brief, task.task_description, taskNameOf(task));
+}
+
 function labelElement(content) {
   return {
     tag: 'markdown',
@@ -171,6 +179,28 @@ function taskActionSet({ draft, assignee, itemId }) {
         width: 'weighted',
         weight: 1,
         elements: [callbackButton({
+          name: `mark_new_${itemId}`,
+          text: '标记为新任务',
+          type: 'primary',
+          value: { action: 'mark_task_as_new', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+        })]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
+          name: `mark_old_${itemId}`,
+          text: '标记为旧任务进展',
+          type: 'default',
+          value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+        })]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
           name: `discard_${itemId}`,
           text: '丢弃',
           type: 'danger',
@@ -193,7 +223,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
       body: {
         elements: [{
           tag: 'markdown',
-          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的任务已确认并录入总任务表。`
+          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的选择已确认：新任务会录入总任务表，旧任务进展会保存为进展记录。`
         }]
       }
     };
@@ -214,14 +244,15 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
 
   elements.push({
     tag: 'markdown',
-    content: '**字段说明**\n- 任务名称：唯一可编辑字段\n- 完成日期/截止时间：只读展示\n- 备注：只读展示'
+    content: '**字段说明**\n- 每条事项请先选择：新任务，或旧任务进展\n- 新任务：可修改任务名称，确认后写入总任务表\n- 旧任务进展：可修改进展备注，确认后只保存进展，不新增任务'
   });
   elements.push({ tag: 'hr' });
 
   for (const task of tasks) {
     const itemId = String(task.item_id || '');
-    elements.push({ tag: 'markdown', content: `**任务 ${truncateText(itemId, 24)}**` });
+    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceLabel(task)}**` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '任务名称', value: taskNameOf(task) }));
+    elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '旧任务进展备注', value: progressSummaryOf(task) }));
     elements.push(labelElement(`**完成日期/截止时间：** ${truncateText(task.deadline || '待确认', 80)}`));
     if (String(task.comment || '').trim()) {
       elements.push(labelElement(`**备注：** ${truncateText(task.comment, 180)}`));
@@ -232,7 +263,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
 
   elements.push(callbackButton({
     name: 'confirm_tasks',
-    text: '确认我的任务入总表',
+    text: '按以上选择确认',
     type: 'primary',
     value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: assignee.assignee_key }
   }));
@@ -242,7 +273,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     config: { wide_screen_mode: true, update_multi: true },
     header: {
       template: 'blue',
-      title: { tag: 'plain_text', content: cardTitle({ assignee, label: '新增任务待确认' }) }
+      title: { tag: 'plain_text', content: cardTitle({ assignee, label: '任务归类待确认' }) }
     },
     body: {
       elements: [{
@@ -329,6 +360,7 @@ function extractAllowedFormValues(formValue, itemId) {
 
   return {
     task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
+    progress_summary: firstString(formValue?.[`progress_summary${suffix}`], formValue?.progress_summary),
   };
 }
 

@@ -17,6 +17,8 @@ function normalizeDraftTask(task, draftId, index) {
     ...task,
     item_id: String(task?.item_id || buildDraftItemId(draftId, index)),
     status: ['pending', 'confirmed', 'discarded'].includes(task?.status) ? task.status : 'pending',
+    task_choice: ['new_task', 'old_task_progress'].includes(task?.task_choice) ? task.task_choice : 'new_task',
+    progress_summary: String(task?.progress_summary || ''),
     updated_by: String(task?.updated_by || ''),
     updated_at: String(task?.updated_at || ''),
     confirmed_by: String(task?.confirmed_by || ''),
