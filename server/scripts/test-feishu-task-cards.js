@@ -83,6 +83,23 @@ function buttonType(card, name) {
   return '';
 }
 
+function buttonNames(card) {
+  const names = [];
+  const stack = [card];
+
+  while (stack.length) {
+    const item = stack.pop();
+    if (!item || typeof item !== 'object') continue;
+    if (item.tag === 'button' && item.name) names.push(item.name);
+    for (const value of Object.values(item)) {
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+
+  return names;
+}
+
 function testTaskChoiceButtonsShowCurrentSelection() {
   const draft = { id: 9, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
   const assignee = { assignee_key: '张三', assignee_name: '张三' };
@@ -109,6 +126,39 @@ function testTaskChoiceButtonsShowCurrentSelection() {
   assert.equal(buttonType(progressCard, 'mark_new_task_c'), 'default');
   assert.equal(buttonType(progressCard, 'mark_old_task_c'), 'primary');
   assert.match(JSON.stringify(unselectedCard), /当前选择：待选择/);
+}
+
+function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
+  const draft = { id: 11, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
+  const assignee = { assignee_key: '张三', assignee_name: '张三' };
+  const card = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{
+      item_id: 'discarded_task',
+      task_name: '已丢弃事项',
+      assignee: '张三',
+      status: 'discarded'
+    }, {
+      item_id: 'pending_task',
+      task_name: '待处理事项',
+      assignee: '张三',
+      status: 'pending'
+    }]
+  });
+  const names = buttonNames(card);
+  const text = JSON.stringify(card);
+
+  assert.match(text, /已丢弃/);
+  assert.equal(names.includes('edit_discarded_task'), false);
+  assert.equal(names.includes('mark_new_discarded_task'), false);
+  assert.equal(names.includes('mark_old_discarded_task'), false);
+  assert.equal(names.includes('discard_discarded_task'), false);
+  assert.equal(names.includes('edit_pending_task'), true);
+  assert.equal(names.includes('mark_new_pending_task'), true);
+  assert.equal(names.includes('mark_old_pending_task'), true);
+  assert.equal(names.includes('discard_pending_task'), true);
+  assert.equal(names.includes('confirm_tasks'), true);
 }
 
 function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
@@ -779,6 +829,7 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
 testTaskChoiceButtonsShowCurrentSelection();
+testDiscardedTaskDoesNotDisableRemainingTaskActions();
 testOldTaskMappingHintUsesMatchedNameOrEditableInput();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();

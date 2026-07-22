@@ -229,6 +229,10 @@ function taskActionSet({ draft, assignee, task }) {
   };
 }
 
+function discardedTaskSummary(task, itemId) {
+  return labelElement(`**事项 ${truncateText(itemId, 24)}｜已丢弃**\n${truncateText(taskNameOf(task), 120)}`);
+}
+
 export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false }) {
   if (terminal) {
     return {
@@ -269,6 +273,12 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
   for (const task of tasks) {
     const itemId = String(task.item_id || '');
     const matchedTaskName = matchedTaskNameOf(task);
+
+    if (task.status === 'discarded') {
+      elements.push(discardedTaskSummary(task, itemId));
+      elements.push({ tag: 'hr' });
+      continue;
+    }
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**` });
     elements.push(labelElement('**任务名称：** 如果这是新安排的任务，请在这里改任务标题；选择“新任务”后会写入总任务表。'));
