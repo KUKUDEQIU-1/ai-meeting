@@ -196,13 +196,19 @@ async function findMasterTaskRecordByName(item, tenantAccessToken) {
 
   if (!appToken || !tableId) return null;
 
-  const targetKey = buildTaskKey({ task_name: item.task_name });
-  if (!targetKey) return null;
+  const taskName = String(item.task_name || '').trim();
+  if (!taskName) return null;
 
   const records = await listBitableRecords({ appToken, tableId, tenantAccessToken });
-  const record = records.find((candidate) => buildTaskKey({ task_name: taskNameFieldValue(candidate.fields) }) === targetKey);
+  const record = records.find((candidate) => taskNameFieldValue(candidate.fields) === taskName);
 
   return record ? { appToken, tableId, recordId: record.record_id || record.id, taskName: taskNameFieldValue(record.fields) } : null;
+}
+
+function exactOldTaskNameError() {
+  const error = new Error('不能填写原表格没有的任务');
+  error.status = 400;
+  return error;
 }
 
 async function normalizeProgressFieldName({ appToken, tableId, tenantAccessToken, fields }) {
@@ -549,6 +555,43 @@ export async function updateTaskInstancesFromProgress(progressUpdates, context =
   const tenantAccessToken = await getTenantAccessToken();
 
   for (const { item, statusUpdate } of candidates) {
+    if (item.require_exact_task_name) {
+      try {
+        const masterRecord = await findMasterTaskRecordByName(item, tenantAccessToken);
+
+        if (!masterRecord?.recordId) throw exactOldTaskNameError();
+
+        const fields = await normalizeProgressFieldName({
+          appToken: masterRecord.appToken,
+          tableId: masterRecord.tableId,
+          tenantAccessToken,
+          fields: statusUpdate.fields
+        });
+
+        await updateBitableRecord({
+          appToken: masterRecord.appToken,
+          tableId: masterRecord.tableId,
+          tenantAccessToken,
+          recordId: masterRecord.recordId,
+          fields
+        });
+        updatedCount += 1;
+        console.log(`[Task Progress Link] updated master task=${masterRecord.taskName} status=${statusUpdate.status} progress=${item.task_name || ''} reason=exact_master_table_name_match`);
+        continue;
+      } catch (error) {
+        failed.push({
+          task_name: item.task_name || '',
+          matched_task_name: '',
+          status: statusUpdate.status,
+          table_id: masterTaskTableId(),
+          record_id: '',
+          reason: error.message
+        });
+        if (error.status === 400) throw error;
+        continue;
+      }
+    }
+
     const match = bestTaskInstanceMatch(item, rows, context);
 
     if (!match) {

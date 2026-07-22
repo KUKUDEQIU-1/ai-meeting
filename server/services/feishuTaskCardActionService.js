@@ -58,6 +58,7 @@ function progressUpdateFromTask(task, operatorOpenId, timestamp) {
     task_name: matchedTaskNameOf(task) || task.task_name || '未命名事项',
     assignee: assigneeNameOf(task),
     progress_type: 'existing_task_progress',
+    require_exact_task_name: true,
     progress_summary: task.progress_summary || task.comment || task.task_brief || task.task_description || task.task_name || '',
     evidence_quote: task.evidence_quote || task.comment || '负责人确认为旧任务进展',
     suggested_status: task.suggested_status || '进行中',

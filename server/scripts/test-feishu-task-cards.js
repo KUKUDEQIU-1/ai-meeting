@@ -187,9 +187,10 @@ function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
 
   assert.match(text, /系统匹配旧任务：/);
   assert.match(text, /AI会议助手接入总表/);
+  assert.match(text, /对应旧任务名称/);
   assert.match(text, /未识别到对应旧任务，请修改旧任务名称/);
   assert.match(text, /"name":"matched_task_name_manual_task"/);
-  assert.doesNotMatch(text, /"name":"matched_task_name_matched_task"/);
+  assert.match(text, /"name":"matched_task_name_matched_task"/);
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -742,15 +743,99 @@ async function testOldProgressConfirmFailsWhenMasterTaskIsMissing() {
           }
         }
       }, { updateCard: async () => ({ status: 'updated' }) }),
-      /未找到可更新的旧任务/
+      /不能填写原表格没有的任务/
     );
 
     const state = await getDraftAssigneeState(draft.id, '张三', 'tasks');
     const progressRows = await all('SELECT * FROM getnote_task_progress WHERE note_id = ?', [sourceId]);
 
     assert.equal(state.confirmation_status, 'pending');
-    assert.match(state.confirmation_error, /未找到可更新的旧任务/);
+    assert.match(state.confirmation_error, /不能填写原表格没有的任务/);
     assert.equal(progressRows.length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousMasterTableId;
+    process.env.FEISHU_MASTER_TASK_APP_TOKEN = previousMasterAppToken;
+  }
+}
+
+async function testOldProgressConfirmRejectsTaskNameOutsideMasterTable() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+  const sourceId = `outside-master-old-progress-${Date.now()}`;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'outside_old_1', task_name: 'AI会议助手历史任务扩展', matched_task_name: 'AI会议助手历史任务扩展', task_choice: 'old_task_progress', assignee: '张三', progress_summary: '推进进展' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_outside_old',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
+  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'app_master_exact';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_master_exact';
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/records')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ record_id: 'rec_exact_1', fields: { 事务需求名称: 'AI会议助手历史任务' } }] }
+      }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    await assert.rejects(
+      () => handleFeishuCardAction({
+        header: { event_id: 'evt_confirm_outside_old' },
+        event: {
+          operator: { open_id: 'ou_actor' },
+          action: {
+            value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
+          }
+        }
+      }, { updateCard: async () => ({ status: 'updated' }) }),
+      /不能填写原表格没有的任务/
+    );
   } finally {
     globalThis.fetch = previousFetch;
     process.env.FEISHU_APP_ID = previousAppId;
@@ -1198,6 +1283,7 @@ await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
+await testOldProgressConfirmRejectsTaskNameOutsideMasterTable();
 await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();
 await testProgressFinalizerRejectsUnmatchedProgressWithoutCreatingTasks();

@@ -145,7 +145,7 @@ export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, ass
   });
 
   if (linkedProgressResult.updated_count === 0) {
-    const error = new Error('未找到可更新的旧任务，请改选新任务或填写总表中已存在的旧任务名称');
+    const error = new Error(linkedProgressResult.failed?.[0]?.reason || '未找到可更新的旧任务，请改选新任务或填写总表中已存在的旧任务名称');
     error.status = 400;
     throw error;
   }
