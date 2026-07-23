@@ -2,7 +2,9 @@ const ACTION_VERBS = ['完成', '推进', '处理', '修复', '回归', '准备'
 const DELIVERY_ACTIONS = ['完成', '开发', '测试', '部署', '接入', '跑通', '修复', '推送', '上线', '验收', '发布', '发版', '交付', '输出', '配置', '搭建', '适配'];
 const DELIVERABLE_WORDS = ['方案', '文档', '代码', '测试', '验收', '上线', '发布', '配置', '规则', '流程', '报告', '清单', '接口', '页面', '功能', '模块', '链路', '版本', 'MVP', '收尾', '分享', '搭建', '接入', '开发', '部署', '适配'];
 const GENERIC_OBJECTS = ['版本', '活动', '品类', '模块', '项目', '工具', '表格', '功能', '页面', '问题', '需求', '流程', '测试', '上线', '验收', '事项'];
-const BUSINESS_TERMS = ['SKU模板重构', '版本12', '版本13', '裂变活动', '活动发布环境', '易签宝', '短信业务', '短信日志脱敏', '小程序端', '小程序活动页', '小程序首页', '小程序P3', 'Get笔记', '拍立得', '半自动化托管', '飞书服务接入', '中间层', '项目记忆', 'Skill', '租安盾', '砖盾', '演唱会', '演唱会抓取', '落地页', '价格抓取', '订单撮合', '订单撮合工具', '日志审计', '日志审计映射表', '会议纪要工具', 'AI会议助手', 'Agent监控', 'Agent测试', 'Agent', 'agent', 'ERP', '都来租ERP', '都来助', '一千宝', '一签宝', '风控', '生图API', 'Sub API', '生图Sub API', '企微', '打卡', 'OCR', '视频分析', 'NTA', 'QA自动开发工具', '商务部订单', '商户订单'];
+const BUSINESS_TERMS = ['SKU模板重构', '版本12', '版本13', '裂变活动', '活动发布环境', '易签宝', '短信业务', '短信日志脱敏', '小程序端', '小程序活动页', '小程序首页', '小程序P3', 'Get笔记', '拍立得', '半自动化托管', '飞书服务接入', '中间层', '项目记忆', 'Skill', '租安盾', '砖盾', '演唱会', '演唱会抓取', '落地页', '价格抓取', '订单撮合', '订单撮合工具', '日志审计', '日志审计映射表', '会议纪要工具', 'AI智能会议助手', 'AI会议助手', 'AI智能助手', '会议助手', 'Agent监控', 'Agent测试', 'Agent', 'agent', 'ERP', '都来租ERP', '都来助', '一千宝', '一签宝', '风控', '生图API', 'Sub API', '生图Sub API', '企微', '打卡', 'OCR', '视频分析', 'NTA', 'QA自动开发工具', '商务部订单', '商户订单'];
+const ACTION_KEYWORDS = ['修复', '更新', '收尾', '部署', '验收', '发布', '配置', '补充', '接入', '优化', '回归', '测试', '调研', '开发', '完善', '改良', '抓取'];
+const MATCH_STOP_WORDS = ['继续', '进行', '处理', '相关', '任务', '需求', '和', '并', '及', '与', '的', '了', '一些', '新的', '内容'];
 
 function compact(value) {
   return String(value || '').replace(/[\s\r\n\t，。；：、“”‘’！？,.!?;:()（）【】\[\]{}《》<>/\\|-]/g, '').trim();
@@ -19,6 +21,58 @@ export function normalizeTaskNameForCompare(value) {
     .replace(/仓库/g, '库')
     .replace(/线上功能验收/g, '功能线上验收')
     .replace(/商品展示位/g, '板块展示位');
+}
+
+function removeMatchStopWords(value) {
+  let text = normalizeTaskNameForCompare(value);
+
+  for (const word of MATCH_STOP_WORDS) {
+    text = text.replaceAll(word, '');
+  }
+
+  return text;
+}
+
+function actionKeywordsIn(value) {
+  const text = normalizeTaskNameForCompare(value);
+  return ACTION_KEYWORDS.filter((word) => text.includes(word));
+}
+
+function keywordTokens(value) {
+  const normalized = removeMatchStopWords(value);
+  const tokens = new Set(actionKeywordsIn(value));
+  const terms = businessTermsIn(value).map((term) => normalizeTaskNameForCompare(term));
+
+  for (const term of terms) {
+    if (term) tokens.add(term);
+  }
+
+  if (normalized.includes('bug')) tokens.add('bug');
+  if (normalized.includes('内容')) tokens.add('内容');
+
+  return tokens;
+}
+
+function tokenOverlap(left, right) {
+  if (!left.size || !right.size) return 0;
+
+  const intersection = [...left].filter((item) => right.has(item)).length;
+  return intersection / Math.max(left.size, right.size);
+}
+
+function isKeywordActionDuplicate(left, right) {
+  const leftTokens = keywordTokens(left);
+  const rightTokens = keywordTokens(right);
+  const actionOverlap = tokenOverlap(new Set(actionKeywordsIn(left)), new Set(actionKeywordsIn(right)));
+  const keywordOverlap = tokenOverlap(leftTokens, rightTokens);
+  const leftNormalized = removeMatchStopWords(left);
+  const rightNormalized = removeMatchStopWords(right);
+
+  if (leftNormalized.length >= 8 && rightNormalized.length >= 8 && (leftNormalized.includes(rightNormalized) || rightNormalized.includes(leftNormalized))) {
+    return true;
+  }
+
+  return actionOverlap >= 0.5 && keywordOverlap >= 0.6;
 }
 
 function textOf(task) {
@@ -44,7 +98,8 @@ function firstActionIn(value) {
 }
 
 function businessTermsIn(value) {
-  return BUSINESS_TERMS.filter((word) => String(value || '').includes(word));
+  const compactValue = compact(value);
+  return BUSINESS_TERMS.filter((word) => compactValue.includes(compact(word)));
 }
 
 function hasAction(value) {
@@ -133,7 +188,7 @@ function buildImprovedName(task) {
 
 export function normalizeVerbObjectTaskName(value, context = '') {
   const original = String(value || '').replace(/\s+/g, ' ').trim();
-  const noisyTitle = /我|今天|这边|工作|任务|还是|[。；，,.]/.test(original);
+  const noisyTitle = /我|今天|这边|工作|任务|还是|继续|工具|那个|应用|[。；，,.]/.test(original);
 
   if (!noisyTitle) return original;
 
@@ -163,13 +218,18 @@ export function normalizeVerbObjectTaskName(value, context = '') {
   }
 
   const terms = businessTermsIn(`${object} ${context}`);
+  const primaryTerm = terms[0] || '';
+  if (primaryTerm && compact(object).includes(compact(primaryTerm))) {
+    object = primaryTerm;
+  }
   if ((!object || object === '助手' || object.length <= 2 || onlyGenericObject(object)) && terms[0]) {
     object = terms[0];
   }
   if (object === '助手') object = 'AI会议助手';
   if (!object) return original;
 
-  const title = `${verb}${object}`.replace(/\s+/g, '');
+  const titleVerb = verb === '继续收尾' ? '收尾' : verb;
+  const title = `${titleVerb}${object}`.replace(/\s+/g, '');
   return title.length > 40 ? `${title.slice(0, 39)}…` : title;
 }
 
@@ -266,6 +326,10 @@ export function findDuplicateTaskName(taskName, existingRecords = []) {
 
     if ((normalized.length >= 8 && existingNormalized.includes(normalized)) || (existingNormalized.length >= 8 && normalized.includes(existingNormalized))) {
       return { record, task_name: existingName, similarity: 0.95, reason: 'contained_duplicate' };
+    }
+
+    if (isKeywordActionDuplicate(taskName, existingName)) {
+      return { record, task_name: existingName, similarity: 0.9, reason: 'keyword_action_duplicate' };
     }
 
     const similarity = taskNameSimilarity(normalized, existingNormalized);

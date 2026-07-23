@@ -19,7 +19,7 @@ import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
 import { dispatchDraftTaskCards } from '../services/feishuTaskCardService.js';
-import { normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
+import { findDuplicateTaskName, normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
 
 function testMappingAndGrouping() {
   const assigneeMap = parseAssigneeMap(JSON.stringify({ 张三: 'ou_zhang', '李 四': { open_id: 'ou_li' } }));
@@ -333,8 +333,24 @@ function testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle() {
   );
   assert.equal(
     normalizeVerbObjectTaskName('我今天的任务就是，继续收尾 AI 智能会议助手的工具应用，测试后接入总表。'),
-    '继续收尾AI智能会议助手的工具应用'
+    '收尾AI智能会议助手'
   );
+}
+
+function testSpokenTaskNameRemovesFillerAfterBusinessObject() {
+  assert.equal(
+    normalizeVerbObjectTaskName('继续收尾 AI 智能会议助手的工具的那个应用', 'AI智能会议助手'),
+    '收尾AI智能会议助手'
+  );
+}
+
+function testReorderedActionObjectTaskNamesMatchAsDuplicate() {
+  const duplicate = findDuplicateTaskName('AI智能助手Bug修复和内容更新', [{
+    fields: { 事务需求名称: '修复AI智能助手Bug并更新内容' }
+  }]);
+
+  assert.equal(duplicate?.task_name, '修复AI智能助手Bug并更新内容');
+  assert.equal(duplicate?.reason, 'keyword_action_duplicate');
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -2295,6 +2311,8 @@ testAssignedProgressUpdateGetsEditableChoiceCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle();
+testSpokenTaskNameRemovesFillerAfterBusinessObject();
+testReorderedActionObjectTaskNamesMatchAsDuplicate();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();
