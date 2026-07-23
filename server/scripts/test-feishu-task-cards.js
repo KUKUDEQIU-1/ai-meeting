@@ -145,6 +145,8 @@ function testTaskChoiceButtonsShowCurrentSelection() {
   assert.equal(buttonType(progressCard, 'mark_new_task_c'), 'default');
   assert.equal(buttonType(progressCard, 'mark_old_task_c'), 'primary');
   assert.match(JSON.stringify(unselectedCard), /当前选择：待选择/);
+  assert.match(JSON.stringify(newTaskCard), /✅ 已选择：新任务/);
+  assert.match(JSON.stringify(progressCard), /✅ 已选择：旧任务进展/);
 }
 
 function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
@@ -208,6 +210,63 @@ function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
   assert.match(text, /"name":"matched_task_name_manual_task"/);
   assert.match(text, /"name":"matched_task_name_matched_task"/);
   assert.equal(inputDefaultValue(card, 'matched_task_name_manual_task'), '');
+}
+
+function testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription() {
+  const card = buildAssigneeTaskCard({
+    draft: { id: 12, meeting_title: '例会', meeting_source: '飞书会议智能纪要' },
+    assignee: { assignee_key: '简学勤', assignee_name: '简学勤' },
+    tasks: [{
+      item_id: 'generated_old_hint',
+      task_name: '简学勤今日工作生成',
+      task_brief: '简学勤今日工作生成',
+      task_description: '简学勤今日工作确认',
+      assignee: '简学勤',
+      task_choice: 'old_task_progress'
+    }]
+  });
+
+  assert.equal(inputDefaultValue(card, 'matched_task_name_generated_old_hint'), '');
+  assert.doesNotMatch(JSON.stringify(card), /系统匹配旧任务：简学勤今日工作/);
+}
+
+function testFailureCardShowsConfirmationError() {
+  const card = buildAssigneeTaskCard({
+    draft: { id: 13, meeting_title: '例会', confirmation_error: '不能填写原表格没有的任务' },
+    assignee: { assignee_key: '张三', assignee_name: '张三' },
+    tasks: [{ item_id: 'task_a', task_name: '任务A', assignee: '张三' }]
+  });
+  const text = JSON.stringify(card);
+
+  assert.equal(card.header.template, 'red');
+  assert.match(text, /会议任务确认失败/);
+  assert.match(text, /不能填写原表格没有的任务/);
+  assert.match(text, /请修改后重新确认/);
+}
+
+function testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence() {
+  const result = filterActionableTasks([{
+    task_name: '简学勤今日工作生成',
+    task_brief: '今日工作',
+    task_description: '今日工作',
+    evidence_quote: '今天我这边同步一下情况',
+    assignee: '简学勤',
+    task_type: 'action_item',
+    item_type: 'today_new_task',
+    should_create_task: true
+  }, {
+    task_name: '收尾优化AI会议助手应用',
+    task_brief: '继续收尾 AI 智能会议助手工具应用',
+    task_description: '继续收尾 AI 智能会议助手工具应用，根据大家想法继续优化功能。',
+    evidence_quote: '我今天的任务就是，继续收尾 AI 智能会议助手的工具的那个应用，根据大家的想法，再继续优化到它的功能',
+    assignee: '简学勤',
+    task_type: 'action_item',
+    item_type: 'today_new_task',
+    should_create_task: true
+  }]);
+
+  assert.deepEqual(result.tasks.map((item) => item.task_name), ['收尾优化AI会议助手应用']);
+  assert.equal(result.removed.some((item) => item.reason === 'assignee_only_daily_task_name'), true);
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -446,6 +505,24 @@ function testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword() {
   assert.match(cardText, /标记为新任务/);
   assert.match(cardText, /标记为旧任务进展/);
   assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
+}
+
+function testGenericSpeakerCoverageDoesNotCreateAssigneeOnlyTask() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [],
+    progressUpdates: [],
+    previousDraft: null,
+    segments: [{
+      speaker: '简学勤',
+      speaker_status: 'provided',
+      speaker_confidence: 0.8,
+      time: '00:06:45',
+      text: '我今天这边先同步一下情况，后面继续看。'
+    }]
+  });
+
+  assert.equal(repaired.tasks.length, 0);
+  assert.equal(repaired.progressUpdates.length, 0);
 }
 
 function testReliableSpeakerProgressKeepsAssigneeForPrivateCard() {
@@ -692,6 +769,202 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
   assert.equal(confirmedDraft.progress_updates[0].task_name, 'AI会议助手历史任务');
   assert.equal(confirmedDraft.progress_updates[0].progress_summary, '今天已完成接入测试');
   assert.equal(confirmedDraft.progress_updates[0].status, 'confirmed');
+}
+
+async function testValidNewTaskConfirmationShowsTerminalFeedback() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `valid-new-task-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'valid_new_1', task_name: '收尾优化AI会议助手应用', assignee: '张三', progress_summary: '继续优化' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_valid_new',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  let finalizedNewTasks = false;
+  let terminalUpdated = false;
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_valid_new_confirm' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' },
+        form_value: {
+          task_name_valid_new_1: '收尾优化AI会议助手应用',
+          progress_summary_valid_new_1: '继续优化'
+        }
+      }
+    }
+  }, {
+    finalizeAssignee: async ({ draftId, assigneeKey }) => {
+      finalizedNewTasks = draftId === draft.id && assigneeKey === '张三';
+    },
+    updateCard: async ({ terminal }) => {
+      terminalUpdated = terminal === true;
+      return { status: 'updated' };
+    }
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+  const state = await getDraftAssigneeState(draft.id, '张三', 'tasks');
+
+  assert.equal(response.toast.content, '你的选择已确认');
+  assert.equal(finalizedNewTasks, true);
+  assert.equal(terminalUpdated, true);
+  assert.equal(updatedDraft.draft_tasks[0].status, 'confirmed');
+  assert.equal(state.confirmation_status, 'confirmed');
+}
+
+async function testValidOldProgressConfirmationUsesMasterCandidateOnly() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `valid-old-progress-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'valid_old_1', task_name: '今日继续推进', assignee: '张三', progress_summary: '已完成接入总表', task_choice: 'old_task_progress', matched_task_name: 'AI会议助手历史任务' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_valid_old',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  let finalizedNewTasks = false;
+  let finalizedProgress = false;
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_valid_old_confirm' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
+      }
+    }
+  }, {
+    masterTaskNameExists: async (name) => name === 'AI会议助手历史任务',
+    finalizeAssignee: async () => {
+      finalizedNewTasks = true;
+    },
+    finalizeProgress: async ({ draftId, assigneeKey }) => {
+      finalizedProgress = draftId === draft.id && assigneeKey === '张三';
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '旧任务进展已确认');
+  assert.equal(finalizedNewTasks, false);
+  assert.equal(finalizedProgress, true);
+  assert.equal(updatedDraft.draft_tasks[0].status, 'discarded');
+  assert.equal(updatedDraft.progress_updates[0].task_name, 'AI会议助手历史任务');
+}
+
+async function testInvalidDirectOldNameInputRollsBackAndUpdatesFailureCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `invalid-old-rollback-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'invalid_old_1', task_name: '简学勤今日工作生成', assignee: '张三', progress_summary: '推进进展' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_invalid_old',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  let finalizeCount = 0;
+  let failureCardUpdates = 0;
+  await assert.rejects(
+    () => handleFeishuCardAction({
+      header: { event_id: 'evt_invalid_old_rollback' },
+      event: {
+        operator: { open_id: 'ou_actor' },
+        action: {
+          value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' },
+          form_value: {
+            task_name_invalid_old_1: '简学勤今日工作生成',
+            matched_task_name_invalid_old_1: '不存在的旧任务',
+            progress_summary_invalid_old_1: '推进进展'
+          }
+        }
+      }
+    }, {
+      masterTaskNameExists: async () => false,
+      finalizeAssignee: async () => { finalizeCount += 1; },
+      finalizeProgress: async () => { finalizeCount += 1; },
+      updateCard: async ({ terminal }) => {
+        assert.equal(terminal, undefined);
+        failureCardUpdates += 1;
+        return { status: 'updated' };
+      }
+    }),
+    (error) => error instanceof Error && error.message === '不能填写原表格没有的任务'
+  );
+
+  const state = await getDraftAssigneeState(draft.id, '张三', 'tasks');
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(finalizeCount, 0);
+  assert.equal(failureCardUpdates, 1);
+  assert.equal(state.confirmation_status, 'pending');
+  assert.equal(state.confirmation_error, '不能填写原表格没有的任务');
+  assert.equal(updatedDraft.draft_tasks[0].status, 'pending');
+  assert.equal(updatedDraft.draft_tasks[0].matched_task_name, '');
+  assert.equal(updatedDraft.progress_updates.length, 0);
 }
 
 async function testOldProgressConfirmFailsWhenMasterTaskIsMissing() {
@@ -1624,6 +1897,8 @@ testCardPayloadContainsOnlyOwnedTasks();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
 testOldTaskMappingHintUsesMatchedNameOrEditableInput();
+testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
+testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();
 testConfirmedManualProgressBuildsBitableProgressFields();
@@ -1633,12 +1908,17 @@ testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
 testMissingDailySpeakerGetsFallbackConfirmationCardItem();
 testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword();
+testGenericSpeakerCoverageDoesNotCreateAssigneeOnlyTask();
 testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
 testAssignedProgressUpdateGetsEditableChoiceCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
+testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
+await testValidNewTaskConfirmationShowsTerminalFeedback();
+await testValidOldProgressConfirmationUsesMasterCandidateOnly();
+await testInvalidDirectOldNameInputRollsBackAndUpdatesFailureCard();
 await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
 await testOldProgressConfirmRejectsTaskNameOutsideMasterTable();
 await testFinalConfirmUsesCurrentOldTaskNameInput();

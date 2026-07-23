@@ -50,7 +50,7 @@ function validateEditableValues(values) {
 }
 
 function matchedTaskNameOf(task) {
-  return task.matched_task_name || task.matched_history?.task_name || task.matched_history?.task_brief || task.matched_history?.task_description || task.matched_first_task_name || '';
+  return task.matched_task_name || task.matched_history?.task_name || task.matched_history_task_name || task.matched_first_task_name || '';
 }
 
 function formValueForItem(formValues, field, itemId) {
@@ -87,8 +87,22 @@ function taskChoiceFromCurrentForm(task, formValues) {
 
 async function assertMasterTaskNamesExist(tasks, dependencies, context) {
   for (const task of tasks) {
+    if (!matchedTaskNameOf(task)) reject('不能填写原表格没有的任务', 400);
     const exists = await dependencies.masterTaskNameExists(matchedTaskNameOf(task), context);
     if (!exists) reject('不能填写原表格没有的任务', 400);
+  }
+}
+
+async function updateCardAfterConfirmationFailure(dependencies, parsed, state) {
+  const result = await dependencies.updateCard({
+    messageId: parsed.message_id,
+    draftId: parsed.draft_id,
+    assigneeKey: state.assignee_key,
+    cardKind: state.card_kind
+  });
+
+  if (result?.status === 'skipped') {
+    console.warn(`[Feishu Card Action] failure card update skipped draft_id=${parsed.draft_id} assignee=${state.assignee_key} reason=${result.reason || ''}`);
   }
 }
 
@@ -309,6 +323,11 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
       errorMessage: error instanceof Error ? error.message : String(error),
       callbackId: parsed.callback_id
     });
+    try {
+      await updateCardAfterConfirmationFailure(dependencies, parsed, state);
+    } catch (cardError) {
+      console.warn(`[Feishu Card Action] failure card update failed draft_id=${parsed.draft_id} assignee=${state.assignee_key} error=${cardError instanceof Error ? cardError.message : String(cardError)}`);
+    }
     throw error;
   }
 }
@@ -352,6 +371,11 @@ async function confirmAssigneeProgress(parsed, state, dependencies) {
       errorMessage: error instanceof Error ? error.message : String(error),
       callbackId: parsed.callback_id
     });
+    try {
+      await updateCardAfterConfirmationFailure(dependencies, parsed, state);
+    } catch (cardError) {
+      console.warn(`[Feishu Card Action] failure progress card update failed draft_id=${parsed.draft_id} assignee=${state.assignee_key} error=${cardError instanceof Error ? cardError.message : String(cardError)}`);
+    }
     throw error;
   }
 }

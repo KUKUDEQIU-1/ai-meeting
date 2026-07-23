@@ -191,11 +191,57 @@ async function testDuplicateConfirmIsIdempotent() {
   assert.equal(finalizeCount, 1);
 }
 
+async function testBackgroundFailureStoresErrorAndKeepsFastAck() {
+  const draft = await createDraftWithAssigneeState('background-failure');
+  const dispatched = [];
+  const errors = [];
+  const dispatcher = createFeishuCardActionDispatcher({
+    dispatch: (task) => {
+      dispatched.push(task);
+    },
+    onError: (error) => {
+      errors.push(error);
+    }
+  });
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'confirm_assignee_tasks',
+    draftId: draft.id,
+    eventId: 'evt_background_failure'
+  }));
+  let failureCardUpdates = 0;
+
+  const ack = dispatcher(prepared.response, async () => {
+    await processPreparedFeishuCardAction(prepared, {
+      finalizeAssignee: async () => {
+        throw new Error('后台入表失败');
+      },
+      updateCard: async ({ terminal }) => {
+        assert.equal(terminal, undefined);
+        failureCardUpdates += 1;
+        return { status: 'updated' };
+      }
+    });
+  });
+
+  assert.equal(ack.toast.content, '正在处理');
+  assert.equal(dispatched.length, 1);
+  await dispatched[0]();
+
+  const state = await getDraftAssigneeState(draft.id, '张三');
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /后台入表失败/);
+  assert.equal(failureCardUpdates, 1);
+  assert.equal(state.confirmation_status, 'pending');
+  assert.equal(state.confirmation_error, '后台入表失败');
+}
+
 await testFastAckDispatchDoesNotAwaitSlowHandler();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();
 await testConfirmClaimOnlyOnce();
 await testEditDuringProcessingDoesNotFinalizeOrMutate();
 await testDuplicateConfirmIsIdempotent();
+await testBackgroundFailureStoresErrorAndKeepsFastAck();
 
 console.log('feishu card callback fast-ack tests passed');

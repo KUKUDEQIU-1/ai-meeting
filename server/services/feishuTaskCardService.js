@@ -77,7 +77,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     receive_id_type: state.receive_id_type,
     receive_id: state.receive_id
   };
-  const card = buildCardForKind({ cardKind: state.card_kind || cardKind, draft, assignee, terminal });
+  const card = buildCardForKind({ cardKind: state.card_kind || cardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal });
   const tenantAccessToken = await getTenantAccessToken();
   const targetMessageId = messageId || state.card_message_id;
   const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages/${encodeURIComponent(targetMessageId)}`;

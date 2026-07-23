@@ -144,6 +144,12 @@ function taskChoiceTitle(task) {
   return '待选择';
 }
 
+function taskChoiceStatusText(task) {
+  if (task.task_choice === 'new_task') return '✅ 已选择：新任务';
+  if (task.task_choice === 'old_task_progress') return '✅ 已选择：旧任务进展';
+  return '⚠️ 尚未选择新任务或旧任务进展';
+}
+
 function progressSummaryOf(task) {
   return firstString(task.progress_summary, task.comment, task.task_brief, task.task_description, taskNameOf(task));
 }
@@ -152,8 +158,7 @@ function matchedTaskNameOf(task) {
   return firstString(
     task.matched_task_name,
     task.matched_history?.task_name,
-    task.matched_history?.task_brief,
-    task.matched_history?.task_description,
+    task.matched_history_task_name,
     task.matched_first_task_name
   );
 }
@@ -251,6 +256,23 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     };
   }
 
+  if (draft?.confirmation_error) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: {
+        template: 'red',
+        title: { tag: 'plain_text', content: '会议任务确认失败' }
+      },
+      body: {
+        elements: [{
+          tag: 'markdown',
+          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n${truncateText(draft.confirmation_error, 500)}\n\n请修改后重新确认。`
+        }]
+      }
+    };
+  }
+
   const elements = [
     {
       tag: 'markdown',
@@ -280,7 +302,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
       continue;
     }
 
-    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**` });
+    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**\n${taskChoiceStatusText(task)}` });
     elements.push(labelElement('**任务名称：** 如果这是新安排的任务，请在这里改任务标题；选择“新任务”后会写入总任务表。'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '任务名称', value: taskNameOf(task) }));
     elements.push(labelElement('**旧任务进展备注：** 如果这是以前任务的后续，请在这里写本次进展；选择“旧任务进展”后不会新增任务。'));
