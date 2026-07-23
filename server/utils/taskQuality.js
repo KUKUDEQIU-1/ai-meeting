@@ -77,6 +77,10 @@ function isKeywordActionDuplicate(left, right) {
   const rightTokens = keywordTokens(right);
   const actionOverlap = tokenOverlap(new Set(actionKeywordsIn(left)), new Set(actionKeywordsIn(right)));
   const keywordOverlap = tokenOverlap(leftTokens, rightTokens);
+  const actionWords = new Set(ACTION_KEYWORDS);
+  const leftObjectTokens = new Set([...leftTokens].filter((item) => !actionWords.has(item)));
+  const rightObjectTokens = new Set([...rightTokens].filter((item) => !actionWords.has(item)));
+  const objectOverlap = tokenOverlap(leftObjectTokens, rightObjectTokens);
   const leftNormalized = removeMatchStopWords(left);
   const rightNormalized = removeMatchStopWords(right);
 
@@ -84,7 +88,7 @@ function isKeywordActionDuplicate(left, right) {
     return true;
   }
 
-  return actionOverlap >= 0.5 && keywordOverlap >= 0.6;
+  return actionOverlap >= 0.5 && keywordOverlap >= 0.6 && objectOverlap >= 0.5;
 }
 
 function textOf(task) {

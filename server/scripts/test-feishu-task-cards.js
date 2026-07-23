@@ -367,6 +367,14 @@ function testRichTextBitableTaskNameMatchesAsDuplicate() {
   assert.equal(duplicate?.reason, 'keyword_action_duplicate');
 }
 
+function testActionOnlyOverlapDoesNotMatchUnrelatedMasterTask() {
+  const duplicate = findDuplicateTaskName('版本16 RTP管控功能开发准备', [{
+    fields: { 事务需求名称: '提交NLP开发文档' }
+  }]);
+
+  assert.equal(duplicate, null);
+}
+
 function testMasterTableDuplicateMarksDraftTaskAsOldProgress() {
   const [task] = markDraftTasksMatchedInMasterTable([{
     item_id: 'duplicate_master_1',
@@ -2362,6 +2370,7 @@ testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle();
 testSpokenTaskNameRemovesFillerAfterBusinessObject();
 testReorderedActionObjectTaskNamesMatchAsDuplicate();
 testRichTextBitableTaskNameMatchesAsDuplicate();
+testActionOnlyOverlapDoesNotMatchUnrelatedMasterTask();
 testMasterTableDuplicateMarksDraftTaskAsOldProgress();
 testMasterTableDuplicateFillsMatchedNameForExistingProgress();
 await initDatabase();
