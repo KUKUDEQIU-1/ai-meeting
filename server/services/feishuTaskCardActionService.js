@@ -81,6 +81,7 @@ function taskChoiceFromCurrentForm(task, formValues) {
     ? formValueForItem(formValues, 'matched_task_name', itemId)
     : '';
 
+  if (task.task_choice === 'new_task') return 'new_task';
   if (submittedOldTaskName) return 'old_task_progress';
   return task.task_choice === 'old_task_progress' ? 'old_task_progress' : 'new_task';
 }

@@ -1385,6 +1385,79 @@ async function testFinalConfirmInfersOldProgressFromOldTaskNameInput() {
   }
 }
 
+async function testFinalConfirmHonorsExplicitNewChoiceOverOldTaskNameInput() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `explicit-new-over-old-input-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{
+      item_id: 'explicit_new_1',
+      task_name: '明确新任务',
+      assignee: '张三',
+      task_choice: 'new_task',
+      matched_task_name: '不存在的旧任务名',
+      progress_summary: '旧输入残留'
+    }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_explicit_new',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  let finalizedNewTasks = false;
+  let finalizedProgress = false;
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_explicit_new_over_old_input' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' },
+        form_value: {
+          task_name_explicit_new_1: '明确新任务',
+          matched_task_name_explicit_new_1: '不存在的旧任务名',
+          progress_summary_explicit_new_1: '旧输入残留'
+        }
+      }
+    }
+  }, {
+    finalizeAssignee: async () => {
+      finalizedNewTasks = true;
+      return { status: 'synced', created_count: 1 };
+    },
+    finalizeProgress: async () => {
+      finalizedProgress = true;
+    },
+    masterTaskNameExists: async () => false,
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const confirmedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '你的选择已确认');
+  assert.equal(finalizedNewTasks, true);
+  assert.equal(finalizedProgress, false);
+  assert.equal(confirmedDraft.draft_tasks[0].status, 'confirmed');
+  assert.equal(confirmedDraft.draft_tasks[0].task_choice, 'new_task');
+}
+
 async function testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -1970,6 +2043,7 @@ await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
 await testOldProgressConfirmRejectsTaskNameOutsideMasterTable();
 await testFinalConfirmUsesCurrentOldTaskNameInput();
 await testFinalConfirmInfersOldProgressFromOldTaskNameInput();
+await testFinalConfirmHonorsExplicitNewChoiceOverOldTaskNameInput();
 await testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation();
 await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();
