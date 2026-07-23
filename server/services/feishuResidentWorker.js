@@ -1,5 +1,5 @@
-import { syncConfiguredFeishuDocxNotes } from './feishuDocxNoteImportService.js';
 import { feishuScanCoordinator } from './feishuScanCoordinator.js';
+import { syncFeishuWikiDocxNotes } from './feishuWikiDocxImportService.js';
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 const RETRY_DELAY_MS = 60 * 1000;
@@ -28,7 +28,7 @@ function defaultScheduler(task, delayMs) {
 function summarizeResult(result) {
   return {
     status: result?.status || (result?.success === false ? 'failed' : 'success'),
-    scan_source: result?.scan_source || 'feishu_docx_library',
+    scan_source: result?.scan_source || 'feishu_wiki_docx_library',
     imported_count: Array.isArray(result?.imported) ? result.imported.length : 0,
     skipped_count: Array.isArray(result?.skipped) ? result.skipped.length : 0,
     failed_count: Array.isArray(result?.failed) ? result.failed.length : 0
@@ -38,6 +38,7 @@ function summarizeResult(result) {
 function summarizeFailure(error) {
   return {
     status: 'failed',
+    scan_source: 'feishu_wiki_docx_library',
     imported_count: 0,
     skipped_count: 0,
     failed_count: 1,
@@ -56,7 +57,7 @@ export function createFeishuResidentWorker({
   const requireTestRecipient = envEnabled(env, 'FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT', true);
   const hasTestRecipient = Boolean(String(env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim());
   const intervalMinutes = envPositiveNumber(env, 'FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES', DEFAULT_INTERVAL_MINUTES);
-  const docxScan = scans.docx || ((options) => syncConfiguredFeishuDocxNotes(options));
+  const wikiScan = scans.wiki || ((options) => syncFeishuWikiDocxNotes(options));
   let running = false;
   let stopped = false;
   let timer = null;
@@ -78,7 +79,7 @@ export function createFeishuResidentWorker({
       require_test_recipient: requireTestRecipient,
       test_recipient_configured: hasTestRecipient,
       interval_minutes: intervalMinutes,
-      scan_source: 'feishu_docx_library',
+      scan_source: 'feishu_wiki_docx_library',
       last_cycle: lastCycle,
       coordinator: coordinator.snapshot()
     };
@@ -110,14 +111,14 @@ export function createFeishuResidentWorker({
     const startedAt = nowIso();
 
     try {
-      const docx = await runScan('docx', () => docxScan({}));
-      const failed = docx.status === 'failed';
+      const wiki = await runScan('wiki', () => wikiScan({}));
+      const failed = wiki.status === 'failed';
       lastCycle = {
         started_at: startedAt,
         finished_at: nowIso(),
         status: failed ? 'partial_failed' : 'success',
-        scan_source: docx.scan_source,
-        docx
+        scan_source: wiki.scan_source,
+        wiki
       };
       status = 'idle';
       scheduleNext(failed ? RETRY_DELAY_MS : intervalMinutes * 60 * 1000);
