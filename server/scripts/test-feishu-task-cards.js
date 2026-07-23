@@ -738,6 +738,41 @@ async function testEditAndDiscardPreserveStoredFields() {
   assert.equal(discardedDraft.draft_tasks[0].comment, '原备注');
 }
 
+async function testLongDraftItemIdsAreCompactedBeforeCardRendering() {
+  const longItemId = `item_${'洪伟填活动发布环境配置修复回归测试'.repeat(20)}`;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `long-item-id-${Date.now()}`,
+    meetingTitle: '长字段会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-23',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: longItemId, task_name: '修复活动发布环境配置', assignee: '洪伟填' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_long_item_id',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+  const itemId = draft.draft_tasks[0].item_id;
+  const card = buildAssigneeTaskCard({
+    draft,
+    assignee: { assignee_key: '洪伟填', assignee_name: '洪伟填' },
+    tasks: draft.draft_tasks
+  });
+
+  assert.equal(itemId, `draft_${draft.id}_item_1`);
+  assert.equal(inputDefaultValue(card, `task_name_${itemId}`), '修复活动发布环境配置');
+  assert.doesNotMatch(JSON.stringify(card), new RegExp(longItemId.slice(0, 80)));
+}
+
 async function testTaskChoiceCanConvertDraftTaskToProgress() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -2086,6 +2121,7 @@ testAssignedProgressUpdateGetsEditableChoiceCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 await initDatabase();
+await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();

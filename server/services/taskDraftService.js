@@ -12,10 +12,18 @@ function buildProgressItemId(draftId, index) {
   return `draft_${draftId}_progress_${index + 1}`;
 }
 
+function compactItemId(value, fallback) {
+  const text = String(value || '').trim();
+
+  return text.length > 0 && text.length <= 48 && /^[A-Za-z0-9_-]+$/.test(text) ? text : fallback;
+}
+
 function normalizeDraftTask(task, draftId, index) {
+  const itemId = buildDraftItemId(draftId, index);
+
   return {
     ...task,
-    item_id: String(task?.item_id || buildDraftItemId(draftId, index)),
+    item_id: compactItemId(task?.item_id, itemId),
     status: ['pending', 'confirmed', 'discarded'].includes(task?.status) ? task.status : 'pending',
     task_choice: ['new_task', 'old_task_progress'].includes(task?.task_choice) ? task.task_choice : '',
     progress_summary: String(task?.progress_summary || ''),
@@ -33,9 +41,11 @@ function normalizeDraftTasks(tasks, draftId) {
 }
 
 function normalizeProgressUpdate(item, draftId, index) {
+  const itemId = buildProgressItemId(draftId, index);
+
   return {
     ...item,
-    item_id: String(item?.item_id || buildProgressItemId(draftId, index)),
+    item_id: compactItemId(item?.item_id, itemId),
     status: ['pending', 'confirmed', 'discarded'].includes(item?.status) ? item.status : 'pending',
     updated_by: String(item?.updated_by || ''),
     updated_at: String(item?.updated_at || ''),

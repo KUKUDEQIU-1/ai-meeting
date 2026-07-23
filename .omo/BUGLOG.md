@@ -25,11 +25,14 @@ That fallback ran after the normal task filter, so it bypassed the existing `ass
 
 The card delivery failure came from `inputElement()` in `feishuTaskCardPure.js`. It copied `default_value: String(value || '')` into Feishu card input elements without bounding length. Long `task_name`, `matched_task_name`, or `progress_summary` values could therefore exceed Feishu's per-element card limits and fail the whole assignee card.
 
+After bounding input defaults, production still returned `ErrCode: 11310` for some assignees. The second contributing cause was long or unsafe AI-generated `item_id` values. The card builder embeds `item_id` into input names and button names such as `task_name_<item_id>` and `mark_new_<item_id>`, so a long item ID can exceed Feishu element limits even when visible text is truncated.
+
 ### Fix Requirements
 
 - Derive speaker-coverage fallback titles from the speaker segment text by removing only leading self-report framing such as `我今天的任务就是`.
 - Keep the concrete action/object text and never produce `<speaker>今日工作确认`.
 - Bound Feishu input default values centrally in `inputElement()`.
+- Compact draft/progress item IDs at draft normalization time unless they are already short safe identifiers.
 - Add regressions for concrete self-reported fallback titles and long card input defaults.
 
 ### Regression Tests
@@ -39,6 +42,7 @@ The card delivery failure came from `inputElement()` in `feishuTaskCardPure.js`.
 - `testSelfReportedTodayTaskCreatesConcreteFallbackTaskName()`
 - strengthened `testMissingDailySpeakerGetsFallbackConfirmationCardItem()` and `testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword()`
 - `testTaskCardInputDefaultsAreBoundedForLongDraftContent()`
+- `testLongDraftItemIdsAreCompactedBeforeCardRendering()`
 
 ## 2026-07-23 - Failed card stayed editable but final confirm ignored explicit new-task choice
 
