@@ -282,11 +282,13 @@ export function markDraftTasksMatchedInMasterTable(tasks = [], masterRecords = [
 async function listMasterTaskRecordsSafe(meetingTable) {
   try {
     const tenantAccessToken = await getTenantAccessToken();
-    return await listBitableRecords({
-      appToken: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || '',
+    const records = await listBitableRecords({
+      appToken: meetingTable.app_token,
       tableId: meetingTable.table_id,
       tenantAccessToken
     });
+    console.log(`[Feishu Meeting Notes Sync] loaded master task records count=${records.length}`);
+    return records;
   } catch (error) {
     console.warn(`[Feishu Meeting Notes Sync] master task records unavailable error=${error.message}`);
     return [];
