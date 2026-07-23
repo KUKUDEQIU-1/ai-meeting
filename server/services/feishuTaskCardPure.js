@@ -243,7 +243,36 @@ function discardedTaskSummary(task, itemId) {
   return labelElement(`**事项 ${truncateText(itemId, 24)}｜已丢弃**\n${truncateText(taskNameOf(task), 120)}`);
 }
 
-export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false }) {
+function compactTaskElements({ draft, assignee, tasks }) {
+  const elements = [
+    { tag: 'markdown', content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 60)}\n**负责人：** ${truncateText(assignee.assignee_name, 30)}\n卡片内容较长，已切换为精简确认模式。` },
+    { tag: 'hr' }
+  ];
+
+  for (const task of tasks) {
+    const itemId = String(task.item_id || '');
+    const matchedTaskName = matchedTaskNameOf(task);
+
+    if (task.status === 'discarded') continue;
+
+    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**\n${truncateText(taskNameOf(task), 80)}` });
+    elements.push(inputElement({ tag: `task_name_${itemId}`, label: '任务名称', value: taskNameOf(task) }));
+    elements.push(inputElement({ tag: `matched_task_name_${itemId}`, label: '对应旧任务名称', value: matchedTaskName }));
+    elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '旧任务进展备注', value: progressSummaryOf(task) }));
+    elements.push({ tag: 'hr' });
+  }
+
+  elements.push(callbackButton({
+    name: 'confirm_tasks',
+    text: '按以上选择确认',
+    type: 'primary',
+    value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: assignee.assignee_key }
+  }));
+
+  return elements;
+}
+
+export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false }) {
   if (terminal) {
     return {
       schema: '2.0',
@@ -261,7 +290,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     };
   }
 
-  const elements = [
+  const elements = compact ? compactTaskElements({ draft, assignee, tasks }) : [
     {
       tag: 'markdown',
       content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**来源：** ${truncateText(draft?.meeting_source || '会议纪要', 40)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}`
@@ -280,6 +309,24 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
   if (assignee.test_mode) {
     elements.push({ tag: 'markdown', content: `**测试模式：** 此卡片仅发送给测试接收人，任务负责人仍为 ${truncateText(assignee.assignee_name, 40)}。` });
     elements.push({ tag: 'hr' });
+  }
+
+  if (compact) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: {
+        template: draft?.confirmation_error ? 'red' : 'blue',
+        title: { tag: 'plain_text', content: draft?.confirmation_error ? '会议任务确认失败' : cardTitle({ assignee, label: '任务归类待确认' }) }
+      },
+      body: {
+        elements: [{
+          tag: 'form',
+          name: 'meeting_task_form',
+          elements
+        }]
+      }
+    };
   }
 
   elements.push({

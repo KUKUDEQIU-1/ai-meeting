@@ -18,6 +18,7 @@ import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, upsertDraftAssigneeState } from '../services/taskDraftService.js';
+import { dispatchDraftTaskCards } from '../services/feishuTaskCardService.js';
 
 function testMappingAndGrouping() {
   const assigneeMap = parseAssigneeMap(JSON.stringify({ 张三: 'ou_zhang', '李 四': { open_id: 'ou_li' } }));
@@ -97,6 +98,26 @@ function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
   assert.match(text, /confirm_assignee_tasks/);
+}
+
+function testCompactTaskCardKeepsConfirmationControlsWithFewerElements() {
+  const tasks = Array.from({ length: 3 }, (_, index) => ({
+    item_id: `item_${index + 1}`,
+    task_name: `处理长任务 ${index + 1} ${'长内容'.repeat(100)}`,
+    progress_summary: '进展'.repeat(200),
+    assignee: '洪伟填'
+  }));
+  const draft = { id: 18, meeting_title: '长内容会议', meeting_source: '飞书 Wiki' };
+  const assignee = { assignee_key: '洪伟填', assignee_name: '洪伟填' };
+  const fullCard = buildAssigneeTaskCard({ draft, assignee, tasks });
+  const compactCard = buildAssigneeTaskCard({ draft, assignee, tasks, compact: true });
+  const compactText = JSON.stringify(compactCard);
+
+  assert.ok((compactText.match(/"tag":"input"/g) || []).length >= 3);
+  assert.ok(compactText.length < JSON.stringify(fullCard).length);
+  assert.match(compactText, /精简确认模式/);
+  assert.match(compactText, /confirm_assignee_tasks/);
+  assert.doesNotMatch(compactText, /标记为新任务/);
 }
 
 function buttonType(card, name) {
@@ -771,6 +792,49 @@ async function testLongDraftItemIdsAreCompactedBeforeCardRendering() {
   assert.equal(itemId, `draft_${draft.id}_item_1`);
   assert.equal(inputDefaultValue(card, `task_name_${itemId}`), '修复活动发布环境配置');
   assert.doesNotMatch(JSON.stringify(card), new RegExp(longItemId.slice(0, 80)));
+}
+
+async function testDispatchRetriesOversizedTaskCardWithCompactCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `compact-retry-${Date.now()}`,
+    meetingTitle: '长卡片会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-23',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'compact_retry_1', task_name: '处理活动发布环境配置', progress_summary: '回归测试', assignee: '洪伟填' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_compact_retry',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+  const sentCards = [];
+  const result = await dispatchDraftTaskCards(draft, {
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 洪伟填: 'ou_hong' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      if (sentCards.length === 1) {
+        throw new Error('飞书任务卡片发送失败：Failed to create card content, ext=ErrCode: 11310; ErrMsg: element exceeds the limit; ');
+      }
+      return 'om_compact_retry';
+    }
+  });
+  const state = await getDraftAssigneeState(draft.id, '洪伟填', 'tasks');
+
+  assert.equal(result.sent_count, 1);
+  assert.equal(sentCards.length, 2);
+  assert.match(JSON.stringify(sentCards[1]), /精简确认模式/);
+  assert.equal(state.delivery_status, 'sent');
+  assert.equal(state.card_message_id, 'om_compact_retry');
 }
 
 async function testTaskChoiceCanConvertDraftTaskToProgress() {
@@ -2100,6 +2164,7 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
 testTaskCardInputDefaultsAreBoundedForLongDraftContent();
+testCompactTaskCardKeepsConfirmationControlsWithFewerElements();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
 testOldTaskMappingHintUsesMatchedNameOrEditableInput();
@@ -2122,6 +2187,7 @@ testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
+await testDispatchRetriesOversizedTaskCardWithCompactCard();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();

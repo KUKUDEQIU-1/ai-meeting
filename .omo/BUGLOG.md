@@ -27,12 +27,15 @@ The card delivery failure came from `inputElement()` in `feishuTaskCardPure.js`.
 
 After bounding input defaults, production still returned `ErrCode: 11310` for some assignees. The second contributing cause was long or unsafe AI-generated `item_id` values. The card builder embeds `item_id` into input names and button names such as `task_name_<item_id>` and `mark_new_<item_id>`, so a long item ID can exceed Feishu element limits even when visible text is truncated.
 
+Production then showed one remaining `11310` case after value and ID compaction, which indicates Feishu can reject the full card for total element complexity. The delivery path now retries task cards that fail with `11310` using a compact confirmation card that keeps editable fields and final confirmation but removes verbose helper text and per-item action buttons.
+
 ### Fix Requirements
 
 - Derive speaker-coverage fallback titles from the speaker segment text by removing only leading self-report framing such as `我今天的任务就是`.
 - Keep the concrete action/object text and never produce `<speaker>今日工作确认`.
 - Bound Feishu input default values centrally in `inputElement()`.
 - Compact draft/progress item IDs at draft normalization time unless they are already short safe identifiers.
+- Retry task-card delivery with compact rendering when Feishu rejects the normal card with `ErrCode: 11310`.
 - Add regressions for concrete self-reported fallback titles and long card input defaults.
 
 ### Regression Tests
@@ -43,6 +46,8 @@ After bounding input defaults, production still returned `ErrCode: 11310` for so
 - strengthened `testMissingDailySpeakerGetsFallbackConfirmationCardItem()` and `testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword()`
 - `testTaskCardInputDefaultsAreBoundedForLongDraftContent()`
 - `testLongDraftItemIdsAreCompactedBeforeCardRendering()`
+- `testCompactTaskCardKeepsConfirmationControlsWithFewerElements()`
+- `testDispatchRetriesOversizedTaskCardWithCompactCard()`
 
 ## 2026-07-23 - Failed card stayed editable but final confirm ignored explicit new-task choice
 

@@ -137,7 +137,19 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = postFei
     const card = cardKind === 'progress'
       ? buildAssigneeProgressCard({ draft, assignee, progressUpdates: assignee.tasks })
       : buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks });
-    const messageId = await postMessage({ receiveId: assignee.receive_id, card });
+    let messageId;
+
+    try {
+      messageId = await postMessage({ receiveId: assignee.receive_id, card });
+    } catch (error) {
+      if (cardKind !== 'tasks' || !(error instanceof Error) || !/element exceeds the limit|ErrCode:\s*11310/.test(error.message)) {
+        throw error;
+      }
+
+      const compactCard = buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks, compact: true });
+      messageId = await postMessage({ receiveId: assignee.receive_id, card: compactCard });
+    }
+
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
     return { assignee_key: assignee.assignee_key, status: 'sent', message_id: messageId };
   } catch (error) {
