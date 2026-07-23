@@ -5,7 +5,7 @@ import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImp
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
-import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates } from '../services/taskDraftService.js';
+import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
 import { updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 
 const router = express.Router();
@@ -50,6 +50,7 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
     }
 
     const deliveries = await listDraftAssigneeStates(draftId);
+    const splitMessages = await listDraftCardMessages(draftId);
     res.json({
       draft_id: draft.id,
       meeting_title: draft.meeting_title,
@@ -57,6 +58,7 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
       sent_count: deliveries.filter((row) => row.delivery_status === 'sent').length,
       failed_count: deliveries.filter((row) => row.delivery_status === 'failed').length,
       pending_count: deliveries.filter((row) => row.delivery_status === 'pending').length,
+      split_card_count: splitMessages.length,
       deliveries: deliveries.map((row) => ({
         assignee_key: row.assignee_key,
         assignee_name: row.assignee_name,
@@ -65,6 +67,16 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
         delivery_error: row.delivery_error || '',
         confirmation_status: row.confirmation_status,
         confirmation_error: row.confirmation_error || '',
+        has_message_id: Boolean(row.card_message_id),
+        split_card_count: splitMessages.filter((message) => message.assignee_key === row.assignee_key && message.card_kind === row.card_kind).length,
+        updated_at: row.updated_at
+      })),
+      split_cards: splitMessages.map((row) => ({
+        assignee_key: row.assignee_key,
+        card_kind: row.card_kind,
+        item_id: row.item_id,
+        delivery_status: row.delivery_status,
+        delivery_error: row.delivery_error || '',
         has_message_id: Boolean(row.card_message_id),
         updated_at: row.updated_at
       }))
@@ -103,12 +115,27 @@ router.post('/refresh-draft-task-cards', requireMaintenanceToken, async (req, re
         continue;
       }
 
-      const result = await updateFeishuTaskCard({
-        draftId: draft.id,
-        assigneeKey: state.assignee_key,
-        cardKind: state.card_kind
-      });
-      results.push({ assignee_key: state.assignee_key, card_kind: state.card_kind, ...result });
+      const splitCards = await listDraftCardMessages(draft.id, state.assignee_key, state.card_kind);
+
+      if (splitCards.length) {
+        for (const splitCard of splitCards) {
+          const result = await updateFeishuTaskCard({
+            messageId: splitCard.card_message_id,
+            draftId: draft.id,
+            assigneeKey: state.assignee_key,
+            cardKind: state.card_kind,
+            itemId: splitCard.item_id
+          });
+          results.push({ assignee_key: state.assignee_key, card_kind: state.card_kind, item_id: splitCard.item_id, ...result });
+        }
+      } else {
+        const result = await updateFeishuTaskCard({
+          draftId: draft.id,
+          assigneeKey: state.assignee_key,
+          cardKind: state.card_kind
+        });
+        results.push({ assignee_key: state.assignee_key, card_kind: state.card_kind, ...result });
+      }
     }
 
     res.json({ success: true, draft_id: draft.id, refreshed_count: results.filter((item) => item.status === 'updated').length, results });
