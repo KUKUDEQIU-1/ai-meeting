@@ -257,7 +257,12 @@ export function markDraftTasksMatchedInMasterTable(tasks = [], masterRecords = [
   return (Array.isArray(tasks) ? tasks : []).map((task) => {
     if (task.task_choice === 'old_task_progress' || task.matched_task_name) return task;
 
-    const duplicate = findDuplicateTaskName(task.task_name || task.title || '', masterRecords);
+    const duplicate = findDuplicateTaskName([
+      task.task_name || task.title || '',
+      task.task_description || task.description || '',
+      task.evidence_quote || '',
+      task.progress_summary || ''
+    ].filter(Boolean).join(' '), masterRecords);
 
     if (!duplicate) return task;
 

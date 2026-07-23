@@ -356,7 +356,9 @@ function testReorderedActionObjectTaskNamesMatchAsDuplicate() {
 function testMasterTableDuplicateMarksDraftTaskAsOldProgress() {
   const [task] = markDraftTasksMatchedInMasterTable([{
     item_id: 'duplicate_master_1',
-    task_name: 'AI智能助手Bug修复和内容更新',
+    task_name: '继续修复AI智能助手',
+    task_description: '继续修复AI智能助手Bug，并更新一些新内容。',
+    evidence_quote: '今天的工作还是继续修复 AI 智能助手的 bug，再更新一些新的内容吧',
     assignee: '简学勤'
   }], [{
     record_id: 'rec_master_1',
