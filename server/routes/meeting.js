@@ -86,6 +86,45 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
   }
 });
 
+router.get('/draft-task-diagnostics/:draftId', async (req, res, next) => {
+  try {
+    const draftId = Number(req.params.draftId);
+
+    if (!Number.isFinite(draftId) || draftId <= 0) {
+      res.status(400).json({ message: 'draftId 必须是正整数' });
+      return;
+    }
+
+    const draft = await getMeetingTaskDraftById(draftId);
+    if (!draft) {
+      res.status(404).json({ message: 'draft 不存在' });
+      return;
+    }
+
+    res.json({
+      draft_id: draft.id,
+      meeting_title: draft.meeting_title,
+      source_type: draft.source_type,
+      source_id: draft.source_id,
+      confirmation_status: draft.confirmation_status,
+      tasks: (draft.draft_tasks || []).map((task) => ({
+        item_id: task.item_id,
+        assignee: task.assignee || task.owner || task.assignee_name || '待确认',
+        task_name: task.task_name || task.title || task.task || task.name || '',
+        task_choice: task.task_choice || '',
+        status: task.status || '',
+        progress_summary: task.progress_summary || '',
+        matched_task_name: task.matched_task_name || task.matched_history?.task_name || task.matched_history_task_name || task.matched_first_task_name || '',
+        evidence_quote: task.evidence_quote || '',
+        task_description: task.task_description || task.description || '',
+        source_speaker: task.source_speaker || ''
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/refresh-draft-task-cards', requireMaintenanceToken, async (req, res, next) => {
   try {
     const draftId = Number(req.body?.draft_id || req.body?.draftId || 0);
