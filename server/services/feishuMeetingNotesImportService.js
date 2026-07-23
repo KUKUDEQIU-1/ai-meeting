@@ -1,5 +1,5 @@
 import { get, run } from '../db/database.js';
-import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser } from './feishuBitableClient.js';
+import { getMasterTaskTable, getTenantAccessToken, listBitableRecords, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser } from './feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
 import { buildTaskKey, saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
 import { extractFeishuMeetingNoteContentWithMeta, findMeetingNoteId, getFeishuMeetingArtifactContent, getFeishuMeetingDetail, getFeishuMeetingNoteDetail, getFeishuMeetingNoteList, normalizeFeishuMeetingNote } from './feishuMeetingNotesClient.js';
@@ -7,7 +7,7 @@ import { formatSegmentsForPrompt, normalizeMeetingTranscript } from './meetingTr
 import { createMeetingTaskDraft, getMeetingTaskDraftBySource } from './taskDraftService.js';
 import { resolveDraftTasksAgainstHistory } from './taskResolutionService.js';
 import { dispatchDraftTaskCards } from './feishuTaskCardService.js';
-import { normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
+import { findDuplicateTaskName, normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
 
 const SKIPPED_MESSAGE = '该飞书会议智能纪要已同步，跳过重复写入';
 
@@ -253,6 +253,41 @@ export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, 
   };
 }
 
+export function markDraftTasksMatchedInMasterTable(tasks = [], masterRecords = []) {
+  return (Array.isArray(tasks) ? tasks : []).map((task) => {
+    if (task.task_choice === 'old_task_progress' || task.matched_task_name) return task;
+
+    const duplicate = findDuplicateTaskName(task.task_name || task.title || '', masterRecords);
+
+    if (!duplicate) return task;
+
+    return {
+      ...task,
+      task_choice: 'old_task_progress',
+      matched_task_name: duplicate.task_name,
+      matched_history_task_name: duplicate.task_name,
+      resolution_status: 'matched_master_table',
+      resolution_reason: duplicate.reason,
+      resolution_confidence: duplicate.similarity,
+      needs_confirmation: true
+    };
+  });
+}
+
+async function listMasterTaskRecordsSafe(meetingTable) {
+  try {
+    const tenantAccessToken = await getTenantAccessToken();
+    return await listBitableRecords({
+      appToken: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || '',
+      tableId: meetingTable.table_id,
+      tenantAccessToken
+    });
+  } catch (error) {
+    console.warn(`[Feishu Meeting Notes Sync] master task records unavailable error=${error.message}`);
+    return [];
+  }
+}
+
 async function notifyUserSafe(params) {
   try {
     const result = await sendMeetingTableToFeishuUser(params);
@@ -487,6 +522,9 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
     if (!meetingTable.table_id) {
       throw new Error('飞书会议智能纪要同步流程必须配置 FEISHU_MASTER_TASK_TABLE_ID');
     }
+
+    const masterTaskRecords = await listMasterTaskRecordsSafe(meetingTable);
+    resolutionResult.tasks = markDraftTasksMatchedInMasterTable(resolutionResult.tasks, masterTaskRecords);
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,

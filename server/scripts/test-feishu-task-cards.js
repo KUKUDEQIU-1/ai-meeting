@@ -13,7 +13,7 @@ import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.
 import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
 import { createTaskRecord, formatTaskForMasterTable } from '../services/feishuBitableClient.js';
-import { repairDraftAssigneesFromPreviousDraft } from '../services/feishuMeetingNotesImportService.js';
+import { markDraftTasksMatchedInMasterTable, repairDraftAssigneesFromPreviousDraft } from '../services/feishuMeetingNotesImportService.js';
 import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
@@ -351,6 +351,21 @@ function testReorderedActionObjectTaskNamesMatchAsDuplicate() {
 
   assert.equal(duplicate?.task_name, '修复AI智能助手Bug并更新内容');
   assert.equal(duplicate?.reason, 'keyword_action_duplicate');
+}
+
+function testMasterTableDuplicateMarksDraftTaskAsOldProgress() {
+  const [task] = markDraftTasksMatchedInMasterTable([{
+    item_id: 'duplicate_master_1',
+    task_name: 'AI智能助手Bug修复和内容更新',
+    assignee: '简学勤'
+  }], [{
+    record_id: 'rec_master_1',
+    fields: { 事务需求名称: '修复AI智能助手Bug并更新内容' }
+  }]);
+
+  assert.equal(task.task_choice, 'old_task_progress');
+  assert.equal(task.matched_task_name, '修复AI智能助手Bug并更新内容');
+  assert.equal(task.resolution_status, 'matched_master_table');
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -2313,6 +2328,7 @@ testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle();
 testSpokenTaskNameRemovesFillerAfterBusinessObject();
 testReorderedActionObjectTaskNamesMatchAsDuplicate();
+testMasterTableDuplicateMarksDraftTaskAsOldProgress();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();
