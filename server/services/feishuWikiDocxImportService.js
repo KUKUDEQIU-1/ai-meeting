@@ -41,13 +41,17 @@ export async function listFeishuWikiDocxSources({ limit = 50 } = {}) {
 }
 
 export function selectWikiDocxNodes({ rootNode, childNodes, rootToken, scanLimit }) {
+  const selected = [];
+
   if (rootNode?.obj_type === 'docx' && rootNode.obj_token) {
-    return [{ ...rootNode, node_token: rootNode.node_token || rootToken }];
+    selected.push({ ...rootNode, node_token: rootNode.node_token || rootToken });
   }
 
-  return (Array.isArray(childNodes) ? childNodes : [])
+  selected.push(...(Array.isArray(childNodes) ? childNodes : [])
     .filter((node) => node.obj_type === 'docx' && node.obj_token && node.node_token)
-    .slice(0, scanLimit);
+    .filter((node) => node.node_token !== rootToken));
+
+  return selected.slice(0, scanLimit);
 }
 
 async function upsertDiscoveredWikiDocxSource(node, context) {
@@ -116,9 +120,7 @@ export async function syncFeishuWikiDocxNotes({ limit, force = false, reanalyze 
   const rootNode = await getFeishuWikiNode(rootToken);
   const spaceId = process.env.FEISHU_WIKI_SOURCE_SPACE_ID?.trim() || rootNode.space_id;
   const parentNodeToken = rootNode.node_token || rootToken;
-  const nodes = rootNode.obj_type === 'docx'
-    ? []
-    : await listFeishuWikiChildNodes({ spaceId, parentNodeToken, pageSize: scanLimit });
+  const nodes = await listFeishuWikiChildNodes({ spaceId, parentNodeToken, pageSize: scanLimit });
   const docxNodes = selectWikiDocxNodes({ rootNode, childNodes: nodes, rootToken, scanLimit });
   const imported = [];
   const skipped = [];
