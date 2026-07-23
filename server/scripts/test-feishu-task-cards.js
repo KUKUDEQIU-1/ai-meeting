@@ -13,7 +13,7 @@ import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.
 import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
 import { createTaskRecord, formatTaskForMasterTable } from '../services/feishuBitableClient.js';
-import { markDraftTasksMatchedInMasterTable, repairDraftAssigneesFromPreviousDraft } from '../services/feishuMeetingNotesImportService.js';
+import { markDraftTasksMatchedInMasterTable, repairDraftAssigneesFromPreviousDraft, speakerCoverageTaskItems } from '../services/feishuMeetingNotesImportService.js';
 import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
@@ -407,6 +407,24 @@ function testMasterTableDuplicateFillsMatchedNameForExistingProgress() {
 
   assert.equal(task.task_choice, 'old_task_progress');
   assert.equal(task.matched_task_name, '修复AI智能助手Bug并更新内容');
+}
+
+function testSpeakerCoverageIncludesMeetingReviewAndOperationWork() {
+  const items = speakerCoverageTaskItems({
+    tasks: [],
+    progressUpdates: [],
+    segments: [{
+      speaker: '胡涌昌',
+      speaker_status: 'provided',
+      speaker_confidence: 0.95,
+      time: '00:04:02',
+      text: '就没定。我今天的主要工作就是把今天下午会开周会，让大家填一下周会的内容。另一个的话就是评审会会把 OCR 和数分的再去评审一下。然后做一下商家运营工作，今天的工作主要就是这些。'
+    }]
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].assignee, '胡涌昌');
+  assert.equal(items[0].source_speaker, '胡涌昌');
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -2373,6 +2391,7 @@ testRichTextBitableTaskNameMatchesAsDuplicate();
 testActionOnlyOverlapDoesNotMatchUnrelatedMasterTask();
 testMasterTableDuplicateMarksDraftTaskAsOldProgress();
 testMasterTableDuplicateFillsMatchedNameForExistingProgress();
+testSpeakerCoverageIncludesMeetingReviewAndOperationWork();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();

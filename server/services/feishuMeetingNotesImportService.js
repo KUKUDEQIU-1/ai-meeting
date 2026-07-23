@@ -158,7 +158,7 @@ function speakerTaskNameFromSegment(segment) {
   return title.length > 80 ? `${title.slice(0, 79)}…` : title;
 }
 
-function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
+export function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
   const covered = coveredAssignees(tasks, progressUpdates);
   const fallbackItems = [];
 
@@ -198,8 +198,8 @@ function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
 function isSpecificSpeakerActionSegment(segment) {
   const text = String(segment?.text || '').trim();
 
-  return /AI\s*智能会议助手|AI会议助手|事务管理需求|总表|接口|页面|功能|模块|代码|文档|测试|接入|优化|收尾|部署|上线|联调|验收|修复|开发|配置|输出/.test(text)
-    && /完成|推进|处理|修复|回归|准备|上线|验收|测试|联调|对接|接入|开发|搭建|输出|整理|梳理|配置|制定|优化|改造|迁移|发布|发版|跑通|部署|收尾|调试|维护/.test(text);
+  return /AI\s*智能会议助手|AI会议助手|事务管理需求|总表|接口|页面|功能|模块|代码|文档|测试|接入|优化|收尾|部署|上线|联调|验收|修复|开发|配置|输出|周会|会议|评审|OCR|数分|商家运营|运营/.test(text)
+    && /完成|推进|处理|修复|回归|准备|上线|验收|测试|联调|对接|接入|开发|搭建|输出|整理|梳理|配置|制定|优化|改造|迁移|发布|发版|跑通|部署|收尾|调试|维护|填写|填|评审|运营|开会/.test(text);
 }
 
 function repairProgressAssigneesFromEvidence(progressUpdates, segments) {
