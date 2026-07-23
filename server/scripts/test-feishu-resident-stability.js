@@ -42,7 +42,7 @@ async function testWorkerDisabledAndSafetyGateDoNotScan() {
   assert.equal(calls, 0);
 }
 
-async function testWorkerRunsMeetingThenDocxAndSchedulesAfterFinish() {
+async function testWorkerRunsDocumentLibraryScanAndSchedulesAfterFinish() {
   const events = [];
   let scheduledDelay = null;
   let scheduledTask = null;
@@ -54,17 +54,19 @@ async function testWorkerRunsMeetingThenDocxAndSchedulesAfterFinish() {
       FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES: '3'
     },
     scans: {
-      meeting: async () => {
-        events.push('meeting:start');
-        await Promise.resolve();
-        events.push('meeting:end');
-        return { imported: [{ note_id: 'n1' }], skipped: [], failed: [] };
-      },
       docx: async () => {
         events.push('docx:start');
         await Promise.resolve();
         events.push('docx:end');
-        return { imported: [], skipped: [{ document_id: 'd1' }], failed: [] };
+        return { imported: [], skipped: [{ document_id: 'd1' }], failed: [], scan_source: 'feishu_docx_library' };
+      },
+      meeting: async () => {
+        events.push('meeting:unexpected');
+        return { imported: [{ note_id: 'n1' }], skipped: [], failed: [] };
+      },
+      wiki: async () => {
+        events.push('wiki:unexpected');
+        return { imported: [{ document_id: 'w1' }], skipped: [], failed: [] };
       }
     },
     scheduler: (task, delayMs) => {
@@ -78,18 +80,20 @@ async function testWorkerRunsMeetingThenDocxAndSchedulesAfterFinish() {
   await start.cycle;
   const snapshot = worker.snapshot();
 
-  assert.deepEqual(events, ['meeting:start', 'meeting:end', 'docx:start', 'docx:end']);
+  assert.deepEqual(events, ['docx:start', 'docx:end']);
   assert.equal(scheduledDelay, 3 * 60 * 1000);
   assert.equal(typeof scheduledTask, 'function');
   assert.equal(snapshot.status, 'idle');
   assert.equal(snapshot.running, false);
   assert.equal(snapshot.last_cycle.status, 'success');
-  assert.equal(snapshot.last_cycle.meeting.imported_count, 1);
+  assert.equal(snapshot.last_cycle.scan_source, 'feishu_docx_library');
   assert.equal(snapshot.last_cycle.docx.skipped_count, 1);
+  assert.equal(snapshot.meeting_scan_enabled, undefined);
+  assert.equal(snapshot.wiki_scan_enabled, undefined);
 }
 
 await testCoordinatorReturnsBusyWithoutOverlap();
 await testWorkerDisabledAndSafetyGateDoNotScan();
-await testWorkerRunsMeetingThenDocxAndSchedulesAfterFinish();
+await testWorkerRunsDocumentLibraryScanAndSchedulesAfterFinish();
 
 console.log('feishu resident stability tests passed');
