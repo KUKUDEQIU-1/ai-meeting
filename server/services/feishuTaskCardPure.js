@@ -256,23 +256,6 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     };
   }
 
-  if (draft?.confirmation_error) {
-    return {
-      schema: '2.0',
-      config: { wide_screen_mode: true, update_multi: true },
-      header: {
-        template: 'red',
-        title: { tag: 'plain_text', content: '会议任务确认失败' }
-      },
-      body: {
-        elements: [{
-          tag: 'markdown',
-          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n${truncateText(draft.confirmation_error, 500)}\n\n请修改后重新确认。`
-        }]
-      }
-    };
-  }
-
   const elements = [
     {
       tag: 'markdown',
@@ -280,6 +263,14 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     },
     { tag: 'hr' }
   ];
+
+  if (draft?.confirmation_error) {
+    elements.push({
+      tag: 'markdown',
+      content: `**确认失败：** ${truncateText(draft.confirmation_error, 500)}\n\n请修改后重新确认。`
+    });
+    elements.push({ tag: 'hr' });
+  }
 
   if (assignee.test_mode) {
     elements.push({ tag: 'markdown', content: `**测试模式：** 此卡片仅发送给测试接收人，任务负责人仍为 ${truncateText(assignee.assignee_name, 40)}。` });
@@ -332,8 +323,8 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     schema: '2.0',
     config: { wide_screen_mode: true, update_multi: true },
     header: {
-      template: 'blue',
-      title: { tag: 'plain_text', content: cardTitle({ assignee, label: '任务归类待确认' }) }
+      template: draft?.confirmation_error ? 'red' : 'blue',
+      title: { tag: 'plain_text', content: draft?.confirmation_error ? '会议任务确认失败' : cardTitle({ assignee, label: '任务归类待确认' }) }
     },
     body: {
       elements: [{

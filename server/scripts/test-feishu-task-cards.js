@@ -242,6 +242,10 @@ function testFailureCardShowsConfirmationError() {
   assert.match(text, /会议任务确认失败/);
   assert.match(text, /不能填写原表格没有的任务/);
   assert.match(text, /请修改后重新确认/);
+  assert.match(text, /标记为新任务/);
+  assert.match(text, /标记为旧任务进展/);
+  assert.match(text, /按以上选择确认/);
+  assert.match(text, /"name":"matched_task_name_task_a"/);
 }
 
 function testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence() {
