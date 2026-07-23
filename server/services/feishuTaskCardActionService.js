@@ -192,16 +192,6 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能修改' : '已确认，不能再修改');
   }
 
-  if (taskChoice === 'old_task_progress' && parsed.form_values.matched_task_name) {
-    const draft = await getMeetingTaskDraftById(parsed.draft_id);
-    const exists = await dependencies.masterTaskNameExists(parsed.form_values.matched_task_name, {
-      table_id: draft?.table_id,
-      app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
-    });
-
-    if (!exists) reject('不能填写原表格没有的任务', 400);
-  }
-
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => {
     const values = validateEditableValues({
       task_name: parsed.form_values.task_name || task.task_name,

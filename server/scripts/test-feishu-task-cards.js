@@ -1381,13 +1381,7 @@ async function testFinalConfirmInfersOldProgressFromOldTaskNameInput() {
   }
 }
 
-async function testMarkOldTaskRejectsNameOutsideMasterTable() {
-  const previousFetch = globalThis.fetch;
-  const previousAppId = process.env.FEISHU_APP_ID;
-  const previousAppSecret = process.env.FEISHU_APP_SECRET;
-  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
-  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
-  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+async function testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
     sourceId: `mark-old-invalid-${Date.now()}`,
@@ -1418,52 +1412,40 @@ async function testMarkOldTaskRejectsNameOutsideMasterTable() {
     deliveryStatus: 'sent'
   });
 
-  process.env.FEISHU_APP_ID = 'cli_test_app_id';
-  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
-  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
-  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'app_mark_old_invalid';
-  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_mark_old_invalid';
-
-  globalThis.fetch = async (url) => {
-    const href = String(url);
-
-    if (href.includes('/auth/v3/tenant_access_token/internal')) {
-      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
-    }
-
-    if (href.includes('/records')) {
-      return new Response(JSON.stringify({ code: 0, data: { items: [] } }), { status: 200 });
-    }
-
-    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
-  };
-
-  try {
-    await assert.rejects(
-      () => handleFeishuCardAction({
-        header: { event_id: 'evt_mark_old_invalid' },
-        event: {
-          operator: { open_id: 'ou_actor' },
-          action: {
-            value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'mark_old_invalid_1' },
-            form_value: {
-              task_name_mark_old_invalid_1: '待判断任务',
-              matched_task_name_mark_old_invalid_1: '123456',
-              progress_summary_mark_old_invalid_1: '推进进展'
-            }
-          }
+  const markResponse = await handleFeishuCardAction({
+    header: { event_id: 'evt_mark_old_invalid' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'mark_old_invalid_1' },
+        form_value: {
+          task_name_mark_old_invalid_1: '待判断任务',
+          matched_task_name_mark_old_invalid_1: '123456',
+          progress_summary_mark_old_invalid_1: '推进进展'
         }
-      }, { updateCard: async () => ({ status: 'updated' }) }),
-      /不能填写原表格没有的任务/
-    );
-  } finally {
-    globalThis.fetch = previousFetch;
-    process.env.FEISHU_APP_ID = previousAppId;
-    process.env.FEISHU_APP_SECRET = previousAppSecret;
-    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
-    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousMasterTableId;
-    process.env.FEISHU_MASTER_TASK_APP_TOKEN = previousMasterAppToken;
-  }
+      }
+    }
+  }, { updateCard: async () => ({ status: 'updated' }) });
+  const markedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(markResponse.toast.content, '已标记为旧任务进展');
+  assert.equal(markedDraft.draft_tasks[0].task_choice, 'old_task_progress');
+  assert.equal(markedDraft.draft_tasks[0].matched_task_name, '123456');
+  await assert.rejects(
+    () => handleFeishuCardAction({
+      header: { event_id: 'evt_confirm_marked_old_invalid' },
+      event: {
+        operator: { open_id: 'ou_actor' },
+        action: {
+          value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
+        }
+      }
+    }, {
+      masterTaskNameExists: async () => false,
+      updateCard: async () => ({ status: 'updated' })
+    }),
+    /不能填写原表格没有的任务/
+  );
 }
 
 async function testAssigneeCardStatesAreIndependentByKind() {
@@ -1984,7 +1966,7 @@ await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
 await testOldProgressConfirmRejectsTaskNameOutsideMasterTable();
 await testFinalConfirmUsesCurrentOldTaskNameInput();
 await testFinalConfirmInfersOldProgressFromOldTaskNameInput();
-await testMarkOldTaskRejectsNameOutsideMasterTable();
+await testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation();
 await testAssigneeCardStatesAreIndependentByKind();
 await testDeliveryDiagnosticsHideRecipientIds();
 await testProgressFinalizerRejectsUnmatchedProgressWithoutCreatingTasks();
