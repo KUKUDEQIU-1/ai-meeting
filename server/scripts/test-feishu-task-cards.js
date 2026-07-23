@@ -14,6 +14,7 @@ import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
 import { createTaskRecord, formatTaskForMasterTable } from '../services/feishuBitableClient.js';
 import { markDraftTasksMatchedInMasterTable, repairDraftAssigneesFromPreviousDraft, speakerCoverageTaskItems } from '../services/feishuMeetingNotesImportService.js';
+import { buildMeetingTableNotifyText } from '../services/feishuBitableClient.js';
 import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
@@ -430,6 +431,26 @@ function testSpeakerCoverageIncludesMeetingReviewAndOperationWork() {
   assert.ok(items[0].task_name.includes('周会'));
   assert.ok(items[0].task_name.includes('评审'));
   assert.ok(items[0].task_name.length <= 40);
+}
+
+function testNotifyTextIncludesTaskCountsByAssignee() {
+  const text = buildMeetingTableNotifyText({
+    meeting_title: '每日同步会',
+    meeting_source: '飞书会议智能纪要',
+    today_tasks_count: 4,
+    progress_updates_count: 1,
+    discarded_items_count: 0,
+    needs_confirmation_count: 2,
+    table_name: '事务列表',
+    table_url: 'https://example.com/table',
+    assignee_task_counts: [
+      { assignee: '洪伟填', count: 2 },
+      { assignee: '潘韵芝', count: 1 },
+      { assignee: '待确认', count: 1 }
+    ]
+  });
+
+  assert.ok(text.includes('负责人任务数：洪伟填 2；潘韵芝 1；待确认 1'));
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -2397,6 +2418,7 @@ testActionOnlyOverlapDoesNotMatchUnrelatedMasterTask();
 testMasterTableDuplicateMarksDraftTaskAsOldProgress();
 testMasterTableDuplicateFillsMatchedNameForExistingProgress();
 testSpeakerCoverageIncludesMeetingReviewAndOperationWork();
+testNotifyTextIncludesTaskCountsByAssignee();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();

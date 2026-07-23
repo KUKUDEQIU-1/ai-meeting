@@ -143,6 +143,17 @@ function coveredAssignees(tasks, progressUpdates) {
   return assignees;
 }
 
+function assigneeTaskCounts(tasks) {
+  const counts = new Map();
+
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const assignee = assigneeOf(task) || '待确认';
+    counts.set(assignee, (counts.get(assignee) || 0) + 1);
+  }
+
+  return [...counts.entries()].map(([assignee, count]) => ({ assignee, count }));
+}
+
 function speakerTaskNameFromSegment(segment) {
   const text = String(segment?.text || '')
     .replace(/\s+/g, ' ')
@@ -631,7 +642,7 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       notifyError
     });
 
-    const notifyResult = await notifyUserSafe({
+ const notifyResult = await notifyUserSafe({
       meeting_title: meetingTitle,
       meeting_source: '飞书会议智能纪要',
       table_name: meetingTable.table_name,
@@ -642,7 +653,8 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       today_tasks_count: todayTasksCount,
       progress_updates_count: progressUpdatesCount,
       discarded_items_count: discardedItemsCount,
-      needs_confirmation_count: needsConfirmationCount
+      needs_confirmation_count: needsConfirmationCount,
+      assignee_task_counts: assigneeTaskCounts(draft.draft_tasks || repairedDraftItems.tasks)
     });
     notifyStatus = notifyResult.status;
     notifyError = notifyResult.error;

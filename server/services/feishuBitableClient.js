@@ -1171,23 +1171,18 @@ export async function writeMeetingIndexRecord(params) {
   console.log(`[Meeting Index] write index success note_id=${params.note_id || ''} table_url=${params.table_url || ''}`);
 }
 
-export async function sendMeetingTableToFeishuUser(params) {
-  const receiveIdType = optionalEnv('FEISHU_NOTIFY_RECEIVE_ID_TYPE') || 'email';
-  const receiveId = optionalEnv('FEISHU_NOTIFY_RECEIVE_ID');
+function formatAssigneeTaskCounts(value) {
+  const items = Array.isArray(value) ? value : [];
+  return items
+    .filter((item) => item?.assignee && Number(item?.count || 0) > 0)
+    .map((item) => `${item.assignee} ${Number(item.count)}`)
+    .join('；');
+}
 
-  if (!receiveId) {
-    console.warn('[GetNote Sync] notify user skipped reason=FEISHU_NOTIFY_RECEIVE_ID not configured');
-    return {
-      status: 'skipped',
-      error: 'FEISHU_NOTIFY_RECEIVE_ID 未配置，已跳过个人通知'
-    };
-  }
-
-  console.log(`[GetNote Sync] notify user start receive_id_type=${receiveIdType}`);
-
-  const tenantAccessToken = await getTenantAccessToken();
+export function buildMeetingTableNotifyText(params) {
   const isFailed = params.status === 'failed';
   const isWorkerNoContent = params.status === 'worker_no_content';
+  const assigneeCounts = formatAssigneeTaskCounts(params.assignee_task_counts);
   const lines = isFailed
     ? [
         '【会议任务表同步失败】',
@@ -1203,21 +1198,41 @@ export async function sendMeetingTableToFeishuUser(params) {
           '',
           params.error_message || '本次 worker 启动后的扫描未读取到会议内容，请确认今天是否已上传会议。'
         ]
-    : [
-        '【会议任务已同步到总任务表】',
-        '',
-        `会议：${params.meeting_title || 'Get笔记会议'}`,
-        `来源：${params.meeting_source || 'Get笔记'}`,
-        `今日新增任务：${params.today_tasks_count ?? params.tasks_count ?? 0}`,
-        `历史进展：${params.progress_updates_count || 0}`,
-        `过滤事项：${params.discarded_items_count || 0}`,
-        `待确认任务：${params.needs_confirmation_count || 0}`,
-        `表格：${params.table_name || ''}`,
-        '',
-        '查看总任务表：',
-        params.table_url || ''
-      ];
-  const messageText = lines.filter((line) => line !== '').join('\n');
+      : [
+          '【会议任务已同步到总任务表】',
+          '',
+          `会议：${params.meeting_title || 'Get笔记会议'}`,
+          `来源：${params.meeting_source || 'Get笔记'}`,
+          `今日新增任务：${params.today_tasks_count ?? params.tasks_count ?? 0}`,
+          `历史进展：${params.progress_updates_count || 0}`,
+          `过滤事项：${params.discarded_items_count || 0}`,
+          `待确认任务：${params.needs_confirmation_count || 0}`,
+          assigneeCounts ? `负责人任务数：${assigneeCounts}` : '',
+          `表格：${params.table_name || ''}`,
+          '',
+          '查看总任务表：',
+          params.table_url || ''
+        ];
+
+  return lines.filter((line) => line !== '').join('\n');
+}
+
+export async function sendMeetingTableToFeishuUser(params) {
+  const receiveIdType = optionalEnv('FEISHU_NOTIFY_RECEIVE_ID_TYPE') || 'email';
+  const receiveId = optionalEnv('FEISHU_NOTIFY_RECEIVE_ID');
+
+  if (!receiveId) {
+    console.warn('[GetNote Sync] notify user skipped reason=FEISHU_NOTIFY_RECEIVE_ID not configured');
+    return {
+      status: 'skipped',
+      error: 'FEISHU_NOTIFY_RECEIVE_ID 未配置，已跳过个人通知'
+    };
+  }
+
+  console.log(`[GetNote Sync] notify user start receive_id_type=${receiveIdType}`);
+
+  const tenantAccessToken = await getTenantAccessToken();
+  const messageText = buildMeetingTableNotifyText(params);
   const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`;
   const response = await fetch(url, {
     method: 'POST',
