@@ -370,6 +370,23 @@ function testMasterTableDuplicateMarksDraftTaskAsOldProgress() {
   assert.equal(task.resolution_status, 'matched_master_table');
 }
 
+function testMasterTableDuplicateFillsMatchedNameForExistingProgress() {
+  const [task] = markDraftTasksMatchedInMasterTable([{
+    item_id: 'duplicate_progress_1',
+    task_name: 'AI智能助手Bug修复和内容更新',
+    task_description: 'AI智能助手继续修复Bug，并更新部分新内容。',
+    evidence_quote: '今天的工作还是继续修复 AI 智能助手的 bug，再更新一些新的内容吧',
+    assignee: '简学勤',
+    task_choice: 'old_task_progress'
+  }], [{
+    record_id: 'rec_master_1',
+    fields: { 事务需求名称: '修复AI智能助手Bug并更新内容' }
+  }]);
+
+  assert.equal(task.task_choice, 'old_task_progress');
+  assert.equal(task.matched_task_name, '修复AI智能助手Bug并更新内容');
+}
+
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
   const draft = { id: 8, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
   const assignee = { assignee_key: '张三', assignee_name: '张三' };
@@ -2331,6 +2348,7 @@ testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle();
 testSpokenTaskNameRemovesFillerAfterBusinessObject();
 testReorderedActionObjectTaskNamesMatchAsDuplicate();
 testMasterTableDuplicateMarksDraftTaskAsOldProgress();
+testMasterTableDuplicateFillsMatchedNameForExistingProgress();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();

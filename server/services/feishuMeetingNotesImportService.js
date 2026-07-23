@@ -255,7 +255,7 @@ export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, 
 
 export function markDraftTasksMatchedInMasterTable(tasks = [], masterRecords = []) {
   return (Array.isArray(tasks) ? tasks : []).map((task) => {
-    if (task.task_choice === 'old_task_progress' || task.matched_task_name) return task;
+    if (task.matched_task_name) return task;
 
     const duplicate = findDuplicateTaskName([
       task.task_name || task.title || '',
@@ -268,7 +268,7 @@ export function markDraftTasksMatchedInMasterTable(tasks = [], masterRecords = [
 
     return {
       ...task,
-      task_choice: 'old_task_progress',
+      task_choice: task.task_choice || 'old_task_progress',
       matched_task_name: duplicate.task_name,
       matched_history_task_name: duplicate.task_name,
       resolution_status: 'matched_master_table',
