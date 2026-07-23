@@ -771,6 +771,66 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
   assert.equal(confirmedDraft.progress_updates[0].status, 'confirmed');
 }
 
+async function testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `old-choice-default-input-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{
+      item_id: 'choice_default',
+      task_name: '继续测试会议助手',
+      assignee: '张三',
+      progress_summary: '继续验证旧任务归类',
+      matched_task_name: 'AI会议助手历史任务'
+    }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_choice_default',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_mark_progress_default_input' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      action: {
+        value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'choice_default' },
+        form_value: {
+          task_name_choice_default: '继续测试会议助手',
+          progress_summary_choice_default: '继续验证旧任务归类'
+        }
+      }
+    }
+  }, {
+    masterTaskNameExists: async (taskName) => taskName === 'AI会议助手历史任务',
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '已标记为旧任务进展');
+  assert.equal(updatedDraft.draft_tasks[0].task_choice, 'old_task_progress');
+  assert.equal(updatedDraft.draft_tasks[0].matched_task_name, 'AI会议助手历史任务');
+}
+
 async function testValidNewTaskConfirmationShowsTerminalFeedback() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -1916,6 +1976,7 @@ testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 await initDatabase();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
+await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();
 await testValidNewTaskConfirmationShowsTerminalFeedback();
 await testValidOldProgressConfirmationUsesMasterCandidateOnly();
 await testInvalidDirectOldNameInputRollsBackAndUpdatesFailureCard();

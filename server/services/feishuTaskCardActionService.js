@@ -192,11 +192,9 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能修改' : '已确认，不能再修改');
   }
 
-  const values = validateEditableValues(parsed.form_values);
-
-  if (taskChoice === 'old_task_progress') {
+  if (taskChoice === 'old_task_progress' && parsed.form_values.matched_task_name) {
     const draft = await getMeetingTaskDraftById(parsed.draft_id);
-    const exists = await dependencies.masterTaskNameExists(values.matchedTaskName, {
+    const exists = await dependencies.masterTaskNameExists(parsed.form_values.matched_task_name, {
       table_id: draft?.table_id,
       app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
     });
@@ -204,15 +202,23 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     if (!exists) reject('不能填写原表格没有的任务', 400);
   }
 
-  const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
-    ...task,
-    task_name: values.taskName,
-    progress_summary: values.progressSummary || task.progress_summary,
-    matched_task_name: values.matchedTaskName || task.matched_task_name,
-    task_choice: taskChoice,
-    updated_by: parsed.operator_open_id,
-    updated_at: new Date().toISOString()
-  }));
+  const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => {
+    const values = validateEditableValues({
+      task_name: parsed.form_values.task_name || task.task_name,
+      progress_summary: parsed.form_values.progress_summary || task.progress_summary,
+      matched_task_name: parsed.form_values.matched_task_name || matchedTaskNameOf(task)
+    });
+
+    return {
+      ...task,
+      task_name: values.taskName,
+      progress_summary: values.progressSummary || task.progress_summary,
+      matched_task_name: values.matchedTaskName || task.matched_task_name,
+      task_choice: taskChoice,
+      updated_by: parsed.operator_open_id,
+      updated_at: new Date().toISOString()
+    };
+  });
 
   assertOwnedItem(result?.item, state.assignee_key, '只能修改本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
