@@ -27,6 +27,11 @@ function textOf(task) {
     .join(' ');
 }
 
+function evidenceOf(task) {
+  const evidence = String(task.evidence_quote || task.evidence || '').trim();
+  return evidence && evidence !== '待确认' && evidence !== '未提供' ? evidence : '';
+}
+
 function includesAny(value, words) {
   return words.some((word) => String(value || '').includes(word));
 }
@@ -65,6 +70,28 @@ function lowInformationPattern(name) {
     || /^回归并准备活动上线$/.test(compactName);
 }
 
+function isAssigneeOnlyDailyTaskName(task, name) {
+  const compactName = compact(name);
+  const assignee = compact(task.assignee || task.owner || task.assignee_name || task.source_speaker || '');
+
+  if (!assignee) return false;
+  return compactName === `${assignee}今日工作生成`
+    || compactName === `${assignee}今日工作确认`
+    || compactName === `${assignee}今日工作`;
+}
+
+function hasGroundedDailyTaskEvidence(task, name) {
+  const evidence = evidenceOf(task);
+
+  if (!evidence) return false;
+  const compactEvidence = compact(evidence);
+  const withoutAssignee = compact(name).replace(compact(task.assignee || task.owner || task.assignee_name || task.source_speaker || ''), '');
+  const genericName = withoutAssignee === '今日工作生成' || withoutAssignee === '今日工作确认' || withoutAssignee === '今日工作';
+
+  if (!genericName) return false;
+  return hasSpecificBusinessObject(compactEvidence) && hasAction(compactEvidence) && hasDeliverable(compactEvidence);
+}
+
 function buildImprovedName(task) {
   const original = String(task.task_name || task.title || '').trim();
   const context = textOf(task);
@@ -101,16 +128,20 @@ export function improveAndValidateTaskName(task) {
   const hasSpecificObject = hasSpecificBusinessObject(context);
   const deliverable = hasDeliverable(context);
   const action = hasAction(improved) || hasAction(context);
-  const evidence = String(task.evidence_quote || task.evidence || '').trim();
+  const evidence = evidenceOf(task);
   let score = 0;
 
   if (action) score += 30;
   if (hasSpecificObject) score += 30;
   if (deliverable) score += 25;
-  if (evidence && evidence !== '待确认' && evidence !== '未提供') score += 15;
+  if (evidence) score += 15;
 
   if (!original) {
     return { keep: false, reason: 'missing_task_name', task_name: original };
+  }
+
+  if (isAssigneeOnlyDailyTaskName(task, improved) && !hasGroundedDailyTaskEvidence(task, improved)) {
+    return { keep: false, reason: 'assignee_only_daily_task_name', task_name: improved, quality_score: 0 };
   }
 
   if (lowInformationPattern(improved) && !hasSpecificObject) {

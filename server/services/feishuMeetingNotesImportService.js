@@ -179,6 +179,13 @@ function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
   return fallbackItems;
 }
 
+function isSpecificSpeakerActionSegment(segment) {
+  const text = String(segment?.text || '').trim();
+
+  return /AI\s*智能会议助手|AI会议助手|事务管理需求|总表|接口|页面|功能|模块|代码|文档|测试|接入|优化|收尾|部署|上线|联调|验收|修复|开发|配置|输出/.test(text)
+    && /完成|推进|处理|修复|回归|准备|上线|验收|测试|联调|对接|接入|开发|搭建|输出|整理|梳理|配置|制定|优化|改造|迁移|发布|发版|跑通|部署|收尾|调试|维护/.test(text);
+}
+
 function repairProgressAssigneesFromEvidence(progressUpdates, segments) {
   return (Array.isArray(progressUpdates) ? progressUpdates : []).map((item) => {
     const assignee = assigneeOf(item);
@@ -206,7 +213,7 @@ function taskItemFromProgressUpdate(item) {
     task_brief: item?.task_brief || item?.progress_summary || taskName,
     task_description: item?.task_description || item?.progress_summary || taskName,
     progress_summary: item?.progress_summary || item?.task_description || item?.task_brief || taskName,
-    matched_task_name: item?.matched_task_name || item?.matched_history?.task_name || item?.matched_first_task_name || '',
+    matched_task_name: item?.matched_task_name || item?.matched_history?.task_name || item?.matched_history_task_name || item?.matched_first_task_name || '',
     deadline: item?.deadline || '待确认',
     priority: item?.priority || '中',
     task_choice: 'old_task_progress'
@@ -218,7 +225,11 @@ export function repairDraftAssigneesFromPreviousDraft({ tasks, progressUpdates, 
   const repairedTasks = repairItemsAssignees(tasks, previousDraft?.draft_tasks || []);
   const repairedProgress = repairItemsAssignees(progressWithSpeaker, previousDraft?.progress_updates || []);
   const progressChoiceTasks = repairedProgress.map(taskItemFromProgressUpdate);
-  const fallbackTasks = speakerCoverageTaskItems({ tasks: [...repairedTasks, ...progressChoiceTasks], progressUpdates: [], segments });
+  const fallbackTasks = speakerCoverageTaskItems({
+    tasks: [...repairedTasks, ...progressChoiceTasks],
+    progressUpdates: [],
+    segments: (Array.isArray(segments) ? segments : []).filter(isSpecificSpeakerActionSegment)
+  });
 
   return {
     tasks: [...repairedTasks, ...progressChoiceTasks, ...fallbackTasks],
