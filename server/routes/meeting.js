@@ -5,9 +5,31 @@ import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImp
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
-import { getMeetingTaskDraftById, listDraftAssigneeStates } from '../services/taskDraftService.js';
+import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates } from '../services/taskDraftService.js';
+import { updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 
 const router = express.Router();
+
+function configuredMaintenanceToken() {
+  return String(process.env.FEISHU_DOCX_SOURCE_API_TOKEN || '').trim();
+}
+
+function bearerToken(req) {
+  const header = String(req.get('authorization') || '').trim();
+
+  return header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';
+}
+
+function requireMaintenanceToken(req, res, next) {
+  const token = configuredMaintenanceToken();
+
+  if (!token || bearerToken(req) === token) {
+    next();
+    return;
+  }
+
+  res.status(401).json({ success: false, message: 'Unauthorized' });
+}
 
 router.use('/feishu-docx-note-sources', feishuDocxNoteSourcesRouter);
 router.use('/sync-feishu-meeting-notes', feishuMeetingNotesSyncRouter);
@@ -47,6 +69,49 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
         updated_at: row.updated_at
       }))
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/refresh-draft-task-cards', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const draftId = Number(req.body?.draft_id || req.body?.draftId || 0);
+    const sourceType = String(req.body?.source_type || req.body?.sourceType || 'feishu_meeting_note').trim();
+    const sourceId = String(req.body?.source_id || req.body?.sourceId || '').trim();
+    const assigneeKey = String(req.body?.assignee_key || req.body?.assigneeKey || '').replace(/\s+/g, '').trim();
+    const cardKind = String(req.body?.card_kind || req.body?.cardKind || 'tasks').trim() || 'tasks';
+    const dryRun = req.body?.dry_run === true || req.body?.dryRun === true;
+    const draft = Number.isFinite(draftId) && draftId > 0
+      ? await getMeetingTaskDraftById(draftId)
+      : await getMeetingTaskDraftBySource(sourceType, sourceId, { includeAnyStatus: true });
+
+    if (!draft) {
+      res.status(404).json({ success: false, message: 'draft 不存在' });
+      return;
+    }
+
+    const states = (await listDraftAssigneeStates(draft.id))
+      .filter((state) => state.delivery_status === 'sent' && state.card_message_id)
+      .filter((state) => !assigneeKey || state.assignee_key === assigneeKey)
+      .filter((state) => !cardKind || state.card_kind === cardKind);
+    const results = [];
+
+    for (const state of states) {
+      if (dryRun) {
+        results.push({ assignee_key: state.assignee_key, card_kind: state.card_kind, status: 'dry_run', has_message_id: true });
+        continue;
+      }
+
+      const result = await updateFeishuTaskCard({
+        draftId: draft.id,
+        assigneeKey: state.assignee_key,
+        cardKind: state.card_kind
+      });
+      results.push({ assignee_key: state.assignee_key, card_kind: state.card_kind, ...result });
+    }
+
+    res.json({ success: true, draft_id: draft.id, refreshed_count: results.filter((item) => item.status === 'updated').length, results });
   } catch (error) {
     next(error);
   }
