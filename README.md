@@ -441,9 +441,28 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 - `FEISHU_EVENT_VERIFICATION_TOKEN=`：飞书事件订阅/卡片回调 verification token。配置后 `/api/feishu/card-action` 会拒绝 token 不匹配的回调。
 - `FEISHU_NOTIFY_RECEIVE_ID_TYPE=email`：飞书私发通知的接收 ID 类型，默认 `email`。
 - `FEISHU_NOTIFY_RECEIVE_ID=`：飞书私发通知接收人。配置后，worker 启动首次扫描若 `imported=0` 会私发“未读取到会议内容”。
+- `FEISHU_WIKI_SOURCE_NODE_URL=`：常驻 worker 自动扫描的飞书 Wiki 目录节点。生产默认应指向“会议原文”：`https://qcn65gkeqmrk.feishu.cn/wiki/K40WwNEP3ipVSRkaKwec3dlwnrh?fromScene=spaceOverview`。
+- `FEISHU_WIKI_SOURCE_SPACE_ID=7633724002921368754`：上述 Wiki 节点所在知识库空间 ID。
+- `FEISHU_WIKI_SCAN_LIMIT=20`：每轮最多读取的 Wiki 子节点数量。
 - `FEISHU_DOCX_SOURCE_API_TOKEN=`：在线维护飞书 docx 来源列表的可选 API Token。为空时 `GET/POST /api/meeting/feishu-docx-note-sources` 不需要鉴权；配置后必须使用 `Authorization: Bearer <token>`。
 
-## 飞书 docx 在线来源管理
+## 飞书会议原文目录自动扫描
+
+常驻 worker 会扫描 `FEISHU_WIKI_SOURCE_NODE_URL` 指向的飞书 Wiki 目录，也就是“会议原文”节点下的 docx 子文档。用户在该目录下新增或更新会议原文文档后，worker 每 15 分钟读取子文档内容，生成待确认草稿，并通过飞书私聊卡片发送给对应负责人。
+
+该流程使用飞书 Wiki/docx 读取能力，不扫描飞书会议接口，也不需要配置会议 `user_access_token` 或 `refresh_token`。
+
+生产默认目录：
+
+```env
+FEISHU_WIKI_SOURCE_NODE_URL=https://qcn65gkeqmrk.feishu.cn/wiki/K40WwNEP3ipVSRkaKwec3dlwnrh?fromScene=spaceOverview
+FEISHU_WIKI_SOURCE_SPACE_ID=7633724002921368754
+FEISHU_WIKI_SCAN_LIMIT=20
+```
+
+## 飞书单 docx 在线来源管理
+
+该接口仅用于手动维护单个 docx 文档来源，不是常驻 worker 的默认扫描入口。常驻 worker 的生产入口是上面的“会议原文”Wiki 目录。
 
 部署后可以通过 API 维护自动同步的飞书 docx 文档来源，不需要进入服务器执行脚本。该接口只保存文档 URL、文档 ID、标题和启用状态，不读取或返回文档正文；原有 `POST /api/meeting/sync-feishu-docx` 同步接口和飞书私聊卡片确认流程保持不变。
 
