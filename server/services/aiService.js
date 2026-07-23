@@ -320,7 +320,7 @@ async function callAi(prompt, label = 'AI') {
     })
   }, {
     retries: Number(process.env.AI_RETRY_COUNT) || 2,
-    timeoutMs: Number(process.env.AI_TIMEOUT_MS) || 120000,
+    timeoutMs: Number(process.env.AI_TIMEOUT_MS) || 300000,
     baseDelayMs: Number(process.env.AI_RETRY_BASE_DELAY_MS) || 1000
   });
 

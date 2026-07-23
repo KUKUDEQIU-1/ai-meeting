@@ -76,6 +76,7 @@ CLIENT_ORIGIN=http://localhost:5173
 AI_API_URL=https://api.concertcalendar.cloud/v1/chat/completions
 AI_API_KEY=
 AI_MODEL=gpt-5.5
+AI_TIMEOUT_MS=300000
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 FEISHU_BITABLE_APP_TOKEN=
@@ -445,6 +446,7 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 - `FEISHU_WIKI_SOURCE_SPACE_ID=7633724002921368754`：上述 Wiki 节点所在知识库空间 ID。
 - `FEISHU_WIKI_SCAN_LIMIT=20`：每轮最多读取的 Wiki 子节点数量。
 - `FEISHU_DOCX_SOURCE_API_TOKEN=`：在线维护飞书 docx 来源列表的可选 API Token。为空时 `GET/POST /api/meeting/feishu-docx-note-sources` 不需要鉴权；配置后必须使用 `Authorization: Bearer <token>`。
+- `AI_TIMEOUT_MS=300000`：AI 单次请求超时时间，默认 300 秒；强制重新分析较长会议原文时不要低于该值。
 
 ## 飞书会议原文目录自动扫描
 
