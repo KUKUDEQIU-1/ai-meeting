@@ -72,6 +72,33 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.equal((text.match(/"tag":"input"/g) || []).length, 3);
 }
 
+function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
+  const longText = '洪伟填需要处理活动发布环境配置并回归测试。'.repeat(120);
+  const card = buildAssigneeTaskCard({
+    draft: { id: 17, meeting_title: '长内容会议', meeting_source: '飞书 Wiki' },
+    assignee: { assignee_key: '洪伟填', assignee_name: '洪伟填' },
+    tasks: [{
+      item_id: 'long_item',
+      task_name: longText,
+      matched_task_name: longText,
+      progress_summary: longText,
+      task_description: longText,
+      evidence_quote: longText,
+      assignee: '洪伟填'
+    }]
+  });
+  const text = JSON.stringify(card);
+
+  assert.ok(inputDefaultValue(card, 'task_name_long_item').length <= 500);
+  assert.ok(inputDefaultValue(card, 'matched_task_name_long_item').length <= 500);
+  assert.ok(inputDefaultValue(card, 'progress_summary_long_item').length <= 500);
+  assert.doesNotMatch(text, new RegExp(longText.slice(0, 1000)));
+  assert.match(text, /保存修改/);
+  assert.match(text, /标记为新任务/);
+  assert.match(text, /标记为旧任务进展/);
+  assert.match(text, /confirm_assignee_tasks/);
+}
+
 function buttonType(card, name) {
   const stack = [card];
   while (stack.length) {
@@ -470,6 +497,8 @@ function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
   assert.equal(repaired.progressUpdates.length, 0);
   assert.equal(repaired.tasks.length, 2);
   assert.equal(repaired.tasks[1].assignee, '简学勤');
+  assert.match(repaired.tasks[1].task_name, /收尾|AI 智能会议助手|接入总表/);
+  assert.doesNotMatch(repaired.tasks[1].task_name, /今日工作确认|今日工作生成|今日工作/);
   assert.equal(grouped.deliverable.length, 2);
   assert.equal(grouped.deliveryFailures.length, 0);
   assert.match(cardText, /任务归类待确认/);
@@ -504,11 +533,33 @@ function testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword() {
 
   assert.equal(repaired.tasks.length, 1);
   assert.equal(repaired.tasks[0].assignee, '胡涌昌');
+  assert.match(repaired.tasks[0].task_name, /积分商城|小程序验收|测试结果/);
+  assert.doesNotMatch(repaired.tasks[0].task_name, /今日工作确认|今日工作生成|今日工作/);
   assert.equal(grouped.deliverable.length, 1);
   assert.match(cardText, /任务归类待确认/);
   assert.match(cardText, /标记为新任务/);
   assert.match(cardText, /标记为旧任务进展/);
   assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
+}
+
+function testSelfReportedTodayTaskCreatesConcreteFallbackTaskName() {
+  const repaired = repairDraftAssigneesFromPreviousDraft({
+    tasks: [],
+    progressUpdates: [],
+    previousDraft: null,
+    segments: [{
+      speaker: '洪伟填',
+      speaker_status: 'provided',
+      speaker_confidence: 0.8,
+      time: '00:12:12',
+      text: '我今天的任务就是，把活动发布环境的配置问题修复掉，下午回归测试。'
+    }]
+  });
+
+  assert.equal(repaired.tasks.length, 1);
+  assert.equal(repaired.tasks[0].assignee, '洪伟填');
+  assert.match(repaired.tasks[0].task_name, /活动发布环境|配置问题|修复|回归测试/);
+  assert.doesNotMatch(repaired.tasks[0].task_name, /洪伟填今日工作确认|今日工作确认|今日工作生成|今日工作/);
 }
 
 function testGenericSpeakerCoverageDoesNotCreateAssigneeOnlyTask() {
@@ -2013,6 +2064,7 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
+testTaskCardInputDefaultsAreBoundedForLongDraftContent();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
 testOldTaskMappingHintUsesMatchedNameOrEditableInput();
@@ -2027,6 +2079,7 @@ testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
 testMissingDailySpeakerGetsFallbackConfirmationCardItem();
 testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword();
+testSelfReportedTodayTaskCreatesConcreteFallbackTaskName();
 testGenericSpeakerCoverageDoesNotCreateAssigneeOnlyTask();
 testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
 testAssignedProgressUpdateGetsEditableChoiceCard();

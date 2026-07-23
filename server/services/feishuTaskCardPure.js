@@ -3,6 +3,11 @@ function truncateText(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+function inputDefaultValue(tag, value) {
+  const maxLength = String(tag || '').startsWith('progress_summary_') ? 500 : 120;
+  return truncateText(value, maxLength);
+}
+
 function firstString(...values) {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -127,7 +132,7 @@ function inputElement({ tag, label, value }) {
         tag: 'input',
         name: tag,
         placeholder: { tag: 'plain_text', content: label },
-        default_value: String(value || '')
+        default_value: inputDefaultValue(tag, value)
       }]
     }]
   };

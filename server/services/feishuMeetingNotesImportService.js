@@ -142,6 +142,20 @@ function coveredAssignees(tasks, progressUpdates) {
   return assignees;
 }
 
+function speakerTaskNameFromSegment(segment) {
+  const text = String(segment?.text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[，。；、\s]+/, '')
+    .trim();
+  const taskText = text
+    .replace(/^(我今天的任务就是|我今天的任务是|我今天主要是|我今天这边|我这边今天|这边|今天我这边|我今天)[:,，。\s]*/, '')
+    .replace(/^(先|主要|继续|把|要|会|负责)\s+/, (match) => match.trim() === '继续' || match.trim() === '把' ? match : '')
+    .trim();
+  const concreteText = taskText || text;
+
+  return concreteText.length > 80 ? `${concreteText.slice(0, 79)}…` : concreteText;
+}
+
 function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
   const covered = coveredAssignees(tasks, progressUpdates);
   const fallbackItems = [];
@@ -155,7 +169,7 @@ function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
     covered.add(speaker);
     fallbackItems.push({
       item_id: `speaker_${fallbackItems.length + 1}_${normalizeEvidenceText(speaker)}`,
-      task_name: `${speaker}今日工作确认`,
+      task_name: speakerTaskNameFromSegment(segment),
       task_brief: String(segment.text || '').trim().slice(0, 120),
       task_description: String(segment.text || '').trim(),
       progress_summary: String(segment.text || '').trim().slice(0, 120),

@@ -1,5 +1,45 @@
 # Bug Log
 
+## 2026-07-23 - Speaker fallback generated fake daily task names and long cards failed Feishu limits
+
+### Symptom
+
+After rerunning the 2026-07-23 meeting document, a self-reported task from `简学勤` still appeared as `简学勤今日工作确认` instead of a concrete task name. Another assignee, `洪伟填`, did not receive a card because Feishu rejected the interactive card with `ErrCode: 11310; ErrMsg: element exceeds the limit`.
+
+### Expected Behavior
+
+- If a speaker says their own today task, the system must preserve/generate a concrete task from the spoken action, for example `继续收尾 AI 智能会议助手的工具应用，测试后接入总表`.
+- The system must never generate formal task names like `<负责人>今日工作确认`, `<负责人>今日工作生成`, or `<负责人>今日工作`.
+- Feishu cards must display bounded text so a long task description, evidence quote, matched task name, or progress summary cannot make the entire card fail to send.
+- Truncation must apply only to Feishu card display defaults, not erase the full draft data stored for later processing.
+
+### Root Cause
+
+`speakerCoverageTaskItems()` tried to avoid missing a reliable speaker, but used a hardcoded fallback title:
+
+```js
+task_name: `${speaker}今日工作确认`
+```
+
+That fallback ran after the normal task filter, so it bypassed the existing `assignee_only_daily_task_name` guard and reintroduced the exact generic title the filter was designed to reject.
+
+The card delivery failure came from `inputElement()` in `feishuTaskCardPure.js`. It copied `default_value: String(value || '')` into Feishu card input elements without bounding length. Long `task_name`, `matched_task_name`, or `progress_summary` values could therefore exceed Feishu's per-element card limits and fail the whole assignee card.
+
+### Fix Requirements
+
+- Derive speaker-coverage fallback titles from the speaker segment text by removing only leading self-report framing such as `我今天的任务就是`.
+- Keep the concrete action/object text and never produce `<speaker>今日工作确认`.
+- Bound Feishu input default values centrally in `inputElement()`.
+- Add regressions for concrete self-reported fallback titles and long card input defaults.
+
+### Regression Tests
+
+`server/scripts/test-feishu-task-cards.js` includes:
+
+- `testSelfReportedTodayTaskCreatesConcreteFallbackTaskName()`
+- strengthened `testMissingDailySpeakerGetsFallbackConfirmationCardItem()` and `testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword()`
+- `testTaskCardInputDefaultsAreBoundedForLongDraftContent()`
+
 ## 2026-07-23 - Failed card stayed editable but final confirm ignored explicit new-task choice
 
 ### Symptom
