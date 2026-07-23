@@ -563,6 +563,7 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       previousDraft,
       segments: transcriptResult.usable_segments
     });
+    repairedDraftItems.tasks = markDraftTasksMatchedInMasterTable(repairedDraftItems.tasks, masterTaskRecords);
     const draft = existingPendingDraft || await createMeetingTaskDraft({
       sourceType: 'feishu_meeting_note',
       sourceId: normalizedNoteId,
