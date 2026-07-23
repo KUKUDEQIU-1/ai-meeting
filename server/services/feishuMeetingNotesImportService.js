@@ -148,6 +148,10 @@ function speakerTaskNameFromSegment(segment) {
     .replace(/\s+/g, ' ')
     .replace(/^[，。；、\s]+/, '')
     .trim();
+  const spokenTitle = spokenWorkTitle(text);
+
+  if (spokenTitle) return spokenTitle;
+
   const taskText = text
     .replace(/^(我今天的任务就是|我今天的任务是|我今天主要是|我今天这边|我这边今天|这边|今天我这边|我今天)[:,，。\s]*/, '')
     .replace(/^(先|主要|继续|把|要|会|负责)\s+/, (match) => match.trim() === '继续' || match.trim() === '把' ? match : '')
@@ -156,6 +160,27 @@ function speakerTaskNameFromSegment(segment) {
   const title = normalizeVerbObjectTaskName(concreteText, text);
 
   return title.length > 80 ? `${title.slice(0, 79)}…` : title;
+}
+
+function spokenWorkTitle(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const titles = [];
+  if (/周会/.test(text) && /填|填写/.test(text) && /内容/.test(text)) {
+    titles.push('组织周会内容填写');
+  }
+  if (/(OCR|ocr|数分)/.test(text) && /评审/.test(text)) {
+    titles.push('评审OCR和数分事项');
+  }
+  if (/商家运营|运营/.test(text) && /做|处理|跟进|运营/.test(text)) {
+    titles.push('跟进商家运营工作');
+  }
+
+  if (!titles.length) return '';
+  if (titles.length === 1) return titles[0];
+
+  return `${titles[0]}并${titles[1].replace(/^评审/, '评审')}`.slice(0, 40);
 }
 
 export function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {

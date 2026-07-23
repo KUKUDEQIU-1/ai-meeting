@@ -425,6 +425,11 @@ function testSpeakerCoverageIncludesMeetingReviewAndOperationWork() {
   assert.equal(items.length, 1);
   assert.equal(items[0].assignee, '胡涌昌');
   assert.equal(items[0].source_speaker, '胡涌昌');
+  assert.ok(!items[0].task_name.startsWith('就没定'));
+  assert.ok(!items[0].task_name.includes('我今天的主要工作就是'));
+  assert.ok(items[0].task_name.includes('周会'));
+  assert.ok(items[0].task_name.includes('评审'));
+  assert.ok(items[0].task_name.length <= 40);
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
