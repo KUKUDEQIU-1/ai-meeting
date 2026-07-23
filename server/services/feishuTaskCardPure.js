@@ -272,7 +272,7 @@ function compactTaskElements({ draft, assignee, tasks }) {
   return elements;
 }
 
-export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false }) {
+export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false, confirmItemId = '' }) {
   if (terminal) {
     return {
       schema: '2.0',
@@ -364,11 +364,18 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     elements.push({ tag: 'hr' });
   }
 
+  const scopedConfirmItemId = confirmItemId || (tasks.length === 1 ? String(tasks[0]?.item_id || '') : '');
+  const confirmValue = { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: assignee.assignee_key };
+
+  if (scopedConfirmItemId) {
+    confirmValue.item_id = scopedConfirmItemId;
+  }
+
   elements.push(callbackButton({
     name: 'confirm_tasks',
     text: '按以上选择确认',
     type: 'primary',
-    value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: assignee.assignee_key }
+    value: confirmValue
   }));
 
   return {

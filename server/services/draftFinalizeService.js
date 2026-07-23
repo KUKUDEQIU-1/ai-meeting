@@ -2,7 +2,7 @@ import { getMeetingTaskDraftById, updateMeetingTaskDraftStatus } from './taskDra
 import { syncTasksToFeishu } from './meetingService.js';
 import { saveTaskHistory, saveTaskInstances, saveTaskProgress, updateTaskInstancesFromProgress } from './taskHistoryService.js';
 
-export async function finalizeMeetingTaskDraft({ draftId, confirmedBy = '待确认', confirmedTasks = null } = {}) {
+export async function finalizeMeetingTaskDraft({ draftId, confirmedBy = '待确认', confirmedTasks = null, updateDraftStatus = true } = {}) {
   const draft = await getMeetingTaskDraftById(draftId);
 
   if (!draft) {
@@ -57,12 +57,14 @@ export async function finalizeMeetingTaskDraft({ draftId, confirmedBy = '待确�
     meeting_time: draft.meeting_time
   });
 
-  await updateMeetingTaskDraftStatus(draftId, 'confirmed', {
-    confirmed_tasks: tasks,
-    confirmed_by: confirmedBy,
-    confirmed_at: new Date().toISOString()
-  });
-  await updateMeetingTaskDraftStatus(draftId, 'synced');
+  if (updateDraftStatus) {
+    await updateMeetingTaskDraftStatus(draftId, 'confirmed', {
+      confirmed_tasks: tasks,
+      confirmed_by: confirmedBy,
+      confirmed_at: new Date().toISOString()
+    });
+    await updateMeetingTaskDraftStatus(draftId, 'synced');
+  }
 
   return {
     draft_id: draftId,
@@ -82,7 +84,7 @@ function assigneeNameOf(task) {
   return task.assignee || task.owner || task.assignee_name || '待确认';
 }
 
-export async function finalizeMeetingTaskDraftForAssignee({ draftId, assigneeKey, confirmedBy = '待确认' } = {}) {
+export async function finalizeMeetingTaskDraftForAssignee({ draftId, assigneeKey, confirmedBy = '待确认', itemIds = null } = {}) {
   const draft = await getMeetingTaskDraftById(draftId);
 
   if (!draft) {
@@ -91,8 +93,11 @@ export async function finalizeMeetingTaskDraftForAssignee({ draftId, assigneeKey
     throw error;
   }
 
+  const itemIdSet = Array.isArray(itemIds) ? new Set(itemIds.map((item) => String(item))) : null;
   const ownedConfirmedTasks = (draft.draft_tasks || []).filter((task) => (
-    normalizeAssigneeKey(assigneeNameOf(task)) === assigneeKey && task.status === 'confirmed'
+    normalizeAssigneeKey(assigneeNameOf(task)) === assigneeKey
+      && task.status === 'confirmed'
+      && (!itemIdSet || itemIdSet.has(String(task.item_id || '')))
   ));
 
   if (!ownedConfirmedTasks.length) {
@@ -109,11 +114,12 @@ export async function finalizeMeetingTaskDraftForAssignee({ draftId, assigneeKey
   return finalizeMeetingTaskDraft({
     draftId,
     confirmedBy,
-    confirmedTasks: ownedConfirmedTasks
+    confirmedTasks: ownedConfirmedTasks,
+    updateDraftStatus: !itemIdSet
   });
 }
 
-export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, assigneeKey, confirmedBy = '待确认' } = {}) {
+export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, assigneeKey, confirmedBy = '待确认', itemIds = null } = {}) {
   const draft = await getMeetingTaskDraftById(draftId);
 
   if (!draft) {
@@ -122,8 +128,11 @@ export async function finalizeMeetingTaskDraftProgressForAssignee({ draftId, ass
     throw error;
   }
 
+  const itemIdSet = Array.isArray(itemIds) ? new Set(itemIds.map((item) => String(item))) : null;
   const ownedProgressUpdates = (draft.progress_updates || []).filter((item) => (
-    normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey && item.status === 'confirmed'
+    normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey
+      && item.status === 'confirmed'
+      && (!itemIdSet || itemIdSet.has(String(item.item_id || '')))
   )).map((item) => ({
     ...item,
     confirmed_by: item.confirmed_by || confirmedBy

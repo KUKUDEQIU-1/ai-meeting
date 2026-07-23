@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { getTenantAccessToken } from './feishuBitableClient.js';
 import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { getDraftAssigneeState, getMeetingTaskDraftById, updateDraftAssigneeDelivery, upsertDraftAssigneeState } from './taskDraftService.js';
+import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
 
@@ -55,19 +55,31 @@ function itemsForAssignee(items, assigneeKey) {
   return (items || []).filter((item) => normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey);
 }
 
-function buildCardForKind({ cardKind, draft, assignee, terminal }) {
+function isFeishuElementLimitError(error) {
+  return error instanceof Error && /element exceeds the limit|ErrCode:\s*11310/.test(error.message);
+}
+
+function buildCardForKind({ cardKind, draft, assignee, terminal, itemId }) {
   if (cardKind === 'progress') {
     return buildAssigneeProgressCard({ draft, assignee, progressUpdates: itemsForAssignee(draft.progress_updates || [], assignee.assignee_key), terminal });
   }
 
-  return buildAssigneeTaskCard({ draft, assignee, tasks: itemsForAssignee(draft.draft_tasks || [], assignee.assignee_key), terminal });
+  const tasks = itemsForAssignee(draft.draft_tasks || [], assignee.assignee_key)
+    .filter((task) => !itemId || String(task.item_id || '') === itemId);
+
+  return buildAssigneeTaskCard({ draft, assignee, tasks, terminal, confirmItemId: itemId || '' });
 }
 
-export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false }) {
+export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, itemId = '' }) {
   const state = await getDraftAssigneeState(draftId, assigneeKey, cardKind);
   const draft = await getMeetingTaskDraftById(draftId);
 
-  if (!state || !draft || !state.card_message_id) {
+  const scopedMessage = itemId
+    ? (await listDraftCardMessages(draftId, assigneeKey, cardKind)).find((row) => row.item_id === itemId)
+    : null;
+  const targetMessageId = messageId || scopedMessage?.card_message_id || state?.card_message_id || '';
+
+  if (!state || !draft || !targetMessageId) {
     return { status: 'skipped', reason: 'card_state_not_found' };
   }
 
@@ -77,9 +89,9 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     receive_id_type: state.receive_id_type,
     receive_id: state.receive_id
   };
-  const card = buildCardForKind({ cardKind: state.card_kind || cardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal });
+  const scopedItemId = itemId || state.split_item_id || '';
+  const card = buildCardForKind({ cardKind: state.card_kind || cardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId });
   const tenantAccessToken = await getTenantAccessToken();
-  const targetMessageId = messageId || state.card_message_id;
   const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages/${encodeURIComponent(targetMessageId)}`;
   const response = await fetch(url, {
     method: 'PATCH',
@@ -99,6 +111,44 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   }
 
   return { status: 'updated', message_id: targetMessageId };
+}
+
+async function sendSplitTaskCards({ draft, assignee, cardKind, postMessage }) {
+  const results = [];
+  const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
+  const sentItemIds = new Set(existingMessages.filter((row) => row.delivery_status === 'sent' && row.card_message_id).map((row) => row.item_id));
+
+  for (const task of assignee.tasks) {
+    const itemId = String(task.item_id || '');
+
+    if (sentItemIds.has(itemId)) {
+      results.push({ item_id: itemId, status: 'skipped', reason: 'already_sent' });
+      continue;
+    }
+
+    try {
+      const card = buildAssigneeTaskCard({ draft, assignee, tasks: [task], confirmItemId: itemId });
+      const messageId = await postMessage({ receiveId: assignee.receive_id, card });
+      await upsertDraftCardMessage({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, itemId, cardMessageId: messageId, deliveryStatus: 'sent' });
+      results.push({ item_id: itemId, status: 'sent', message_id: messageId });
+    } catch (error) {
+      await upsertDraftCardMessage({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, itemId, cardMessageId: '', deliveryStatus: 'failed', deliveryError: error instanceof Error ? error.message : String(error) });
+      results.push({ item_id: itemId, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  const failed = results.filter((item) => item.status === 'failed');
+  const sentOrSkipped = results.filter((item) => item.status === 'sent' || item.status === 'skipped');
+
+  if (failed.length || sentOrSkipped.length !== assignee.tasks.length) {
+    const message = failed[0]?.error || '部分任务卡片发送失败';
+    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: message });
+    return { assignee_key: assignee.assignee_key, status: 'failed', error: message, split_cards: results };
+  }
+
+  const firstMessageId = results.find((item) => item.message_id)?.message_id || existingMessages[0]?.card_message_id || '';
+  await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', deliveryError: '', cardMessageId: firstMessageId });
+  return { assignee_key: assignee.assignee_key, status: 'sent', message_id: firstMessageId, split: true, split_cards: results };
 }
 
 async function persistUnmappedAssignees(draftId, failures, cardKind) {
@@ -142,12 +192,11 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = postFei
     try {
       messageId = await postMessage({ receiveId: assignee.receive_id, card });
     } catch (error) {
-      if (cardKind !== 'tasks' || !(error instanceof Error) || !/element exceeds the limit|ErrCode:\s*11310/.test(error.message)) {
+      if (cardKind !== 'tasks' || !isFeishuElementLimitError(error)) {
         throw error;
       }
 
-      const compactCard = buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks, compact: true });
-      messageId = await postMessage({ receiveId: assignee.receive_id, card: compactCard });
+      return await sendSplitTaskCards({ draft, assignee, cardKind, postMessage });
     }
 
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });

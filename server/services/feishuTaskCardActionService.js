@@ -13,6 +13,7 @@ import {
   getMeetingTaskDraftById,
   markDraftAssigneeConfirmed,
   resetDraftAssigneeConfirmationAfterFailure,
+  resetDraftAssigneeConfirmationToPending,
   updateDraftAssigneeCallbackId,
   updateMeetingTaskDraftItem,
   updateMeetingTaskDraftProgressUpdates
@@ -99,7 +100,8 @@ async function updateCardAfterConfirmationFailure(dependencies, parsed, state) {
     messageId: parsed.message_id,
     draftId: parsed.draft_id,
     assigneeKey: state.assignee_key,
-    cardKind: state.card_kind
+    cardKind: state.card_kind,
+    itemId: parsed.item_id || state.split_item_id || ''
   });
 
   if (result?.status === 'skipped') {
@@ -184,7 +186,7 @@ async function editTask(parsed, state, dependencies) {
 
   assertOwnedItem(result?.item, state.assignee_key, '只能修改本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
   return feishuCallbackToast('任务已更新');
 }
 
@@ -213,7 +215,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
 
   assertOwnedItem(result?.item, state.assignee_key, '只能修改本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
   return feishuCallbackToast(taskChoice === 'old_task_progress' ? '已标记为旧任务进展' : '已标记为新任务');
 }
 
@@ -231,7 +233,7 @@ async function discardTask(parsed, state, dependencies) {
 
   assertOwnedItem(result?.item, state.assignee_key, '只能丢弃本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
   return feishuCallbackToast('任务已丢弃');
 }
 
@@ -250,8 +252,10 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
     const confirmedNewTasks = [];
     const convertedProgressUpdates = [];
 
+    const scopedItemId = parsed.item_id || state.split_item_id || '';
     const pendingTasks = ownedTasks
       .filter((item) => item.status === 'pending')
+      .filter((item) => !scopedItemId || String(item.item_id || '') === scopedItemId)
       .map((storedTask) => {
         const task = taskWithCurrentFormValues(storedTask, parsed.raw_form_values);
         return { ...task, task_choice: taskChoiceFromCurrentForm(task, parsed.raw_form_values) };
@@ -288,7 +292,8 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
       await dependencies.finalizeAssignee({
         draftId: parsed.draft_id,
         assigneeKey: state.assignee_key,
-        confirmedBy: parsed.operator_open_id
+        confirmedBy: parsed.operator_open_id,
+        itemIds: confirmedNewTasks.map((task) => task.item_id)
       });
     }
     if (convertedProgressUpdates.length) {
@@ -300,17 +305,32 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
       await dependencies.finalizeProgress({
         draftId: parsed.draft_id,
         assigneeKey: state.assignee_key,
-        confirmedBy: parsed.operator_open_id
+        confirmedBy: parsed.operator_open_id,
+        itemIds: convertedProgressUpdates.map((item) => item.item_id)
       });
     }
-    await markDraftAssigneeConfirmed({
-      draftId: parsed.draft_id,
-      assigneeKey: state.assignee_key,
-      cardKind: state.card_kind,
-      confirmedBy: parsed.operator_open_id,
-      callbackId: parsed.callback_id
-    });
-    await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: true });
+    const latestDraftAfterConfirm = await getMeetingTaskDraftById(parsed.draft_id);
+    const hasRemainingPendingTasks = (latestDraftAfterConfirm?.draft_tasks || []).some((task) => (
+      normalizeAssigneeKey(assigneeNameOf(task)) === state.assignee_key && task.status === 'pending'
+    ));
+
+    if (hasRemainingPendingTasks) {
+      await resetDraftAssigneeConfirmationToPending({
+        draftId: parsed.draft_id,
+        assigneeKey: state.assignee_key,
+        cardKind: state.card_kind,
+        callbackId: parsed.callback_id
+      });
+    } else {
+      await markDraftAssigneeConfirmed({
+        draftId: parsed.draft_id,
+        assigneeKey: state.assignee_key,
+        cardKind: state.card_kind,
+        confirmedBy: parsed.operator_open_id,
+        callbackId: parsed.callback_id
+      });
+    }
+    await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: true, itemId: scopedItemId });
     return feishuCallbackToast(convertedProgressUpdates.length && !confirmedNewTasks.length ? '旧任务进展已确认' : '你的选择已确认');
   } catch (error) {
     await resetDraftAssigneeConfirmationAfterFailure({
