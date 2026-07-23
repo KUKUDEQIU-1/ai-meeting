@@ -19,6 +19,7 @@ import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 import { dispatchDraftTaskCards } from '../services/feishuTaskCardService.js';
+import { normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
 
 function testMappingAndGrouping() {
   const assigneeMap = parseAssigneeMap(JSON.stringify({ 张三: 'ou_zhang', '李 四': { open_id: 'ou_li' } }));
@@ -319,6 +320,17 @@ function testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence() {
 
   assert.deepEqual(result.tasks.map((item) => item.task_name), ['收尾优化AI会议助手应用']);
   assert.equal(result.removed.some((item) => item.reason === 'assignee_only_daily_task_name'), true);
+}
+
+function testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle() {
+  assert.equal(
+    normalizeVerbObjectTaskName('我。今天的工作还是继续修复助手', 'AI会议助手卡片确认和任务生成问题'),
+    '继续修复AI会议助手'
+  );
+  assert.equal(
+    normalizeVerbObjectTaskName('我今天的任务就是，继续收尾 AI 智能会议助手的工具应用，测试后接入总表。'),
+    '继续收尾AI智能会议助手的工具应用'
+  );
 }
 
 function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
@@ -2185,6 +2197,7 @@ testReliableSpeakerProgressKeepsAssigneeForPrivateCard();
 testAssignedProgressUpdateGetsEditableChoiceCard();
 testProgressSuppressionKeepsTaskAssigneeForPrivateCard();
 testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
+testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithCompactCard();

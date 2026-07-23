@@ -1,5 +1,34 @@
 # Bug Log
 
+## 2026-07-23 - Speaker fallback used raw first-person sentence as task name
+
+### Symptom
+
+After removing the hardcoded `<负责人>今日工作确认` fallback, a card still showed a task name like `我。今天的工作还是继续修复助手`. This was not a valid task title; it was a raw spoken sentence fragment.
+
+### Expected Behavior
+
+- Task names must follow a short `动词 + 名词/对象` shape.
+- First-person filler such as `我今天的工作`, `我今天的任务就是`, `还是`, and stray punctuation must not appear in the final task title.
+- `助手` in this project context should normalize to `AI会议助手` when the surrounding context indicates the meeting assistant.
+
+### Root Cause
+
+The speaker-coverage fallback stopped hardcoding `今日工作确认`, but its replacement only stripped a few leading phrases and then used the remaining spoken sentence as `task_name`. That path still did not perform title rewriting into a normalized verb-object phrase.
+
+### Fix Requirements
+
+- Add a reusable task-name normalizer that converts noisy first-person spoken text into `动词 + 对象`.
+- Run the speaker fallback title through that normalizer.
+- Keep existing task-quality validation for AI-produced tasks while also normalizing noisy titles before validation.
+
+### Regression Test
+
+`server/scripts/test-feishu-task-cards.js` includes `testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle()`:
+
+- `我。今天的工作还是继续修复助手` becomes `继续修复AI会议助手`
+- `我今天的任务就是，继续收尾 AI 智能会议助手的工具应用，测试后接入总表。` becomes a verb-object title without first-person filler
+
 ## 2026-07-23 - Speaker fallback generated fake daily task names and long cards failed Feishu limits
 
 ### Symptom

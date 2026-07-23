@@ -36,6 +36,13 @@ function includesAny(value, words) {
   return words.some((word) => String(value || '').includes(word));
 }
 
+function firstActionIn(value) {
+  return ACTION_VERBS
+    .map((word) => ({ word, index: String(value || '').indexOf(word) }))
+    .filter((item) => item.index >= 0)
+    .sort((left, right) => left.index - right.index || right.word.length - left.word.length)[0] || null;
+}
+
 function businessTermsIn(value) {
   return BUSINESS_TERMS.filter((word) => String(value || '').includes(word));
 }
@@ -98,6 +105,9 @@ function buildImprovedName(task) {
   const terms = businessTermsIn(context);
   const primaryTerm = terms[0] || '';
   const compactOriginal = compact(original);
+  const normalized = normalizeVerbObjectTaskName(original, context);
+
+  if (normalized && normalized !== original) return normalized;
 
   if (!primaryTerm) return original;
 
@@ -119,6 +129,48 @@ function buildImprovedName(task) {
   }
 
   return original;
+}
+
+export function normalizeVerbObjectTaskName(value, context = '') {
+  const original = String(value || '').replace(/\s+/g, ' ').trim();
+  const noisyTitle = /我|今天|这边|工作|任务|还是|[。；，,.]/.test(original);
+
+  if (!noisyTitle) return original;
+
+  const cleaned = original
+    .replace(/^[，。；、\s]+/, '')
+    .replace(/^(我[。,.，\s]*)?(今天)?(的)?(工作|任务)(就是|还是|是)?[:,，。\s]*/, '')
+    .replace(/^(我今天的任务就是|我今天的任务是|我今天主要是|我今天这边|我这边今天|这边|今天我这边|我今天)[:,，。\s]*/, '')
+    .replace(/^(还是|先|主要|要|会|负责)\s*/, '')
+    .trim();
+  const action = firstActionIn(cleaned);
+
+  if (!action) return original;
+
+  const beforeAction = cleaned.slice(0, action.index);
+  let verb = beforeAction.includes('继续') && action.word !== '继续' ? `继续${action.word}` : action.word;
+  let object = cleaned.slice(action.index + action.word.length)
+    .replace(/^(一下|一下子|下|好|掉|完|完成|这个|那个|的|把|一下，|，)/, '')
+    .split(/，|。|；|,|\.|然后|下午|晚点|后续|如果/)[0]
+    .trim();
+
+  if (action.word === '继续') {
+    const nestedAction = firstActionIn(object);
+    if (nestedAction && nestedAction.index === 0 && nestedAction.word !== '继续') {
+      verb = `继续${nestedAction.word}`;
+      object = object.slice(nestedAction.word.length).trim();
+    }
+  }
+
+  const terms = businessTermsIn(`${object} ${context}`);
+  if ((!object || object === '助手' || object.length <= 2 || onlyGenericObject(object)) && terms[0]) {
+    object = terms[0];
+  }
+  if (object === '助手') object = 'AI会议助手';
+  if (!object) return original;
+
+  const title = `${verb}${object}`.replace(/\s+/g, '');
+  return title.length > 40 ? `${title.slice(0, 39)}…` : title;
 }
 
 export function improveAndValidateTaskName(task) {

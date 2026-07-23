@@ -7,6 +7,7 @@ import { formatSegmentsForPrompt, normalizeMeetingTranscript } from './meetingTr
 import { createMeetingTaskDraft, getMeetingTaskDraftBySource } from './taskDraftService.js';
 import { resolveDraftTasksAgainstHistory } from './taskResolutionService.js';
 import { dispatchDraftTaskCards } from './feishuTaskCardService.js';
+import { normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
 
 const SKIPPED_MESSAGE = '该飞书会议智能纪要已同步，跳过重复写入';
 
@@ -152,8 +153,9 @@ function speakerTaskNameFromSegment(segment) {
     .replace(/^(先|主要|继续|把|要|会|负责)\s+/, (match) => match.trim() === '继续' || match.trim() === '把' ? match : '')
     .trim();
   const concreteText = taskText || text;
+  const title = normalizeVerbObjectTaskName(concreteText, text);
 
-  return concreteText.length > 80 ? `${concreteText.slice(0, 79)}…` : concreteText;
+  return title.length > 80 ? `${title.slice(0, 79)}…` : title;
 }
 
 function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
