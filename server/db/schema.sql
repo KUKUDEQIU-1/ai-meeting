@@ -218,3 +218,18 @@ CREATE TABLE IF NOT EXISTS meeting_task_draft_assignees (
   updated_at TEXT NOT NULL,
   UNIQUE(draft_id, assignee_key, card_kind)
 );
+
+CREATE TABLE IF NOT EXISTS meeting_task_draft_card_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  draft_id INTEGER NOT NULL,
+  assignee_key TEXT NOT NULL,
+  card_kind TEXT NOT NULL DEFAULT 'tasks',
+  item_id TEXT NOT NULL DEFAULT '',
+  card_message_id TEXT NOT NULL,
+  delivery_status TEXT NOT NULL DEFAULT 'sent',
+  delivery_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(draft_id, assignee_key, card_kind, item_id),
+  UNIQUE(card_message_id)
+);

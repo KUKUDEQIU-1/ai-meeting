@@ -314,6 +314,16 @@ export async function resetDraftAssigneeConfirmationAfterFailure({ draftId, assi
   return getDraftAssigneeState(draftId, assigneeKey, cardKind);
 }
 
+export async function resetDraftAssigneeConfirmationToPending({ draftId, assigneeKey, cardKind = 'tasks', callbackId }) {
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET confirmation_status = 'pending', confirmation_error = '', last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
+      WHERE draft_id = ? AND assignee_key = ? AND card_kind = ? AND confirmation_status = 'processing'`,
+    [callbackId || null, nowIso(), draftId, assigneeKey, cardKind]
+  );
+  return getDraftAssigneeState(draftId, assigneeKey, cardKind);
+}
+
 export async function updateDraftAssigneeCallbackId({ draftId, assigneeKey, cardKind = 'tasks', callbackId }) {
   await run(
     'UPDATE meeting_task_draft_assignees SET last_callback_id = COALESCE(?, last_callback_id), updated_at = ? WHERE draft_id = ? AND assignee_key = ? AND card_kind = ?',
@@ -327,11 +337,68 @@ export async function getDraftAssigneeState(draftId, assigneeKey, cardKind = 'ta
 
 export async function getDraftAssigneeStateByMessageId(messageId) {
   if (!messageId) return null;
-  return get('SELECT * FROM meeting_task_draft_assignees WHERE card_message_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [messageId]);
+  const aggregate = await get('SELECT * FROM meeting_task_draft_assignees WHERE card_message_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [messageId]);
+  if (aggregate) return aggregate;
+
+  const split = await get(
+    `SELECT assignees.*, messages.item_id AS split_item_id, messages.card_message_id AS split_card_message_id
+     FROM meeting_task_draft_card_messages messages
+     JOIN meeting_task_draft_assignees assignees
+       ON assignees.draft_id = messages.draft_id
+      AND assignees.assignee_key = messages.assignee_key
+      AND assignees.card_kind = messages.card_kind
+     WHERE messages.card_message_id = ?
+     ORDER BY messages.updated_at DESC, messages.id DESC
+     LIMIT 1`,
+    [messageId]
+  );
+  return split || null;
 }
 
 export async function listDraftAssigneeStates(draftId) {
   return all('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ? ORDER BY assignee_name ASC', [draftId]);
+}
+
+export async function upsertDraftCardMessage({ draftId, assigneeKey, cardKind = 'tasks', itemId = '', cardMessageId, deliveryStatus = 'sent', deliveryError = '' }) {
+  const timestamp = nowIso();
+  const messageId = String(cardMessageId || '').trim();
+
+  if (!messageId) {
+    await run(
+      `DELETE FROM meeting_task_draft_card_messages
+       WHERE draft_id = ? AND assignee_key = ? AND card_kind = ? AND item_id = ?`,
+      [draftId, assigneeKey, cardKind, itemId || '']
+    );
+    return;
+  }
+
+  await run(
+    `INSERT INTO meeting_task_draft_card_messages
+      (draft_id, assignee_key, card_kind, item_id, card_message_id, delivery_status, delivery_error, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(draft_id, assignee_key, card_kind, item_id) DO UPDATE SET
+      card_message_id = excluded.card_message_id,
+      delivery_status = excluded.delivery_status,
+      delivery_error = excluded.delivery_error,
+      updated_at = excluded.updated_at`,
+    [draftId, assigneeKey, cardKind, itemId || '', messageId, deliveryStatus, deliveryError || '', timestamp, timestamp]
+  );
+}
+
+export async function listDraftCardMessages(draftId, assigneeKey = '', cardKind = '') {
+  const clauses = ['draft_id = ?'];
+  const params = [draftId];
+
+  if (assigneeKey) {
+    clauses.push('assignee_key = ?');
+    params.push(assigneeKey);
+  }
+  if (cardKind) {
+    clauses.push('card_kind = ?');
+    params.push(cardKind);
+  }
+
+  return all(`SELECT * FROM meeting_task_draft_card_messages WHERE ${clauses.join(' AND ')} ORDER BY assignee_key ASC, item_id ASC`, params);
 }
 
 function hydrateDraft(row) {
