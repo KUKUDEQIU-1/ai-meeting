@@ -353,6 +353,20 @@ function testReorderedActionObjectTaskNamesMatchAsDuplicate() {
   assert.equal(duplicate?.reason, 'keyword_action_duplicate');
 }
 
+function testRichTextBitableTaskNameMatchesAsDuplicate() {
+  const duplicate = findDuplicateTaskName('AI智能助手Bug修复和内容更新', [{
+    fields: {
+      事务需求名称: [
+        { type: 'text', text: '修复AI智能助手Bug' },
+        { type: 'text', text: '并更新内容' }
+      ]
+    }
+  }]);
+
+  assert.equal(duplicate?.task_name, '修复AI智能助手Bug并更新内容');
+  assert.equal(duplicate?.reason, 'keyword_action_duplicate');
+}
+
 function testMasterTableDuplicateMarksDraftTaskAsOldProgress() {
   const [task] = markDraftTasksMatchedInMasterTable([{
     item_id: 'duplicate_master_1',
@@ -2347,6 +2361,7 @@ testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence();
 testFirstPersonSpokenTaskNameNormalizesToVerbObjectTitle();
 testSpokenTaskNameRemovesFillerAfterBusinessObject();
 testReorderedActionObjectTaskNamesMatchAsDuplicate();
+testRichTextBitableTaskNameMatchesAsDuplicate();
 testMasterTableDuplicateMarksDraftTaskAsOldProgress();
 testMasterTableDuplicateFillsMatchedNameForExistingProgress();
 await initDatabase();

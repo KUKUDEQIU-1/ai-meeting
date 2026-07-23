@@ -23,6 +23,18 @@ export function normalizeTaskNameForCompare(value) {
     .replace(/商品展示位/g, '板块展示位');
 }
 
+function fieldText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(fieldText).join('');
+  if (typeof value === 'object') {
+    return fieldText(value.text || value.name || value.value || value.title || '');
+  }
+
+  return '';
+}
+
 function removeMatchStopWords(value) {
   let text = normalizeTaskNameForCompare(value);
 
@@ -315,7 +327,7 @@ export function findDuplicateTaskName(taskName, existingRecords = []) {
   const normalized = normalizeTaskNameForCompare(taskName);
 
   for (const record of existingRecords) {
-    const existingName = record.fields?.事务需求名称 || record.fields?.任务名称 || '';
+    const existingName = fieldText(record.fields?.事务需求名称 || record.fields?.任务名称 || '');
     const existingNormalized = normalizeTaskNameForCompare(existingName);
 
     if (!existingNormalized) continue;
