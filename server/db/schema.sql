@@ -233,3 +233,30 @@ CREATE TABLE IF NOT EXISTS meeting_task_draft_card_messages (
   UNIQUE(draft_id, assignee_key, card_kind, item_id),
   UNIQUE(card_message_id)
 );
+
+CREATE TABLE IF NOT EXISTS master_task_audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  record_id TEXT NOT NULL,
+  task_name TEXT,
+  assignee_key TEXT,
+  assignee_name TEXT,
+  receive_id_type TEXT,
+  receive_id TEXT,
+  task_status TEXT NOT NULL,
+  audit_date TEXT NOT NULL,
+  audit_type TEXT NOT NULL,
+  action_taken TEXT NOT NULL,
+  submitted_text TEXT,
+  card_message_id TEXT,
+  callback_id TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(record_id, audit_date, audit_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_master_task_audit_callback
+  ON master_task_audit_logs(callback_id);
+
+CREATE INDEX IF NOT EXISTS idx_master_task_audit_date
+  ON master_task_audit_logs(audit_date, audit_type);
