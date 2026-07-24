@@ -67,7 +67,7 @@ function masterTaskAppToken() {
 }
 
 function masterTaskTableId() {
-  return requiredEnv('FEISHU_MASTER_TASK_TABLE_ID');
+  return optionalEnv('FEISHU_MASTER_TASK_TABLE_ID') || tableIdFromUrl(optionalEnv('FEISHU_MASTER_TASK_TABLE_URL')) || requiredEnv('FEISHU_MASTER_TASK_TABLE_ID');
 }
 
 function masterTaskTableUrl(tableId) {
@@ -82,6 +82,45 @@ function appTokenForTable(tableId) {
   }
 
   return requiredEnv('FEISHU_BITABLE_APP_TOKEN');
+}
+
+function tableIdFromUrl(value) {
+  const text = String(value || '').trim();
+
+  if (!text) return '';
+
+  try {
+    return new URL(text).searchParams.get('table')?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
+function isWikiUrl(value) {
+  return /\/wiki\/[A-Za-z0-9]+/.test(String(value || ''));
+}
+
+export async function resolveMasterTaskTableConfig(context = {}) {
+  const envUrl = optionalEnv('FEISHU_MASTER_TASK_TABLE_URL');
+  const tableId = context.table_id || context.tableId || masterTaskTableId();
+  let appToken = context.app_token || context.appToken || optionalEnv('FEISHU_MASTER_TASK_APP_TOKEN');
+
+  if (isWikiUrl(envUrl) && (!context.app_token && !context.appToken)) {
+    const { getFeishuWikiNode } = await import('./feishuWikiClient.js');
+    const node = await getFeishuWikiNode(envUrl);
+
+    if (node.obj_type !== 'bitable' || !node.obj_token) {
+      throw new Error('FEISHU_MASTER_TASK_TABLE_URL 指向的 Wiki 节点不是多维表格，无法作为正式任务表');
+    }
+
+    appToken = node.obj_token;
+  }
+
+  return {
+    appToken: appToken || masterTaskAppToken(),
+    tableId,
+    tableUrl: envUrl || buildTableUrl(tableId)
+  };
 }
 
 function optionalEnv(name) {
@@ -396,8 +435,7 @@ export async function createMeetingTaskTable({ meeting_title, meeting_time, note
 }
 
 export async function getMasterTaskTable() {
-  const tableId = masterTaskTableId();
-  const appToken = masterTaskAppToken();
+  const { appToken, tableId, tableUrl } = await resolveMasterTaskTableConfig();
   const tenantAccessToken = await getTenantAccessToken();
 
   await validateMasterTaskTableSchema(tableId, { appToken, tenantAccessToken, throwOnInvalid: true });
@@ -406,7 +444,7 @@ export async function getMasterTaskTable() {
     app_token: appToken,
     table_id: tableId,
     table_name: '事务列表',
-    table_url: masterTaskTableUrl(tableId),
+    table_url: tableUrl,
     table_schema_version: MASTER_TASK_TABLE_SCHEMA_VERSION
   };
 }
@@ -766,8 +804,11 @@ async function setViewRowHeightUltraHigh({ appToken, tableId, viewId, tenantAcce
 }
 
 export async function createTaskRecord(task, meetingMeta, options = {}) {
-  const tableId = options.table_id || meetingMeta.table_id || requiredEnv('FEISHU_BITABLE_TABLE_ID');
-  const appToken = options.app_token || meetingMeta.app_token || appTokenForTable(tableId);
+  const masterConfig = options.masterTaskTable
+    ? await resolveMasterTaskTableConfig({ table_id: options.table_id || meetingMeta.table_id, app_token: options.app_token || meetingMeta.app_token })
+    : null;
+  const tableId = masterConfig?.tableId || options.table_id || meetingMeta.table_id || requiredEnv('FEISHU_BITABLE_TABLE_ID');
+  const appToken = masterConfig?.appToken || options.app_token || meetingMeta.app_token || appTokenForTable(tableId);
   const tenantAccessToken = await getTenantAccessToken();
   const taskName = normalizeTaskName(task).trim();
   let masterFields = options.masterFields || [];
@@ -936,6 +977,98 @@ export async function listBitableRecords({ appToken, tableId, tenantAccessToken 
   } while (pageToken);
 
   return records;
+}
+
+function bitableCellText(value) {
+  if (Array.isArray(value)) {
+    return value.map(bitableCellText).filter(Boolean).join(' ');
+  }
+
+  if (value && typeof value === 'object') {
+    return bitableCellText(
+      value.name
+      || value.text
+      || value.title
+      || value.value
+      || value.email
+      || value.en_name
+      || ''
+    );
+  }
+
+  return String(value || '').trim();
+}
+
+function recordFieldValue(fields, names) {
+  for (const name of names) {
+    const value = fields?.[name];
+    if (value !== undefined && value !== null && bitableCellText(value)) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function recordFieldText(fields, names) {
+  return bitableCellText(recordFieldValue(fields, names));
+}
+
+export async function validateMasterTaskAuditFields(context = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
+  const fields = await listBitableFields({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
+  const names = new Set(fields.map(fieldNameOf).filter(Boolean));
+  const missingFields = ['事务需求名称', '需求状态', '跟进人', '备注'].filter((name) => !names.has(name));
+  const hasProgressField = names.has('任务进展描述') || names.has('任务进展');
+
+  if (!hasProgressField) {
+    missingFields.push('任务进展描述|任务进展');
+  }
+
+  if (missingFields.length > 0) {
+    throw new Error(`正式总表巡检字段缺失：${missingFields.join('、')}`);
+  }
+
+  return { fields, fieldNames: [...names] };
+}
+
+export async function listMasterTaskAuditRecords(context = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
+  await validateMasterTaskAuditFields({ ...context, tenantAccessToken });
+  const records = await listBitableRecords({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
+
+  return records.map((record) => ({
+    recordId: record.record_id || record.id || '',
+    taskName: recordFieldText(record.fields, ['事务需求名称', '任务名称']),
+    status: recordFieldText(record.fields, ['需求状态', '状态']),
+    assigneeName: recordFieldText(record.fields, ['跟进人']),
+    assigneeKey: recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim(),
+    progressText: recordFieldText(record.fields, ['任务进展描述', '任务进展']),
+    remark: recordFieldText(record.fields, ['备注']),
+    lastModifiedAt: record.last_modified_time || record.lastModifiedTime || record.updated_at || '',
+    fields: record.fields || {},
+    rawRecord: record
+  }));
+}
+
+export async function updateMasterTaskProgress({ recordId, progressText, tenantAccessToken, ...context } = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const token = tenantAccessToken || await getTenantAccessToken();
+  const auditSchema = await validateMasterTaskAuditFields({ ...context, tenantAccessToken: token });
+  const fieldNames = new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean));
+  const progressFieldName = fieldNames.has('任务进展描述') ? '任务进展描述' : '任务进展';
+
+  return updateBitableRecord({
+    appToken: config.appToken,
+    tableId: config.tableId,
+    tenantAccessToken: token,
+    recordId,
+    fields: {
+      [progressFieldName]: String(progressText || '').trim()
+    }
+  });
 }
 
 export async function updateBitableRecord({ appToken, tableId, tenantAccessToken, recordId, fields }) {
