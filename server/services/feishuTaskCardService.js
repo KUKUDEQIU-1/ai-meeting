@@ -23,7 +23,7 @@ export function resolveTaskCardRecipients(assignees) {
   }));
 }
 
-async function postFeishuMessage({ receiveId, card }) {
+export async function sendInteractiveFeishuMessage({ receiveId, card }) {
   const tenantAccessToken = await getTenantAccessToken();
   const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages?receive_id_type=open_id`;
   const response = await fetch(url, {
@@ -49,6 +49,29 @@ async function postFeishuMessage({ receiveId, card }) {
   }
 
   return data.data?.message_id || data.data?.message?.message_id || '';
+}
+
+export async function patchInteractiveFeishuMessage({ messageId, card }) {
+  const tenantAccessToken = await getTenantAccessToken();
+  const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`;
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${tenantAccessToken}`,
+      'Content-Type': 'application/json; charset=utf-8'
+    },
+    body: JSON.stringify({ content: JSON.stringify(card) })
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.code && data.code !== 0) {
+    const error = new Error(`飞书任务卡片更新失败：${data.msg || response.statusText}`);
+    error.status = 502;
+    error.feishuResponse = { code: data.code, msg: data.msg, log_id: data?.error?.log_id || data?.log_id };
+    throw error;
+  }
+
+  return { status: 'updated', message_id: messageId };
 }
 
 function itemsForAssignee(items, assigneeKey) {
@@ -91,26 +114,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   };
   const scopedItemId = itemId || state.split_item_id || '';
   const card = buildCardForKind({ cardKind: state.card_kind || cardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId });
-  const tenantAccessToken = await getTenantAccessToken();
-  const url = `${FEISHU_BASE_URL}/open-apis/im/v1/messages/${encodeURIComponent(targetMessageId)}`;
-  const response = await fetch(url, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${tenantAccessToken}`,
-      'Content-Type': 'application/json; charset=utf-8'
-    },
-    body: JSON.stringify({ content: JSON.stringify(card) })
-  });
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || data.code && data.code !== 0) {
-    const error = new Error(`飞书任务卡片更新失败：${data.msg || response.statusText}`);
-    error.status = 502;
-    error.feishuResponse = { code: data.code, msg: data.msg, log_id: data?.error?.log_id || data?.log_id };
-    throw error;
-  }
-
-  return { status: 'updated', message_id: targetMessageId };
+  return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
 }
 
 async function sendSplitTaskCards({ draft, assignee, cardKind, postMessage }) {
@@ -166,7 +170,7 @@ async function persistUnmappedAssignees(draftId, failures, cardKind) {
   }
 }
 
-async function sendAssigneeCard(draft, assignee, cardKind, postMessage = postFeishuMessage) {
+async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInteractiveFeishuMessage) {
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
 
   if (existingState?.delivery_status === 'sent' && existingState.card_message_id) {
@@ -212,7 +216,7 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
   let assigneeMap = configuredMap;
   let memberSource = 'configured_map';
   const listGroupMembers = deps.listGroupMembers || listConfiguredFeishuGroupMembers;
-  const postMessage = deps.postMessage || postFeishuMessage;
+  const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
 
   try {
     const memberResult = await listGroupMembers();
@@ -241,9 +245,10 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
   const sentCount = results.filter((item) => item.status === 'sent').length;
   const skippedCount = results.filter((item) => item.status === 'skipped').length;
   const failedCount = taskGrouped.deliveryFailures.length + progressGrouped.deliveryFailures.length + results.filter((item) => item.status === 'failed').length;
+  const hasDeliverableCards = taskGrouped.deliverable.length > 0 || progressGrouped.deliverable.length > 0;
 
   return {
-    status: sentCount > 0 || skippedCount > 0 ? 'success' : 'failed',
+    status: sentCount > 0 || skippedCount > 0 || (!hasDeliverableCards && failedCount === 0) ? 'success' : 'failed',
     sent_count: sentCount,
     skipped_count: skippedCount,
     failed_count: failedCount,

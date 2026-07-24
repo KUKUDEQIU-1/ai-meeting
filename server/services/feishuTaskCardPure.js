@@ -464,6 +464,128 @@ export function buildAssigneeProgressCard({ draft, assignee, progressUpdates, te
   };
 }
 
+export function buildMasterTaskInProgressAuditCard({ audit, terminal = false }) {
+  const taskName = truncateText(audit?.task_name || '未命名任务', 100);
+  const assigneeName = truncateText(audit?.assignee_name || '待确认', 40);
+  const progressText = String(audit?.progress_text || '').trim();
+
+  if (terminal) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: {
+        template: 'green',
+        title: { tag: 'plain_text', content: '任务进展已处理' }
+      },
+      body: {
+        elements: [{
+          tag: 'markdown',
+          content: `**任务：** ${taskName}\n**跟进人：** ${assigneeName}\n\n本次巡检提醒已处理。`
+        }]
+      }
+    };
+  }
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: {
+      template: 'orange',
+      title: { tag: 'plain_text', content: '任务进展待确认更新' }
+    },
+    body: {
+      elements: [{
+        tag: 'form',
+        name: 'master_task_audit_form',
+        elements: [
+          { tag: 'markdown', content: `**任务：** ${taskName}\n**状态：** 进行中\n**跟进人：** ${assigneeName}` },
+          { tag: 'hr' },
+          labelElement(`**当前任务进展描述：** ${truncateText(progressText || '（当前为空）', 300)}`),
+          inputElement({ tag: 'progress_text', label: '任务进展描述', value: progressText }),
+          {
+            tag: 'column_set',
+            columns: [
+              {
+                tag: 'column',
+                width: 'weighted',
+                weight: 1,
+                elements: [callbackButton({
+                  name: 'master_task_no_update',
+                  text: '无更新',
+                  type: 'default',
+                  value: {
+                    action: 'master_task_no_update',
+                    audit_log_id: audit.id,
+                    audit_record_id: audit.record_id,
+                    audit_date: audit.audit_date,
+                    audit_type: audit.audit_type,
+                    card_kind: 'master_task_audit'
+                  }
+                })]
+              },
+              {
+                tag: 'column',
+                width: 'weighted',
+                weight: 1,
+                elements: [callbackButton({
+                  name: 'master_task_confirm_update',
+                  text: '确认更新',
+                  type: 'primary',
+                  value: {
+                    action: 'master_task_confirm_update',
+                    audit_log_id: audit.id,
+                    audit_record_id: audit.record_id,
+                    audit_date: audit.audit_date,
+                    audit_type: audit.audit_type,
+                    card_kind: 'master_task_audit'
+                  }
+                })]
+              }
+            ]
+          }
+        ]
+      }]
+    }
+  };
+}
+
+export function buildMasterTaskPausedAuditCard({ audit, terminal = false }) {
+  const taskName = truncateText(audit?.task_name || '未命名任务', 100);
+  const assigneeName = truncateText(audit?.assignee_name || '待确认', 40);
+
+  if (terminal) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: {
+        template: 'green',
+        title: { tag: 'plain_text', content: '暂停任务提醒已处理' }
+      },
+      body: {
+        elements: [{
+          tag: 'markdown',
+          content: `**任务：** ${taskName}\n**跟进人：** ${assigneeName}\n\n本次暂停原因提醒已处理。`
+        }]
+      }
+    };
+  }
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: {
+      template: 'red',
+      title: { tag: 'plain_text', content: '暂停任务缺少原因说明' }
+    },
+    body: {
+      elements: [{
+        tag: 'markdown',
+        content: `**任务：** ${taskName}\n**状态：** 暂停\n**跟进人：** ${assigneeName}\n\n检测到该任务备注中缺少暂停原因，请及时在正式总表中补充备注说明。`
+      }]
+    }
+  };
+}
+
 function extractAllowedFormValues(formValue, itemId) {
   const safeItemId = String(itemId || '');
   const suffix = safeItemId ? `_${safeItemId}` : '';
@@ -472,6 +594,7 @@ function extractAllowedFormValues(formValue, itemId) {
     task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
     progress_summary: firstString(formValue?.[`progress_summary${suffix}`], formValue?.progress_summary),
     matched_task_name: firstString(formValue?.[`matched_task_name${suffix}`], formValue?.matched_task_name),
+    progress_text: firstString(formValue?.[`progress_text${suffix}`], formValue?.progress_text)
   };
 }
 
