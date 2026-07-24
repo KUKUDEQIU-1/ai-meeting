@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { buildMasterTaskInProgressAuditCard, buildMasterTaskPausedAuditCard } from '../services/feishuTaskCardPure.js';
+import { sendMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
 
 function testInProgressAuditCardContainsEditableProgressForm() {
   const card = buildMasterTaskInProgressAuditCard({
@@ -45,8 +46,36 @@ function testTerminalCardsRenderDoneState() {
   assert.match(JSON.stringify(pausedTerminal), /已处理/);
 }
 
+async function testSendMasterTaskAuditCardPreservesProgressDefaultValue() {
+  let sentCard = null;
+  const result = await sendMasterTaskAuditCard({
+    record_id: 'rec_audit_card',
+    task_name: 'ai会议助手',
+    assignee_key: '简学勤',
+    assignee_name: '简学勤',
+    task_status: '进行中',
+    audit_date: '2026-07-24',
+    audit_type: 'in_progress_missing_update',
+    progress_text: '已经接入总表'
+  }, {
+    resolveRecipient: async () => ({ assignee_key: '简学勤', assignee_name: '简学勤', receive_id_type: 'open_id', receive_id: 'ou_actor' }),
+    upsertAuditLog: async (payload) => ({ ...payload, id: 1, record_id: payload.recordId, task_name: payload.taskName, assignee_key: payload.assigneeKey, assignee_name: payload.assigneeName, task_status: payload.taskStatus, audit_date: payload.auditDate, audit_type: payload.auditType, submitted_text: payload.submittedText }),
+    sendMessage: async ({ card }) => {
+      sentCard = card;
+      return 'om_audit_card';
+    },
+    markSent: async () => ({ action_taken: 'sent' })
+  });
+
+  const text = JSON.stringify(sentCard);
+  assert.equal(result.action_taken, 'sent');
+  assert.match(text, /已经接入总表/);
+  assert.match(text, /"default_value":"已经接入总表"/);
+}
+
 testInProgressAuditCardContainsEditableProgressForm();
 testPausedAuditCardContainsReminderOnly();
 testTerminalCardsRenderDoneState();
+await testSendMasterTaskAuditCardPreservesProgressDefaultValue();
 
 console.log('master task audit card tests passed');

@@ -42,9 +42,15 @@ export async function resolveAuditRecipient(assigneeKey) {
   return resolveTaskCardRecipients([recipient])[0];
 }
 
-export async function sendMasterTaskAuditCard(auditLog) {
-  const recipient = await resolveAuditRecipient(auditLog.assignee_key);
-  const nextLog = await upsertMasterTaskAuditLog({
+export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
+  const resolveRecipient = deps.resolveRecipient || resolveAuditRecipient;
+  const upsertAuditLog = deps.upsertAuditLog || upsertMasterTaskAuditLog;
+  const sendMessage = deps.sendMessage || sendInteractiveFeishuMessage;
+  const markSent = deps.markSent || markMasterTaskAuditSent;
+  const markFailed = deps.markFailed || markMasterTaskAuditFailed;
+
+  const recipient = await resolveRecipient(auditLog.assignee_key);
+  const nextLog = await upsertAuditLog({
     recordId: auditLog.record_id,
     taskName: auditLog.task_name,
     assigneeKey: auditLog.assignee_key,
@@ -54,20 +60,25 @@ export async function sendMasterTaskAuditCard(auditLog) {
     taskStatus: auditLog.task_status,
     auditDate: auditLog.audit_date,
     auditType: auditLog.audit_type,
-    actionTaken: 'pending'
+    actionTaken: 'pending',
+    submittedText: auditLog.progress_text || auditLog.submitted_text || ''
   });
 
   try {
-    const card = buildAuditCard({ ...nextLog, assignee_name: recipient.assignee_name });
-    const messageId = await sendInteractiveFeishuMessage({ receiveId: recipient.receive_id, card });
-    return markMasterTaskAuditSent({
+    const card = buildAuditCard({
+      ...nextLog,
+      assignee_name: recipient.assignee_name,
+      progress_text: nextLog.submitted_text || auditLog.progress_text || auditLog.submitted_text || ''
+    });
+    const messageId = await sendMessage({ receiveId: recipient.receive_id, card });
+    return markSent({
       recordId: nextLog.record_id,
       auditDate: nextLog.audit_date,
       auditType: nextLog.audit_type,
       cardMessageId: messageId
     });
   } catch (error) {
-    await markMasterTaskAuditFailed({
+    await markFailed({
       recordId: nextLog.record_id,
       auditDate: nextLog.audit_date,
       auditType: nextLog.audit_type,
