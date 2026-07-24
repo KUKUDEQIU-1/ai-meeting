@@ -31,6 +31,12 @@ function verifyToken(payload) {
 router.post('/card-action', async (req, res, next) => {
   try {
     const payload = req.body || {};
+    console.log('[Feishu Card Action] inbound', JSON.stringify({
+      event_type: payload?.header?.event_type || payload?.type || '',
+      token_present: Boolean(payload?.header?.token || payload?.token),
+      action_name: payload?.event?.action?.name || payload?.action?.name || '',
+      open_message_id: payload?.event?.context?.open_message_id || payload?.event?.context?.message_id || payload?.message_id || ''
+    }));
 
     if (!verifyToken(payload)) {
       res.status(401).json({ message: 'invalid feishu verification token' });

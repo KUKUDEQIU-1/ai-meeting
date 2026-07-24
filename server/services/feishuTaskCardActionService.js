@@ -19,6 +19,7 @@ import {
   updateMeetingTaskDraftProgressUpdates
 } from './taskDraftService.js';
 import { updateFeishuTaskCard } from './feishuTaskCardService.js';
+import { prepareMasterTaskAuditCardAction, processPreparedMasterTaskAuditCardAction } from './masterTaskAuditActionService.js';
 import { masterTaskNameExists } from './taskHistoryService.js';
 
 const MAX_TASK_NAME_LENGTH = 120;
@@ -398,6 +399,11 @@ async function confirmAssigneeProgress(parsed, state, dependencies) {
 }
 
 export async function prepareFeishuCardAction(payload) {
+  const auditPrepared = await prepareMasterTaskAuditCardAction(payload);
+  if (auditPrepared) {
+    return auditPrepared;
+  }
+
   const parsed = parseFeishuCardActionPayload(payload);
   const state = await loadAuthorizedState(parsed);
 
@@ -421,6 +427,10 @@ export async function prepareFeishuCardAction(payload) {
 }
 
 export async function processPreparedFeishuCardAction(prepared, overrides = {}) {
+  if (prepared.auditLog) {
+    return processPreparedMasterTaskAuditCardAction(prepared, overrides);
+  }
+
   const dependencies = dependencySet(overrides);
 
   if (!prepared.shouldProcess) {
