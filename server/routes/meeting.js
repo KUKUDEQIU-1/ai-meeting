@@ -3,6 +3,9 @@ import { createTaskRecord } from '../services/feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingService.js';
 import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
+import { listMasterTaskAuditRecords } from '../services/feishuBitableClient.js';
+import { sendMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
+import { upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
@@ -178,6 +181,59 @@ router.post('/refresh-draft-task-cards', requireMaintenanceToken, async (req, re
     }
 
     res.json({ success: true, draft_id: draft.id, refreshed_count: results.filter((item) => item.status === 'updated').length, results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const taskNameQuery = String(req.body?.task_name || req.body?.taskName || '').trim();
+    const recordId = String(req.body?.record_id || req.body?.recordId || '').trim();
+    const forceUnique = req.body?.force_unique === true || req.body?.forceUnique === true;
+    const auditType = 'in_progress_missing_update';
+    const auditDate = new Date().toISOString().slice(0, 10);
+    const records = await listMasterTaskAuditRecords();
+    const target = records.find((item) => (
+      recordId ? item.recordId === recordId : taskNameQuery ? item.taskName === taskNameQuery : false
+    ));
+
+    if (!target) {
+      res.status(404).json({ success: false, message: '未找到匹配的正式总表任务' });
+      return;
+    }
+
+    const timestampLabel = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    const testToken = `TEST-${Date.now().toString().slice(-6)}`;
+    const auditRecordId = forceUnique ? `${target.recordId}__test__${Date.now()}` : target.recordId;
+    const auditTaskName = forceUnique ? `${target.taskName} [${testToken} ${timestampLabel}]` : target.taskName;
+
+    const auditLog = await upsertMasterTaskAuditLog({
+      recordId: auditRecordId,
+      taskName: auditTaskName,
+      assigneeKey: target.assigneeKey,
+      assigneeName: target.assigneeName,
+      taskStatus: target.status,
+      auditDate,
+      auditType,
+      actionTaken: 'pending',
+      submittedText: target.progressText || ''
+    });
+    const sent = await sendMasterTaskAuditCard({
+      ...auditLog,
+      progress_text: target.progressText || ''
+    });
+
+    res.json({
+      success: true,
+      audit_log_id: sent.id,
+      record_id: sent.record_id,
+      task_name: sent.task_name,
+      assignee_name: sent.assignee_name,
+      test_token: forceUnique ? testToken : '',
+      action_taken: sent.action_taken,
+      has_message_id: Boolean(sent.card_message_id)
+    });
   } catch (error) {
     next(error);
   }

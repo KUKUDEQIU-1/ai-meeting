@@ -131,8 +131,42 @@ async function testRefreshDraftTaskCardsDryRunUsesProtectedEndpoint() {
   }
 }
 
+async function testMasterTaskAuditTestRouteIsProtectedAndRejectsMissingTask() {
+  const previousToken = process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  process.env.FEISHU_DOCX_SOURCE_API_TOKEN = 'audit-route-token';
+  const server = await listen(createApp());
+
+  try {
+    const address = server.address();
+    const rejected = await fetch(`http://127.0.0.1:${address.port}/api/meeting/test-master-task-audit-card`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_name: 'ai会议助手' })
+    });
+    const accepted = await fetch(`http://127.0.0.1:${address.port}/api/meeting/test-master-task-audit-card`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer audit-route-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_name: '不存在的任务', force_unique: true })
+    });
+    const body = await accepted.json();
+
+    assert.equal(rejected.status, 401);
+    assert.equal(accepted.status, 500);
+    assert.equal(typeof body.message, 'string');
+  } finally {
+    await close(server);
+
+    if (previousToken === undefined) {
+      delete process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+    } else {
+      process.env.FEISHU_DOCX_SOURCE_API_TOKEN = previousToken;
+    }
+  }
+}
+
 await initDatabase();
 await testWikiSyncDisabledWithoutSource();
 await testRefreshDraftTaskCardsDryRunUsesProtectedEndpoint();
+await testMasterTaskAuditTestRouteIsProtectedAndRejectsMissingTask();
 
 console.log('feishu wiki sync route tests passed');
