@@ -92,8 +92,49 @@ async function testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish() {
   assert.equal(snapshot.docx_scan_enabled, undefined);
 }
 
+async function testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay() {
+  let auditCalls = 0;
+  let currentTime = new Date('2026-07-24 17:50:00');
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false',
+      FEISHU_MASTER_TASK_AUDIT_ENABLED: 'true',
+      FEISHU_MASTER_TASK_AUDIT_HOUR: '18',
+      FEISHU_MASTER_TASK_AUDIT_MINUTE: '0'
+    },
+    scans: {
+      wiki: async () => ({ imported: [], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' })
+    },
+    audit: {
+      run: async () => {
+        auditCalls += 1;
+        return { status: 'success', audit_date: '2026-07-24', dry_run: false, summary: { total: 1, remindable: 0, passed: 1, skipped: 0, failed: 0 } };
+      }
+    },
+    scheduler: () => ({ cancel() {} }),
+    now: () => currentTime
+  });
+
+  await worker.runCycle();
+  assert.equal(auditCalls, 0);
+
+  currentTime = new Date('2026-07-24 18:05:00');
+  await worker.runCycle();
+  assert.equal(auditCalls, 1);
+
+  currentTime = new Date('2026-07-24 18:30:00');
+  await worker.runCycle();
+  assert.equal(auditCalls, 1);
+
+  currentTime = new Date('2026-07-25 18:10:00');
+  await worker.runCycle();
+  assert.equal(auditCalls, 2);
+}
+
 await testCoordinatorReturnsBusyWithoutOverlap();
 await testWorkerDisabledAndSafetyGateDoNotScan();
 await testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish();
+await testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay();
 
 console.log('feishu resident stability tests passed');
