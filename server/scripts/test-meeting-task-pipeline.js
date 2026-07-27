@@ -179,6 +179,45 @@ async function testOutputCompatibility() {
   assert.equal(result.raw_tasks[0].candidate_id, 'candidate_1');
 }
 
+async function testFiltersGenericContinuationTask() {
+  const result = await analyzeWith([task({
+    task_name: '继续验收开发',
+    title: '继续验收开发',
+    task_brief: '继续版本15的功能验收，还有功能开发',
+    task_description: '在完成数据复盘和功能修复外，继续推进版本15的功能验收及功能开发工作。',
+    evidence_quote: '继续版本15的功能验收，还有功能开发',
+    assignee: '潘韵芝',
+    owner: '潘韵芝',
+    source_speaker: '潘韵芝'
+  })], {
+    decisions: [{ candidate_id: 'candidate_1', action: 'keep', reason: '模型误判为新增任务' }]
+  });
+
+  assert.equal(result.tasks.length, 0);
+  assert.equal(result.removed_tasks.at(-1).task, '继续验收开发');
+  assert.equal(result.removed_tasks.at(-1).reason, 'generic_continuation');
+}
+
+async function testRoutesStatusOnlyDataItemToProgress() {
+  const result = await analyzeWith([task({
+    task_name: '裂变活动数据表现',
+    title: '裂变活动数据表现',
+    task_brief: '裂变活动能看到带来用户，但具体数量尚未仔细查看。',
+    task_description: '裂变活动能看到带来用户，但具体数量尚未仔细查看。',
+    evidence_quote: '裂变活动方面的话是能看到有通过活动裂变过来的用户',
+    assignee: '潘韵芝',
+    owner: '潘韵芝',
+    source_speaker: '潘韵芝'
+  })], {
+    decisions: [{ candidate_id: 'candidate_1', action: 'keep', reason: '模型误判为新增任务' }]
+  });
+
+  assert.equal(result.tasks.length, 0);
+  assert.equal(result.progress_updates.length, 1);
+  assert.equal(result.progress_updates[0].task_name, '裂变活动数据表现');
+  assert.equal(result.removed_tasks.at(-1).reason, 'progress_update');
+}
+
 await testKeepsValidatorApprovedCandidate();
 await testDiscardsValidatorRejectedCandidate();
 await testCorrectsAssigneeBeforeDeterministicFilter();
@@ -188,5 +227,7 @@ await testValidatorFailureFallsOpen();
 await testMalformedValidatorResponseFallsOpen();
 await testEmptyCandidatesSkipValidator();
 await testOutputCompatibility();
+await testFiltersGenericContinuationTask();
+await testRoutesStatusOnlyDataItemToProgress();
 
 console.log('test-meeting-task-pipeline passed');

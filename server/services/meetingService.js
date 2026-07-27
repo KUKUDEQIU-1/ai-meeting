@@ -50,6 +50,7 @@ const UNCLEAR_DEADLINES = /^(未提供|待确认|未明确|不明确|无|暂无|
 const DEADLINE_HINTS = ['今天', '明天', '上午', '下午', '晚上', '会后', '本周', '下周', '月底', '周一', '周二', '周三', '周四', '周五', '周六', '周日', '之前', '前', '后', '内', '两天', '三天', '持续'];
 const PROGRESS_SIGNALS = ['已经', '已完成', '昨天', '昨日', '上周', '之前', '前面', '上次', '目前', '现在是', '正在', '还在', '继续中', '持续', '一直在', '进展', '当前进展', '处理过', '上线了', '修好了', '跑通了', '看了一下', '做完了', '完成了', '已接好', '已经给了'];
 const NEW_ACTION_SIGNALS = ['今天', '下午', '明天', '本周', '会后', '待会儿', '稍后', '发到群里', '发群', '整理出来', '确认一下', '统计一下', '补一下', '修一下', '上线', '提测', '对接', '拉群沟通', '给出方案', '输出文档'];
+const STATUS_ONLY_SIGNALS = ['能看到', '表现', '带来', '数量', '尚未', '暂时', '停止', '停投', '偏低'];
 
 function getTaskName(task) {
   return task.task_name || task.title || task.task || task.name || '';
@@ -156,9 +157,32 @@ function hasTodayNewActionSignal(task) {
   return containsAny(text, NEW_ACTION_SIGNALS);
 }
 
+function isGenericContinuationTask(task) {
+  const taskName = getTaskName(task).trim();
+  const evidence = getEvidence(task);
+
+  return taskName.startsWith('继续')
+    && /验收.*开发|开发.*验收/.test(`${taskName} ${evidence}`)
+    && !containsAny(`${taskName} ${evidence}`, ['上线', '发版', '交付', '提测', '接入', '修复', '输出']);
+}
+
+function isStatusOnlyProgress(task) {
+  const taskName = getTaskName(task).trim();
+  const evidence = getEvidence(task);
+  const text = `${taskName} ${task.task_brief || ''} ${task.task_description || ''} ${evidence}`;
+
+  return containsAny(text, STATUS_ONLY_SIGNALS)
+    && !containsAny(text, NEW_ACTION_SIGNALS)
+    && !evidenceLooksActionable(evidence);
+}
+
 function looksLikeProgressUpdate(task) {
   const text = `${getTaskName(task)} ${task.task_brief || ''} ${task.task_description || ''} ${getEvidence(task)} ${task.reason || ''}`;
   const itemType = task.item_type || task.progress_type || '';
+
+  if (isStatusOnlyProgress(task)) {
+    return true;
+  }
 
   if (['existing_task_progress', 'completed_update', 'discussion_only'].includes(itemType)) {
     return !hasTodayNewActionSignal(task);
@@ -350,6 +374,17 @@ export function filterActionableTasks(tasks = []) {
         task_type: task.task_type || task.item_type || 'progress_update'
       });
       console.log(`[Task Filter] suppress progress task=${getTaskName(task) || '未命名任务'} reason=progress_update`);
+      continue;
+    }
+
+    if (isGenericContinuationTask(task)) {
+      removed.push({
+        task: getTaskName(task) || '未命名任务',
+        reason: 'generic_continuation',
+        actionable_score: 0,
+        task_type: task.task_type || task.item_type || 'action_item'
+      });
+      console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=generic_continuation`);
       continue;
     }
 
