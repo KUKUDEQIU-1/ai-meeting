@@ -78,6 +78,18 @@ function itemsForAssignee(items, assigneeKey) {
   return (items || []).filter((item) => normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey);
 }
 
+function recordIncludesAssignee(record, normalizedAssigneeKey) {
+  const assigneeName = String(record.assigneeName || '').trim();
+  const nameParts = assigneeName.split(/\s+/).map(normalizeAssigneeKey).filter(Boolean);
+
+  if (nameParts.length > 1) {
+    return nameParts.includes(normalizedAssigneeKey);
+  }
+
+  const recordKey = normalizeAssigneeKey(record.assigneeKey || assigneeName);
+  return recordKey === normalizedAssigneeKey || recordKey.includes(normalizedAssigneeKey);
+}
+
 async function loadOldTaskOptionsForAssignee(assigneeKey, listRecords = listMasterTaskAuditRecords) {
   try {
     const records = await listRecords();
@@ -85,12 +97,12 @@ async function loadOldTaskOptionsForAssignee(assigneeKey, listRecords = listMast
     const normalizedAssigneeKey = normalizeAssigneeKey(assigneeKey);
     const options = [];
 
-    for (const record of records) {
-      const taskName = String(record.taskName || '').trim();
-      const status = String(record.status || '').replace(/\s+/g, '').trim();
-      if (status !== '进行中' || normalizeAssigneeKey(record.assigneeKey) !== normalizedAssigneeKey || !taskName || seen.has(taskName)) {
-        continue;
-      }
+	for (const record of records) {
+	  const taskName = String(record.taskName || '').trim();
+	  const status = String(record.status || '').replace(/\s+/g, '').trim();
+	  if (status !== '进行中' || !recordIncludesAssignee(record, normalizedAssigneeKey) || !taskName || seen.has(taskName)) {
+	    continue;
+	  }
 
       seen.add(taskName);
       options.push({

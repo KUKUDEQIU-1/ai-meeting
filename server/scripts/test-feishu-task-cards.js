@@ -1028,6 +1028,50 @@ async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
   assert.match(text, /split_retry_3_/);
 }
 
+async function testOldTaskDropdownIncludesSharedAssigneeTasks() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `shared-old-task-${Date.now()}`,
+    meetingTitle: '多人旧任务会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-23',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'shared_old_task_1', task_name: '继续推进多人项目', assignee: '洪伟填skill.md' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_shared_old_task',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+  const sentCards = [];
+
+  const result = await dispatchDraftTaskCards(draft, {
+    assigneeMap: parseAssigneeMap(JSON.stringify({ '洪伟填skill.md': 'ou_hong' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [
+      { taskName: '竞品价格收集工具', status: '进行中', assigneeKey: '洪伟填skill.md', assigneeName: '洪伟填skill.md' },
+      { taskName: '新小程序', status: '进行中', assigneeKey: '洪伟填skill.md胡涌昌CLI-skill.md李嘉华.agent利浩文', assigneeName: '洪伟填skill.md 胡涌昌CLI-skill.md 李嘉华.agent 利浩文' },
+      { taskName: '已完成多人任务', status: '已完成', assigneeKey: '洪伟填skill.md李嘉华.agent', assigneeName: '洪伟填skill.md 李嘉华.agent' }
+    ],
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      return 'om_shared_old_task';
+    }
+  });
+
+  const select = formControl(sentCards[0], 'matched_task_name_select_shared_old_task_1');
+
+  assert.equal(result.sent_count, 1);
+  assert.deepEqual(select.options.map((option) => option.value), ['竞品价格收集工具', '新小程序']);
+}
+
 async function testDispatchEmptyDraftDoesNotReportFailure() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -2483,6 +2527,7 @@ testNotifyTextIncludesTaskCountsByAssignee();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchKeepsOversizedTaskCardAsOneAttempt();
+await testOldTaskDropdownIncludesSharedAssigneeTasks();
 await testDispatchEmptyDraftDoesNotReportFailure();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
