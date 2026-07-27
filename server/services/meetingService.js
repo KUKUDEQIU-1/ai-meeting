@@ -1,5 +1,5 @@
-import { createTaskRecord, getTenantAccessToken, listBitableRecords, validateMasterTaskTableSchema } from './feishuBitableClient.js';
-import { generateMeetingSummary, generateMeetingTasks } from './aiService.js';
+import { createTaskRecord, getTenantAccessToken, listBitableRecords, resolveMasterTaskTableConfig, validateMasterTaskTableSchema } from './feishuBitableClient.js';
+import { generateMeetingSummary, generateMeetingTasks, validateMeetingTasks } from './aiService.js';
 import { findDuplicateTaskName, improveAndValidateTaskName } from '../utils/taskQuality.js';
 
 const GENERIC_TASK_NAMES = new Set([
@@ -449,7 +449,109 @@ export function cleanTask(task) {
   };
 }
 
+function assignCandidateIds(tasks = []) {
+  return tasks.map((task, index) => ({
+    ...task,
+    candidate_id: task.candidate_id || `candidate_${index + 1}`
+  }));
+}
+
+function normalizeValidatorDecisions(validationResult) {
+  if (!validationResult || !Array.isArray(validationResult.decisions)) {
+    return null;
+  }
+
+  const decisions = new Map();
+
+  for (const item of validationResult.decisions) {
+    const candidateId = String(item?.candidate_id || '').trim();
+    const action = String(item?.action || '').trim();
+
+    if (!candidateId || !['keep', 'discard', 'merge'].includes(action)) {
+      return null;
+    }
+
+    decisions.set(candidateId, {
+      candidate_id: candidateId,
+      action,
+      corrected_assignee: String(item.corrected_assignee || '').trim(),
+      merge_into_candidate_id: String(item.merge_into_candidate_id || '').trim(),
+      reason: String(item.reason || '').trim()
+    });
+  }
+
+  return decisions;
+}
+
+async function validateCandidateTasks(aiInput, candidates, validateTasks) {
+  if (!candidates.length) {
+    return { tasks: candidates, removed: [] };
+  }
+
+  try {
+    const validationResult = await validateTasks({ meetingText: aiInput, candidates });
+    const decisions = normalizeValidatorDecisions(validationResult);
+
+    if (!decisions) {
+      console.warn('[Task Validator] malformed response, fail-open keep all candidates');
+      return { tasks: candidates, removed: [] };
+    }
+
+    return applyValidatorDecisions(candidates, decisions);
+  } catch (error) {
+    console.warn(`[Task Validator] skipped error=${error.message}`);
+    return { tasks: candidates, removed: [] };
+  }
+}
+
+function applyValidatorDecisions(candidates, decisions) {
+  const tasks = [];
+  const removed = [];
+
+  for (const candidate of candidates) {
+    const decision = decisions.get(candidate.candidate_id) || { action: 'keep', reason: 'validator_missing_decision' };
+    const reason = decision.reason || decision.action;
+
+    if (decision.action === 'discard') {
+      removed.push({
+        task: getTaskName(candidate) || '未命名任务',
+        reason: `validator_discard:${reason}`,
+        candidate_id: candidate.candidate_id
+      });
+      continue;
+    }
+
+    if (decision.action === 'merge') {
+      removed.push({
+        task: getTaskName(candidate) || '未命名任务',
+        reason: `validator_merge:${reason}`,
+        candidate_id: candidate.candidate_id,
+        merged_into: decision.merge_into_candidate_id
+      });
+      continue;
+    }
+
+    if (decision.corrected_assignee) {
+      tasks.push({
+        ...candidate,
+        assignee: decision.corrected_assignee,
+        owner: decision.corrected_assignee,
+        assignee_source: 'validator_corrected',
+        needs_confirmation: Boolean(candidate.needs_confirmation)
+      });
+      continue;
+    }
+
+    tasks.push(candidate);
+  }
+
+  return { tasks, removed };
+}
+
 export async function analyzeMeetingText(text, meetingSource = '手动输入', options = {}) {
+  const summarizeMeeting = options.generateMeetingSummary || generateMeetingSummary;
+  const extractMeetingTasks = options.generateMeetingTasks || generateMeetingTasks;
+  const validateTasks = options.validateMeetingTasks || validateMeetingTasks;
   const aiInput = typeof text === 'string'
     ? {
         content: text,
@@ -459,8 +561,8 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
       }
     : text;
   const [summarySettled, extractionSettled] = await Promise.allSettled([
-    generateMeetingSummary(aiInput),
-    generateMeetingTasks(aiInput)
+    summarizeMeeting(aiInput),
+    extractMeetingTasks(aiInput)
   ]);
 
   if (extractionSettled.status === 'rejected') {
@@ -481,9 +583,11 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
   const rawTasks = Array.isArray(extractionResult) ? extractionResult : extractionResult.today_tasks || [];
   const aiProgressUpdates = Array.isArray(extractionResult?.progress_updates) ? extractionResult.progress_updates : [];
   const discardedItems = Array.isArray(extractionResult?.discarded_items) ? extractionResult.discarded_items : [];
-  const rawCleanTasks = rawTasks.map(cleanTask).filter(Boolean);
-  const filterResult = filterActionableTasks(rawCleanTasks);
+  const rawCleanTasks = assignCandidateIds(rawTasks.map(cleanTask).filter(Boolean));
+  const validationResult = await validateCandidateTasks(aiInput, rawCleanTasks, validateTasks);
+  const filterResult = filterActionableTasks(validationResult.tasks);
   const progressUpdates = [...aiProgressUpdates, ...(filterResult.progress_updates || [])];
+  const removedTasks = [...validationResult.removed, ...filterResult.removed];
 
   return {
     meeting_title: meetingTitle,
@@ -493,10 +597,10 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
     raw_tasks: rawCleanTasks,
     progress_updates: progressUpdates,
     discarded_items: discardedItems,
-    removed_tasks: filterResult.removed,
+    removed_tasks: removedTasks,
     after_filter_count: filterResult.after_filter_count,
     after_dedupe_count: filterResult.after_dedupe_count,
-    removed_reasons: filterResult.removed_reasons,
+    removed_reasons: removedReasonsSummary(removedTasks),
     needs_confirmation_count: filterResult.needs_confirmation_count,
     progress_updates_count: progressUpdates.length,
     discarded_items_count: discardedItems.length
@@ -504,7 +608,11 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
 }
 
 export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
-  const tableId = options.table_id || meetingMeta.table_id;
+  const masterConfig = options.masterTaskTable
+    ? await resolveMasterTaskTableConfig({ table_id: options.table_id || meetingMeta.table_id, app_token: options.app_token || meetingMeta.app_token })
+    : null;
+  const tableId = masterConfig?.tableId || options.table_id || meetingMeta.table_id;
+  const appToken = masterConfig?.appToken || options.app_token || meetingMeta.app_token;
 
   if (options.requireDynamicTable && !tableId) {
     throw new Error('Get笔记同步流程必须传入 table_id，禁止默认写入 FEISHU_BITABLE_TABLE_ID');
@@ -522,14 +630,14 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
     try {
       const tenantAccessToken = await getTenantAccessToken();
       const schema = await validateMasterTaskTableSchema(tableId, {
-        appToken: options.app_token || meetingMeta.app_token,
+        appToken,
         tenantAccessToken,
         throwOnInvalid: true
       });
       masterFields = Object.values(schema.fields || {});
       masterSchemaValidated = true;
       existingRecords = await listBitableRecords({
-        appToken: options.app_token || meetingMeta.app_token,
+        appToken,
         tableId,
         tenantAccessToken
       });
@@ -569,7 +677,7 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
     try {
       const createOptions = {
         table_id: tableId,
-        app_token: options.app_token || meetingMeta.app_token,
+        app_token: appToken,
         optimizedFields: options.optimizedFields,
         masterTaskTable: options.masterTaskTable,
         schemaValidated: masterSchemaValidated,
@@ -583,7 +691,7 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
         console.warn(`[Feishu Bitable] create retry after schema refresh task=${cleanedTask.task_name} error=${error.message}`);
         const tenantAccessToken = await getTenantAccessToken();
         const schema = await validateMasterTaskTableSchema(tableId, {
-          appToken: options.app_token || meetingMeta.app_token,
+          appToken,
           tenantAccessToken,
           throwOnInvalid: true
         });
