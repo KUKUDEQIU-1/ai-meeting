@@ -82,11 +82,13 @@ async function loadOldTaskOptionsForAssignee(assigneeKey, listRecords = listMast
   try {
     const records = await listRecords();
     const seen = new Set();
+    const normalizedAssigneeKey = normalizeAssigneeKey(assigneeKey);
     const options = [];
 
     for (const record of records) {
       const taskName = String(record.taskName || '').trim();
-      if (record.status !== '进行中' || normalizeAssigneeKey(record.assigneeKey) !== assigneeKey || !taskName || seen.has(taskName)) {
+      const status = String(record.status || '').replace(/\s+/g, '').trim();
+      if (status !== '进行中' || normalizeAssigneeKey(record.assigneeKey) !== normalizedAssigneeKey || !taskName || seen.has(taskName)) {
         continue;
       }
 

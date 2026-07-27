@@ -165,6 +165,12 @@ function selectElement({ tag, options, value }) {
   return element;
 }
 
+function unmatchedOldTaskElement(value, options) {
+  const taskName = String(value || '').trim();
+  if (!taskName || (options || []).some((option) => option.value === taskName)) return null;
+  return labelElement(`**上次填写的旧任务：** ${truncateText(taskName, 120)}\n请从下拉选项中选择正式总表中的任务。`);
+}
+
 function taskChoiceLabel(task) {
   if (task.task_choice === 'new_task') return '新任务';
   return task.task_choice === 'old_task_progress' ? '旧任务进展' : '新任务';
@@ -275,6 +281,8 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) {
     elements.push(labelElement('**新任务**'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
     elements.push(labelElement('**旧任务**'));
+    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
+    if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
     elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
@@ -352,6 +360,8 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     elements.push(labelElement('**新任务**'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
     elements.push(labelElement('**旧任务**'));
+    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
+    if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
     elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));

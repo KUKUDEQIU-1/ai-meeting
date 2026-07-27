@@ -219,6 +219,15 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     };
     const validatedValues = validateEditableValues(currentValues);
 
+    if (currentTask && (currentValues.task_name || currentValues.progress_summary || currentValues.matched_task_name)) {
+      await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
+        ...task,
+        task_name: validatedValues.taskName,
+        progress_summary: validatedValues.progressSummary || task.progress_summary,
+        matched_task_name: validatedValues.matchedTaskName || task.matched_task_name
+      }));
+    }
+
     if (taskChoice === 'old_task_progress') {
       const matchedTaskName = validatedValues.matchedTaskName || matchedTaskNameOf(currentTask);
       if (!matchedTaskName || !(await dependencies.masterTaskNameExists(matchedTaskName, {
