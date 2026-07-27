@@ -222,7 +222,6 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     if (taskChoice === 'old_task_progress') {
       const matchedTaskName = validatedValues.matchedTaskName || matchedTaskNameOf(currentTask);
       if (!matchedTaskName || !(await dependencies.masterTaskNameExists(matchedTaskName, {
-        table_id: draft?.table_id,
         app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
       }))) {
         reject('不能填写原表格没有的任务', 400);
@@ -342,7 +341,6 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
     const oldProgressTasks = pendingTasks.filter((task) => task.task_choice === 'old_task_progress');
 
     await assertMasterTaskNamesExist(oldProgressTasks, dependencies, {
-      table_id: draft?.table_id,
       app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
     });
 
