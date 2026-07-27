@@ -67,7 +67,7 @@ function masterTaskAppToken() {
 }
 
 function masterTaskTableId() {
-  return optionalEnv('FEISHU_MASTER_TASK_TABLE_ID') || tableIdFromUrl(optionalEnv('FEISHU_MASTER_TASK_TABLE_URL')) || requiredEnv('FEISHU_MASTER_TASK_TABLE_ID');
+  return tableIdFromUrl(optionalEnv('FEISHU_MASTER_TASK_TABLE_URL')) || optionalEnv('FEISHU_MASTER_TASK_TABLE_ID') || requiredEnv('FEISHU_MASTER_TASK_TABLE_ID');
 }
 
 function masterTaskTableUrl(tableId) {
