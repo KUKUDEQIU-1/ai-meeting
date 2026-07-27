@@ -1925,6 +1925,7 @@ async function testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation() {
     deliveryStatus: 'sent'
   });
 
+  let failureCardUpdates = 0;
   await assert.rejects(
     () => handleFeishuCardAction({
       header: { event_id: 'evt_mark_old_invalid' },
@@ -1941,10 +1942,21 @@ async function testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation() {
       }
     }, {
       masterTaskNameExists: async () => false,
-      updateCard: async () => ({ status: 'updated' })
+      updateCard: async ({ terminal }) => {
+        assert.equal(terminal, undefined);
+        failureCardUpdates += 1;
+        return { status: 'updated' };
+      }
     }),
     /不能填写原表格没有的任务/
   );
+
+  const state = await getDraftAssigneeState(draft.id, '张三', 'tasks');
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+  assert.equal(failureCardUpdates, 1);
+  assert.equal(state.confirmation_status, 'pending');
+  assert.equal(state.confirmation_error, '不能填写原表格没有的任务');
+  assert.equal(updatedDraft.draft_tasks[0].status, 'pending');
 }
 
 async function testAssigneeCardStatesAreIndependentByKind() {
