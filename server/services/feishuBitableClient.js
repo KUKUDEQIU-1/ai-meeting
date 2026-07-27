@@ -1047,6 +1047,7 @@ export async function listMasterTaskAuditRecords(context = {}) {
     assigneeKey: recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim(),
     progressText: recordFieldText(record.fields, ['任务进展描述', '任务进展']),
     remark: recordFieldText(record.fields, ['备注']),
+    dueAt: recordFieldText(record.fields, ['截止时间', '截止日期', '结束日期', '完成日期']),
     lastModifiedAt: record.last_modified_time || record.lastModifiedTime || record.updated_at || '',
     fields: record.fields || {},
     rawRecord: record
