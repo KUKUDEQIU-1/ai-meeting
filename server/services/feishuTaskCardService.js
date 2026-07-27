@@ -103,7 +103,7 @@ async function loadOldTaskOptionsForAssignee(assigneeKey, listRecords = listMast
 
     return options;
   } catch (error) {
-    console.warn(`[Draft Notify] master task lookup failed; keeping manual old-task input error=${error.message}`);
+    console.warn(`[Draft Notify] master task lookup failed; old-task dropdown has no options error=${error.message}`);
     return [];
   }
 }

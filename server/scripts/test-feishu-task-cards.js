@@ -52,17 +52,11 @@ function testCardPayloadContainsOnlyOwnedTasks() {
 
   assert.match(text, /只给张三/);
   assert.doesNotMatch(text, /李四/);
-  assert.match(text, /字段说明/);
-  assert.match(text, /任务名称/);
-  assert.match(text, /如果这是新安排的任务，请在这里改任务标题/);
-  assert.match(text, /旧任务进展备注/);
-  assert.match(text, /如果这是以前任务的后续，请在这里写本次进展/);
-  assert.match(text, /完成日期\/截止时间/);
   assert.match(text, /备注/);
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
   assert.doesNotMatch(text, /confirm_assignee_tasks/);
-  assert.match(text, /保存修改/);
+  assert.doesNotMatch(text, /保存修改/);
   assert.match(text, /mark_task_as_new/);
   assert.match(text, /mark_task_as_progress/);
   assert.match(text, /task_a/);
@@ -72,7 +66,9 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.match(text, /"name":"task_name_task_a"/);
   assert.doesNotMatch(text, /"name":"deadline_task_a"/);
   assert.doesNotMatch(text, /"name":"comment_task_a"/);
-  assert.equal((text.match(/"tag":"input"/g) || []).length, 3);
+  assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
+  assert.match(text, /"tag":"select_static"/);
+  assert.doesNotMatch(text, /matched_task_name_task_a/);
 }
 
 function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
@@ -93,10 +89,10 @@ function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
   const text = JSON.stringify(card);
 
   assert.ok(inputDefaultValue(card, 'task_name_long_item').length <= 500);
-  assert.ok(inputDefaultValue(card, 'matched_task_name_long_item').length <= 500);
+  assert.equal(inputDefaultValue(card, 'matched_task_name_long_item'), undefined);
   assert.ok(inputDefaultValue(card, 'progress_summary_long_item').length <= 500);
   assert.doesNotMatch(text, new RegExp(longText.slice(0, 1000)));
-  assert.match(text, /保存修改/);
+  assert.doesNotMatch(text, /保存修改/);
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
   assert.doesNotMatch(text, /confirm_assignee_tasks/);
@@ -114,8 +110,8 @@ function testSingleTaskCardKeepsFullControlsAndScopedConfirmation() {
   const singleCard = buildAssigneeTaskCard({ draft, assignee, tasks: [tasks[1]], confirmItemId: 'item_2' });
   const text = JSON.stringify(singleCard);
 
-  assert.ok((text.match(/"tag":"input"/g) || []).length >= 3);
-  assert.match(text, /保存修改/);
+  assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
+  assert.doesNotMatch(text, /保存修改/);
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
   assert.match(text, /丢弃/);
@@ -189,7 +185,7 @@ function formControl(card, name) {
   return undefined;
 }
 
-function testOldTaskDropdownIsRenderedAndKeepsManualFallback() {
+function testOldTaskDropdownReplacesManualFallback() {
   const card = buildAssigneeTaskCard({
     draft: { id: 31, meeting_title: '下拉测试' },
     assignee: { assignee_key: '张三', assignee_name: '张三' },
@@ -205,7 +201,7 @@ function testOldTaskDropdownIsRenderedAndKeepsManualFallback() {
 
   assert.equal(select.tag, 'select_static');
   assert.deepEqual(select.options.map((option) => option.value), ['进行中任务 A', '进行中任务 B']);
-  assert.equal(input.tag, 'input');
+  assert.equal(input, undefined);
 }
 
 function testTaskChoiceButtonsShowCurrentSelection() {
@@ -264,14 +260,14 @@ function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
   assert.equal(names.includes('mark_new_discarded_task'), false);
   assert.equal(names.includes('mark_old_discarded_task'), false);
   assert.equal(names.includes('discard_discarded_task'), false);
-  assert.equal(names.includes('edit_pending_task'), true);
+  assert.equal(names.includes('edit_pending_task'), false);
   assert.equal(names.includes('mark_new_pending_task'), true);
   assert.equal(names.includes('mark_old_pending_task'), true);
   assert.equal(names.includes('discard_pending_task'), true);
   assert.equal(names.includes('confirm_tasks'), false);
 }
 
-function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
+function testOldTaskDropdownUsesMatchedNameWhenProvided() {
   const draft = { id: 10, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
   const assignee = { assignee_key: '张三', assignee_name: '张三' };
   const card = buildAssigneeTaskCard({
@@ -292,13 +288,11 @@ function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
   });
   const text = JSON.stringify(card);
 
-  assert.match(text, /系统匹配旧任务：/);
-  assert.match(text, /AI会议助手接入总表/);
-  assert.match(text, /对应旧任务名称/);
-  assert.match(text, /未识别到对应旧任务，请修改旧任务名称/);
-  assert.match(text, /"name":"matched_task_name_manual_task"/);
-  assert.match(text, /"name":"matched_task_name_matched_task"/);
-  assert.equal(inputDefaultValue(card, 'matched_task_name_manual_task'), '');
+  assert.equal(formControl(card, 'matched_task_name_select_matched_task').initial_option, undefined);
+  assert.equal(formControl(card, 'matched_task_name_select_matched_task').options.length, 0);
+  assert.equal(formControl(card, 'matched_task_name_select_manual_task').options.length, 0);
+  assert.doesNotMatch(text, /matched_task_name_manual_task/);
+  assert.doesNotMatch(text, /matched_task_name_matched_task"/);
 }
 
 function testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription() {
@@ -315,8 +309,8 @@ function testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription() {
     }]
   });
 
-  assert.equal(inputDefaultValue(card, 'matched_task_name_generated_old_hint'), '');
-  assert.doesNotMatch(JSON.stringify(card), /系统匹配旧任务：简学勤今日工作/);
+  assert.equal(formControl(card, 'matched_task_name_select_generated_old_hint').options.length, 0);
+  assert.doesNotMatch(JSON.stringify(card), /matched_task_name_generated_old_hint/);
 }
 
 function testFailureCardShowsConfirmationError() {
@@ -334,7 +328,7 @@ function testFailureCardShowsConfirmationError() {
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
   assert.doesNotMatch(text, /按以上选择确认/);
-  assert.match(text, /"name":"matched_task_name_task_a"/);
+  assert.match(text, /"name":"matched_task_name_select_task_a"/);
 }
 
 function testGenericAssigneeOnlyTaskNamesAreNotActionableWithoutEvidence() {
@@ -708,11 +702,11 @@ function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
   assert.equal(grouped.deliverable.length, 2);
   assert.equal(grouped.deliveryFailures.length, 0);
   assert.match(cardText, /任务归类待确认/);
-  assert.match(cardText, /保存修改/);
+  assert.doesNotMatch(cardText, /保存修改/);
   assert.match(cardText, /标记为新任务/);
   assert.match(cardText, /标记为旧任务进展/);
   assert.doesNotMatch(cardText, /按以上选择确认/);
-  assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
+  assert.equal((cardText.match(/"tag":"input"/g) || []).length, 2);
 }
 
 function testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword() {
@@ -745,7 +739,7 @@ function testReliableSpeakerGetsEditableChoiceCardWithoutTodayKeyword() {
   assert.match(cardText, /任务归类待确认/);
   assert.match(cardText, /标记为新任务/);
   assert.match(cardText, /标记为旧任务进展/);
-  assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
+  assert.equal((cardText.match(/"tag":"input"/g) || []).length, 2);
 }
 
 function testSelfReportedTodayTaskCreatesConcreteFallbackTaskName() {
@@ -837,7 +831,7 @@ function testAssignedProgressUpdateGetsEditableChoiceCard() {
   assert.equal(repaired.tasks[0].task_choice, 'old_task_progress');
   assert.equal(grouped.deliveryFailures.length, 0);
   assert.match(cardText, /任务归类待确认/);
-  assert.match(cardText, /保存修改/);
+  assert.doesNotMatch(cardText, /保存修改/);
   assert.match(cardText, /标记为新任务/);
   assert.match(cardText, /标记为旧任务进展/);
   assert.ok((cardText.match(/"tag":"input"/g) || []).length >= 2);
@@ -1028,13 +1022,13 @@ async function testDispatchRetriesOversizedTaskCardWithSplitNormalCards() {
   assert.equal(splitMessages.every((row) => row.delivery_status === 'sent'), true);
   for (const card of sentCards.slice(1)) {
     const text = JSON.stringify(card);
-    assert.match(text, /保存修改/);
+     assert.doesNotMatch(text, /保存修改/);
     assert.match(text, /标记为新任务/);
     assert.match(text, /标记为旧任务进展/);
     assert.match(text, /丢弃/);
     assert.doesNotMatch(text, /confirm_assignee_tasks/);
     assert.doesNotMatch(text, /精简确认模式/);
-    assert.equal((text.match(/"tag":"input"/g) || []).length, 3);
+     assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
   }
   assert.equal(state.delivery_status, 'sent');
   assert.equal(state.card_message_id, `om_split_retry_${suffix}_1`);
@@ -2448,11 +2442,11 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
 testTaskCardInputDefaultsAreBoundedForLongDraftContent();
-testOldTaskDropdownIsRenderedAndKeepsManualFallback();
+testOldTaskDropdownReplacesManualFallback();
 testSingleTaskCardKeepsFullControlsAndScopedConfirmation();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
-testOldTaskMappingHintUsesMatchedNameOrEditableInput();
+testOldTaskDropdownUsesMatchedNameWhenProvided();
 testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
 testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();

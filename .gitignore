@@ -9,3 +9,13 @@ server/data/*.json
 server/uploads/*
 !server/uploads/.gitkeep
 !server/data/.gitkeep
+.codegraph/
+.omo/*
+!.omo/BUGLOG.md
+github-upload-ready/
+github-latest-draft-patch/
+错误日志存档_*.md
+当前进展与遗留问题存档_*.md
+当前需求文档*.md
+正式总表维护巡检与催更需求文档*.md
+正式总表自动提醒需求文档*.md

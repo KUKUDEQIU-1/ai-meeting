@@ -151,7 +151,7 @@ function selectElement({ tag, options, value }) {
       elements: [{
         tag: 'select_static',
         name: tag,
-        placeholder: { tag: 'plain_text', content: '请选择旧任务' },
+        placeholder: { tag: 'plain_text', content: '旧任务' },
         options: safeOptions
       }]
     }]
@@ -223,17 +223,6 @@ function taskActionSet({ draft, assignee, task }) {
         width: 'weighted',
         weight: 1,
         elements: [callbackButton({
-          name: `edit_${itemId}`,
-           text: '保存修改',
-          type: 'default',
-          value: { action: 'edit_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
-        })]
-      },
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        elements: [callbackButton({
           name: `mark_new_${itemId}`,
           text: '标记为新任务',
           type: task.task_choice === 'new_task' ? 'primary' : 'default',
@@ -285,7 +274,6 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) {
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**\n${truncateText(taskNameOf(task), 80)}` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
-    elements.push(inputElement({ tag: `matched_task_name_${itemId}`, label: '旧任务', value: matchedTaskName }));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
     elements.push(taskActionSet({ draft, assignee, task }));
     elements.push({ tag: 'hr' });
@@ -351,12 +339,6 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     };
   }
 
-  elements.push({
-    tag: 'markdown',
-    content: '**字段说明**\n- 每条事项请先选择：新任务，或旧任务进展\n- 新任务：可修改任务名称，确认后写入总任务表\n- 旧任务进展：可修改进展备注，确认后只保存进展，不新增任务'
-  });
-  elements.push({ tag: 'hr' });
-
   for (const task of tasks) {
     const itemId = String(task.item_id || '');
     const matchedTaskName = matchedTaskNameOf(task);
@@ -364,21 +346,9 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     if (task.status && task.status !== 'pending') continue;
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**\n${taskChoiceStatusText(task)}` });
-    elements.push(labelElement('**任务名称：** 如果这是新安排的任务，请在这里改任务标题；选择“新任务”后会写入总任务表。'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
-    elements.push(labelElement('**旧任务进展备注：** 如果这是以前任务的后续，请在这里写本次进展；选择“旧任务进展”后不会新增任务。'));
-    if (matchedTaskName) {
-      elements.push(labelElement(`**系统匹配旧任务：** ${truncateText(matchedTaskName, 120)}`));
-    } else {
-      elements.push(labelElement('**对应旧任务名称：** 未识别到对应旧任务，请修改旧任务名称。'));
-    }
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
-    elements.push(inputElement({ tag: `matched_task_name_${itemId}`, label: '旧任务', value: matchedTaskName }));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
-    elements.push(labelElement(`**完成日期/截止时间：** ${truncateText(task.deadline || '待确认', 80)}`));
-    if (String(task.comment || '').trim()) {
-      elements.push(labelElement(`**备注：** ${truncateText(task.comment, 180)}`));
-    }
     elements.push(taskActionSet({ draft, assignee, task }));
     elements.push({ tag: 'hr' });
   }
