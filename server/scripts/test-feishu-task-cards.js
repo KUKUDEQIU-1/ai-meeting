@@ -61,7 +61,7 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.match(text, /备注/);
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
-  assert.match(text, /confirm_assignee_tasks/);
+  assert.doesNotMatch(text, /confirm_assignee_tasks/);
   assert.match(text, /保存修改/);
   assert.match(text, /mark_task_as_new/);
   assert.match(text, /mark_task_as_progress/);
@@ -99,7 +99,7 @@ function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
   assert.match(text, /保存修改/);
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
-  assert.match(text, /confirm_assignee_tasks/);
+  assert.doesNotMatch(text, /confirm_assignee_tasks/);
 }
 
 function testSingleTaskCardKeepsFullControlsAndScopedConfirmation() {
@@ -119,7 +119,7 @@ function testSingleTaskCardKeepsFullControlsAndScopedConfirmation() {
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
   assert.match(text, /丢弃/);
-  assert.match(text, /confirm_assignee_tasks/);
+  assert.doesNotMatch(text, /confirm_assignee_tasks/);
   assert.match(text, /"item_id":"item_2"/);
   assert.doesNotMatch(text, /精简确认模式/);
   assert.doesNotMatch(text, /item_1/);
@@ -173,6 +173,41 @@ function inputDefaultValue(card, name) {
   return undefined;
 }
 
+function formControl(card, name) {
+  const stack = [card];
+
+  while (stack.length) {
+    const item = stack.pop();
+    if (!item || typeof item !== 'object') continue;
+    if (item.name === name) return item;
+    for (const value of Object.values(item)) {
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+
+  return undefined;
+}
+
+function testOldTaskDropdownIsRenderedAndKeepsManualFallback() {
+  const card = buildAssigneeTaskCard({
+    draft: { id: 31, meeting_title: '下拉测试' },
+    assignee: { assignee_key: '张三', assignee_name: '张三' },
+    tasks: [{ item_id: 'task_dropdown', task_name: '新安排' }],
+    oldTaskOptions: [
+      { text: { tag: 'plain_text', content: '进行中任务 A' }, value: '进行中任务 A' },
+      { text: { tag: 'plain_text', content: '进行中任务 B' }, value: '进行中任务 B' }
+    ]
+  });
+
+  const select = formControl(card, 'matched_task_name_select_task_dropdown');
+  const input = formControl(card, 'matched_task_name_task_dropdown');
+
+  assert.equal(select.tag, 'select_static');
+  assert.deepEqual(select.options.map((option) => option.value), ['进行中任务 A', '进行中任务 B']);
+  assert.equal(input.tag, 'input');
+}
+
 function testTaskChoiceButtonsShowCurrentSelection() {
   const draft = { id: 9, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
   const assignee = { assignee_key: '张三', assignee_name: '张三' };
@@ -224,7 +259,7 @@ function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
   const names = buttonNames(card);
   const text = JSON.stringify(card);
 
-  assert.match(text, /已丢弃/);
+  assert.doesNotMatch(text, /已丢弃/);
   assert.equal(names.includes('edit_discarded_task'), false);
   assert.equal(names.includes('mark_new_discarded_task'), false);
   assert.equal(names.includes('mark_old_discarded_task'), false);
@@ -233,7 +268,7 @@ function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
   assert.equal(names.includes('mark_new_pending_task'), true);
   assert.equal(names.includes('mark_old_pending_task'), true);
   assert.equal(names.includes('discard_pending_task'), true);
-  assert.equal(names.includes('confirm_tasks'), true);
+  assert.equal(names.includes('confirm_tasks'), false);
 }
 
 function testOldTaskMappingHintUsesMatchedNameOrEditableInput() {
@@ -298,7 +333,7 @@ function testFailureCardShowsConfirmationError() {
   assert.match(text, /请修改后重新确认/);
   assert.match(text, /标记为新任务/);
   assert.match(text, /标记为旧任务进展/);
-  assert.match(text, /按以上选择确认/);
+  assert.doesNotMatch(text, /按以上选择确认/);
   assert.match(text, /"name":"matched_task_name_task_a"/);
 }
 
@@ -472,7 +507,7 @@ function testTaskAndProgressCardsUseDistinctLabelsAndActions() {
 
   assert.equal(taskCard.header.title.content, '任务归类待确认');
   assert.equal(progressCard.header.title.content, '旧任务进展待确认');
-  assert.match(taskText, /confirm_assignee_tasks/);
+  assert.doesNotMatch(taskText, /confirm_assignee_tasks/);
   assert.doesNotMatch(taskText, /confirm_assignee_progress/);
   assert.match(progressText, /confirm_assignee_progress/);
   assert.doesNotMatch(progressText, /confirm_assignee_tasks/);
@@ -540,6 +575,24 @@ function testCallbackParsingUsesItemScopedTaskNameOnly() {
   assert.equal(parsed.form_values.task_name, 'scoped name');
   assert.equal('deadline' in parsed.form_values, false);
   assert.equal('comment' in parsed.form_values, false);
+}
+
+function testCallbackParsingPrefersOldTaskDropdownValue() {
+  const parsed = parseFeishuCardActionPayload({
+    event: {
+      action: {
+        value: { action: 'mark_task_as_progress', draft_id: 10, assignee_key: '张三', item_id: 'task_a' },
+        form_value: {
+          matched_task_name_select_task_a: '下拉旧任务',
+          matched_task_name_task_a: '手填旧任务',
+          matched_task_name_select_task_b: '不应读取'
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.form_values.matched_task_name, '下拉旧任务');
+  assert.equal(parsed.raw_form_values.matched_task_name_select_task_b, '不应读取');
 }
 
 function testConfirmedManualProgressBuildsBitableProgressFields() {
@@ -658,7 +711,7 @@ function testMissingDailySpeakerGetsFallbackConfirmationCardItem() {
   assert.match(cardText, /保存修改/);
   assert.match(cardText, /标记为新任务/);
   assert.match(cardText, /标记为旧任务进展/);
-  assert.match(cardText, /按以上选择确认/);
+  assert.doesNotMatch(cardText, /按以上选择确认/);
   assert.equal((cardText.match(/"tag":"input"/g) || []).length, 3);
 }
 
@@ -979,12 +1032,51 @@ async function testDispatchRetriesOversizedTaskCardWithSplitNormalCards() {
     assert.match(text, /标记为新任务/);
     assert.match(text, /标记为旧任务进展/);
     assert.match(text, /丢弃/);
-    assert.match(text, /confirm_assignee_tasks/);
+    assert.doesNotMatch(text, /confirm_assignee_tasks/);
     assert.doesNotMatch(text, /精简确认模式/);
     assert.equal((text.match(/"tag":"input"/g) || []).length, 3);
   }
   assert.equal(state.delivery_status, 'sent');
   assert.equal(state.card_message_id, `om_split_retry_${suffix}_1`);
+}
+
+async function testDispatchEmptyDraftDoesNotReportFailure() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `empty-draft-${Date.now()}`,
+    meetingTitle: '空事项会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-24',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_empty_draft',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  const result = await dispatchDraftTaskCards(draft, {
+    assigneeMap: parseAssigneeMap('{}'),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    postMessage: async () => {
+      throw new Error('should not send');
+    }
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.sent_count, 0);
+  assert.equal(result.skipped_count, 0);
+  assert.equal(result.failed_count, 0);
+  assert.deepEqual(result.results, []);
+  assert.deepEqual(result.delivery_failures, []);
 }
 
 async function testSplitCardSingleConfirmLeavesSiblingTaskActionable() {
@@ -1093,6 +1185,7 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
     deliveryStatus: 'sent'
   });
 
+  let finalizedProgress = false;
   const markResponse = await handleFeishuCardAction({
     header: { event_id: 'evt_mark_progress' },
     event: {
@@ -1108,46 +1201,25 @@ async function testTaskChoiceCanConvertDraftTaskToProgress() {
     }
   }, {
     masterTaskNameExists: async () => true,
+    finalizeProgress: async ({ draftId, assigneeKey }) => {
+      finalizedProgress = draftId === draft.id && assigneeKey === '张三';
+      return { status: 'progress_synced' };
+    },
     updateCard: async () => ({ status: 'updated' })
   });
   const markedDraft = await getMeetingTaskDraftById(draft.id);
 
-  assert.equal(markResponse.toast.content, '已标记为旧任务进展');
+  assert.equal(markResponse.toast.content, '旧任务进展已处理');
   assert.equal(markedDraft.draft_tasks[0].task_choice, 'old_task_progress');
   assert.equal(markedDraft.draft_tasks[0].task_name, '旧任务名');
   assert.equal(markedDraft.draft_tasks[0].progress_summary, '今天已完成接入测试');
   assert.equal(markedDraft.draft_tasks[0].matched_task_name, 'AI会议助手历史任务');
-
-  let finalizedNewTasks = false;
-  let finalizedProgress = false;
-  const confirmResponse = await handleFeishuCardAction({
-    header: { event_id: 'evt_confirm_progress_choice' },
-    event: {
-      operator: { open_id: 'ou_actor' },
-      action: {
-        value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
-      }
-    }
-  }, {
-    finalizeAssignee: async () => {
-      finalizedNewTasks = true;
-    },
-    finalizeProgress: async ({ draftId, assigneeKey }) => {
-      finalizedProgress = draftId === draft.id && assigneeKey === '张三';
-    },
-    masterTaskNameExists: async () => true,
-    updateCard: async () => ({ status: 'updated' })
-  });
-  const confirmedDraft = await getMeetingTaskDraftById(draft.id);
-
-  assert.equal(confirmResponse.toast.content, '旧任务进展已确认');
-  assert.equal(finalizedNewTasks, false);
   assert.equal(finalizedProgress, true);
-  assert.equal(confirmedDraft.draft_tasks[0].status, 'discarded');
-  assert.equal(confirmedDraft.progress_updates.length, 1);
-  assert.equal(confirmedDraft.progress_updates[0].task_name, 'AI会议助手历史任务');
-  assert.equal(confirmedDraft.progress_updates[0].progress_summary, '今天已完成接入测试');
-  assert.equal(confirmedDraft.progress_updates[0].status, 'confirmed');
+  assert.equal(markedDraft.draft_tasks[0].status, 'discarded');
+  assert.equal(markedDraft.progress_updates.length, 1);
+  assert.equal(markedDraft.progress_updates[0].task_name, 'AI会议助手历史任务');
+  assert.equal(markedDraft.progress_updates[0].progress_summary, '今天已完成接入测试');
+  assert.equal(markedDraft.progress_updates[0].status, 'confirmed');
 }
 
 async function testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput() {
@@ -1201,11 +1273,12 @@ async function testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput
     }
   }, {
     masterTaskNameExists: async (taskName) => taskName === 'AI会议助手历史任务',
+    finalizeProgress: async () => ({ status: 'progress_synced' }),
     updateCard: async () => ({ status: 'updated' })
   });
   const updatedDraft = await getMeetingTaskDraftById(draft.id);
 
-  assert.equal(response.toast.content, '已标记为旧任务进展');
+  assert.equal(response.toast.content, '旧任务进展已处理');
   assert.equal(updatedDraft.draft_tasks[0].task_choice, 'old_task_progress');
   assert.equal(updatedDraft.draft_tasks[0].matched_task_name, 'AI会议助手历史任务');
 }
@@ -1864,32 +1937,18 @@ async function testMarkOldTaskAllowsSwitchBeforeFinalMasterValidation() {
     deliveryStatus: 'sent'
   });
 
-  const markResponse = await handleFeishuCardAction({
-    header: { event_id: 'evt_mark_old_invalid' },
-    event: {
-      operator: { open_id: 'ou_actor' },
-      action: {
-        value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'mark_old_invalid_1' },
-        form_value: {
-          task_name_mark_old_invalid_1: '待判断任务',
-          matched_task_name_mark_old_invalid_1: '123456',
-          progress_summary_mark_old_invalid_1: '推进进展'
-        }
-      }
-    }
-  }, { updateCard: async () => ({ status: 'updated' }) });
-  const markedDraft = await getMeetingTaskDraftById(draft.id);
-
-  assert.equal(markResponse.toast.content, '已标记为旧任务进展');
-  assert.equal(markedDraft.draft_tasks[0].task_choice, 'old_task_progress');
-  assert.equal(markedDraft.draft_tasks[0].matched_task_name, '123456');
   await assert.rejects(
     () => handleFeishuCardAction({
-      header: { event_id: 'evt_confirm_marked_old_invalid' },
+      header: { event_id: 'evt_mark_old_invalid' },
       event: {
         operator: { open_id: 'ou_actor' },
         action: {
-          value: { action: 'confirm_assignee_tasks', draft_id: draft.id, assignee_key: '张三' }
+          value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: '张三', item_id: 'mark_old_invalid_1' },
+          form_value: {
+            task_name_mark_old_invalid_1: '待判断任务',
+            matched_task_name_mark_old_invalid_1: '123456',
+            progress_summary_mark_old_invalid_1: '推进进展'
+          }
         }
       }
     }, {
@@ -2389,6 +2448,7 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 testMappingAndGrouping();
 testCardPayloadContainsOnlyOwnedTasks();
 testTaskCardInputDefaultsAreBoundedForLongDraftContent();
+testOldTaskDropdownIsRenderedAndKeepsManualFallback();
 testSingleTaskCardKeepsFullControlsAndScopedConfirmation();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
@@ -2397,6 +2457,7 @@ testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
 testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();
+testCallbackParsingPrefersOldTaskDropdownValue();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
 testConfirmedProgressBuildsFollowerField();
@@ -2422,6 +2483,7 @@ testNotifyTextIncludesTaskCountsByAssignee();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();
+await testDispatchEmptyDraftDoesNotReportFailure();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();

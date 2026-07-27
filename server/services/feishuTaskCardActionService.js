@@ -59,11 +59,16 @@ function formValueForItem(formValues, field, itemId) {
   return String(formValues?.[`${field}_${itemId}`] || '').trim();
 }
 
+function matchedTaskNameFormValue(formValues, itemId) {
+  return formValueForItem(formValues, 'matched_task_name_select', itemId)
+    || formValueForItem(formValues, 'matched_task_name', itemId);
+}
+
 function taskWithCurrentFormValues(task, formValues) {
   const itemId = String(task.item_id || '');
   const taskName = formValueForItem(formValues, 'task_name', itemId);
   const progressSummary = formValueForItem(formValues, 'progress_summary', itemId);
-  const matchedTaskName = formValueForItem(formValues, 'matched_task_name', itemId);
+  const matchedTaskName = matchedTaskNameFormValue(formValues, itemId);
 
   return {
     ...task,
@@ -79,8 +84,9 @@ function hasCurrentFormValue(formValues, field, itemId) {
 
 function taskChoiceFromCurrentForm(task, formValues) {
   const itemId = String(task.item_id || '');
-  const submittedOldTaskName = hasCurrentFormValue(formValues, 'matched_task_name', itemId)
-    ? formValueForItem(formValues, 'matched_task_name', itemId)
+  const submittedOldTaskName = hasCurrentFormValue(formValues, 'matched_task_name_select', itemId)
+    || hasCurrentFormValue(formValues, 'matched_task_name', itemId)
+    ? matchedTaskNameFormValue(formValues, itemId)
     : '';
 
   if (task.task_choice === 'new_task') return 'new_task';
@@ -196,28 +202,77 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能修改' : '已确认，不能再修改');
   }
 
-  const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => {
-    const values = validateEditableValues({
-      task_name: parsed.form_values.task_name || task.task_name,
-      progress_summary: parsed.form_values.progress_summary || task.progress_summary,
-      matched_task_name: parsed.form_values.matched_task_name || matchedTaskNameOf(task)
-    });
+  const draft = await getMeetingTaskDraftById(parsed.draft_id);
+  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
+  const currentValues = {
+    task_name: parsed.form_values.task_name || currentTask?.task_name,
+    progress_summary: parsed.form_values.progress_summary || currentTask?.progress_summary,
+    matched_task_name: parsed.form_values.matched_task_name || matchedTaskNameOf(currentTask)
+  };
+  const validatedValues = validateEditableValues(currentValues);
 
+  if (taskChoice === 'old_task_progress') {
+    const matchedTaskName = validatedValues.matchedTaskName || matchedTaskNameOf(currentTask);
+    if (!matchedTaskName || !(await dependencies.masterTaskNameExists(matchedTaskName, {
+      table_id: draft?.table_id,
+      app_token: process.env.FEISHU_MASTER_TASK_APP_TOKEN?.trim() || process.env.FEISHU_BITABLE_APP_TOKEN?.trim() || ''
+    }))) {
+      reject('不能填写原表格没有的任务', 400);
+    }
+  }
+
+  const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => {
     return {
       ...task,
-      task_name: values.taskName,
-      progress_summary: values.progressSummary || task.progress_summary,
-      matched_task_name: values.matchedTaskName || task.matched_task_name,
+      task_name: validatedValues.taskName,
+      progress_summary: validatedValues.progressSummary || task.progress_summary,
+      matched_task_name: validatedValues.matchedTaskName || task.matched_task_name,
       task_choice: taskChoice,
+      status: taskChoice === 'new_task' ? 'confirmed' : 'discarded',
+      confirmed_by: parsed.operator_open_id,
+      confirmed_at: new Date().toISOString(),
       updated_by: parsed.operator_open_id,
       updated_at: new Date().toISOString()
     };
   });
 
   assertOwnedItem(result?.item, state.assignee_key, '只能修改本人名下任务');
+
+  if (taskChoice === 'new_task') {
+    await dependencies.finalizeAssignee({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      confirmedBy: parsed.operator_open_id,
+      itemIds: [parsed.item_id]
+    });
+  } else {
+    const progressUpdate = progressUpdateFromTask(result.item, parsed.operator_open_id, new Date().toISOString());
+    await updateMeetingTaskDraftProgressUpdates(parsed.draft_id, [
+      ...(draft?.progress_updates || []),
+      progressUpdate
+    ]);
+    await dependencies.finalizeProgress({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      confirmedBy: parsed.operator_open_id,
+      itemIds: [progressUpdate.item_id]
+    });
+  }
+
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
-  return feishuCallbackToast(taskChoice === 'old_task_progress' ? '已标记为旧任务进展' : '已标记为新任务');
+  const latestDraft = await getMeetingTaskDraftById(parsed.draft_id);
+  const hasRemainingPendingTasks = (latestDraft?.draft_tasks || []).some((task) => (
+    normalizeAssigneeKey(assigneeNameOf(task)) === state.assignee_key && task.status === 'pending'
+  ));
+  await dependencies.updateCard({
+    messageId: parsed.message_id,
+    draftId: parsed.draft_id,
+    assigneeKey: state.assignee_key,
+    cardKind: state.card_kind,
+    terminal: !hasRemainingPendingTasks,
+    itemId: state.split_item_id || ''
+  });
+  return feishuCallbackToast(taskChoice === 'old_task_progress' ? '旧任务进展已处理' : '新任务已处理');
 }
 
 async function discardTask(parsed, state, dependencies) {
