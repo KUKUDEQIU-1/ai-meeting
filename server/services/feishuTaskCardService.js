@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { getTenantAccessToken, listMasterTaskAuditRecords } from './feishuBitableClient.js';
 import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
+import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState } from './taskDraftService.js';
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
 
@@ -78,10 +78,6 @@ function itemsForAssignee(items, assigneeKey) {
   return (items || []).filter((item) => normalizeAssigneeKey(assigneeNameOf(item)) === assigneeKey);
 }
 
-function isFeishuElementLimitError(error) {
-  return error instanceof Error && /element exceeds the limit|ErrCode:\s*11310/.test(error.message);
-}
-
 async function loadOldTaskOptionsForAssignee(assigneeKey, listRecords = listMasterTaskAuditRecords) {
   try {
     const records = await listRecords();
@@ -146,44 +142,6 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
 }
 
-async function sendSplitTaskCards({ draft, assignee, cardKind, postMessage, oldTaskOptions }) {
-  const results = [];
-  const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
-  const sentItemIds = new Set(existingMessages.filter((row) => row.delivery_status === 'sent' && row.card_message_id).map((row) => row.item_id));
-
-  for (const task of assignee.tasks) {
-    const itemId = String(task.item_id || '');
-
-    if (sentItemIds.has(itemId)) {
-      results.push({ item_id: itemId, status: 'skipped', reason: 'already_sent' });
-      continue;
-    }
-
-    try {
-      const card = buildAssigneeTaskCard({ draft, assignee, tasks: [task], confirmItemId: itemId, oldTaskOptions });
-      const messageId = await postMessage({ receiveId: assignee.receive_id, card });
-      await upsertDraftCardMessage({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, itemId, cardMessageId: messageId, deliveryStatus: 'sent' });
-      results.push({ item_id: itemId, status: 'sent', message_id: messageId });
-    } catch (error) {
-      await upsertDraftCardMessage({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, itemId, cardMessageId: '', deliveryStatus: 'failed', deliveryError: error instanceof Error ? error.message : String(error) });
-      results.push({ item_id: itemId, status: 'failed', error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  const failed = results.filter((item) => item.status === 'failed');
-  const sentOrSkipped = results.filter((item) => item.status === 'sent' || item.status === 'skipped');
-
-  if (failed.length || sentOrSkipped.length !== assignee.tasks.length) {
-    const message = failed[0]?.error || '部分任务卡片发送失败';
-    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: message });
-    return { assignee_key: assignee.assignee_key, status: 'failed', error: message, split_cards: results };
-  }
-
-  const firstMessageId = results.find((item) => item.message_id)?.message_id || existingMessages[0]?.card_message_id || '';
-  await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', deliveryError: '', cardMessageId: firstMessageId });
-  return { assignee_key: assignee.assignee_key, status: 'sent', message_id: firstMessageId, split: true, split_cards: results };
-}
-
 async function persistUnmappedAssignees(draftId, failures, cardKind) {
   for (const failure of failures) {
     await upsertDraftAssigneeState({
@@ -220,17 +178,7 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
     const card = cardKind === 'progress'
       ? buildAssigneeProgressCard({ draft, assignee, progressUpdates: assignee.tasks })
       : buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks, oldTaskOptions });
-    let messageId;
-
-    try {
-      messageId = await postMessage({ receiveId: assignee.receive_id, card });
-    } catch (error) {
-      if (cardKind !== 'tasks' || !isFeishuElementLimitError(error)) {
-        throw error;
-      }
-
-      return await sendSplitTaskCards({ draft, assignee, cardKind, postMessage, oldTaskOptions });
-    }
+    const messageId = await postMessage({ receiveId: assignee.receive_id, card });
 
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
     return { assignee_key: assignee.assignee_key, status: 'sent', message_id: messageId };

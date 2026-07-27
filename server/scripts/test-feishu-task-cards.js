@@ -69,6 +69,9 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
   assert.match(text, /"tag":"select_static"/);
   assert.doesNotMatch(text, /matched_task_name_task_a/);
+  assert.match(text, /\*\*新任务\*\*/);
+  assert.match(text, /\*\*旧任务\*\*/);
+  assert.match(text, /\*\*备注\*\*/);
 }
 
 function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
@@ -973,7 +976,7 @@ async function testLongDraftItemIdsAreCompactedBeforeCardRendering() {
   assert.doesNotMatch(JSON.stringify(card), new RegExp(longItemId.slice(0, 80)));
 }
 
-async function testDispatchRetriesOversizedTaskCardWithSplitNormalCards() {
+async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
   const suffix = Date.now();
   const itemIds = [`split_retry_1_${suffix}`, `split_retry_2_${suffix}`, `split_retry_3_${suffix}`];
   const draft = await createMeetingTaskDraft({
@@ -1007,31 +1010,22 @@ async function testDispatchRetriesOversizedTaskCardWithSplitNormalCards() {
     listGroupMembers: async () => ({ status: 'failed' }),
     postMessage: async ({ card }) => {
       sentCards.push(card);
-      if (sentCards.length === 1) {
-        throw new Error('飞书任务卡片发送失败：Failed to create card content, ext=ErrCode: 11310; ErrMsg: element exceeds the limit; ');
-      }
-      return `om_split_retry_${suffix}_${sentCards.length - 1}`;
+      throw new Error('飞书任务卡片发送失败：Failed to create card content, ext=ErrCode: 11310; ErrMsg: element exceeds the limit; ');
     }
   });
   const state = await getDraftAssigneeState(draft.id, '洪伟填', 'tasks');
   const splitMessages = await listDraftCardMessages(draft.id, '洪伟填', 'tasks');
 
-  assert.equal(result.sent_count, 1);
-  assert.equal(sentCards.length, 4);
-  assert.equal(splitMessages.length, 3);
-  assert.equal(splitMessages.every((row) => row.delivery_status === 'sent'), true);
-  for (const card of sentCards.slice(1)) {
-    const text = JSON.stringify(card);
-     assert.doesNotMatch(text, /保存修改/);
-    assert.match(text, /标记为新任务/);
-    assert.match(text, /标记为旧任务进展/);
-    assert.match(text, /丢弃/);
-    assert.doesNotMatch(text, /confirm_assignee_tasks/);
-    assert.doesNotMatch(text, /精简确认模式/);
-     assert.equal((text.match(/"tag":"input"/g) || []).length, 2);
-  }
-  assert.equal(state.delivery_status, 'sent');
-  assert.equal(state.card_message_id, `om_split_retry_${suffix}_1`);
+  assert.equal(result.sent_count, 0);
+  assert.equal(result.failed_count, 1);
+  assert.equal(sentCards.length, 1);
+  assert.equal(splitMessages.length, 0);
+  assert.equal(state.delivery_status, 'failed');
+  assert.match(state.delivery_error, /element exceeds the limit/);
+  const text = JSON.stringify(sentCards[0]);
+  assert.match(text, /split_retry_1_/);
+  assert.match(text, /split_retry_2_/);
+  assert.match(text, /split_retry_3_/);
 }
 
 async function testDispatchEmptyDraftDoesNotReportFailure() {
@@ -2476,7 +2470,7 @@ testSpeakerCoverageIncludesMeetingReviewAndOperationWork();
 testNotifyTextIncludesTaskCountsByAssignee();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
-await testDispatchRetriesOversizedTaskCardWithSplitNormalCards();
+await testDispatchKeepsOversizedTaskCardAsOneAttempt();
 await testDispatchEmptyDraftDoesNotReportFailure();
 await testEditAndDiscardPreserveStoredFields();
 await testTaskChoiceCanConvertDraftTaskToProgress();

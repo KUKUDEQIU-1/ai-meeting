@@ -272,8 +272,11 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) {
     if (task.status && task.status !== 'pending') continue;
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**\n${truncateText(taskNameOf(task), 80)}` });
+    elements.push(labelElement('**新任务**'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
+    elements.push(labelElement('**旧任务**'));
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
+    elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
     elements.push(taskActionSet({ draft, assignee, task }));
     elements.push({ tag: 'hr' });
@@ -346,8 +349,11 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     if (task.status && task.status !== 'pending') continue;
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**\n${taskChoiceStatusText(task)}` });
+    elements.push(labelElement('**新任务**'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
+    elements.push(labelElement('**旧任务**'));
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
+    elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
     elements.push(taskActionSet({ draft, assignee, task }));
     elements.push({ tag: 'hr' });
