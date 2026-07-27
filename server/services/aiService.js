@@ -164,6 +164,42 @@ function isParticipantOrRecipientMention(item, assignee) {
   return discussionOrRecipient.test(evidence);
 }
 
+function attributionEvidence(item) {
+  return [
+    item.evidence_quote,
+    item.evidence,
+    item.task_name,
+    item.task_brief,
+    item.task_description,
+    item.description
+  ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function explicitExecutorFromEvidence(item) {
+  const evidence = attributionEvidence(item);
+  if (!evidence) return '';
+
+  const sentences = evidence.split(/[。！？；\n]/).filter(Boolean);
+  const patterns = [
+    /(?:由|让|交给|安排|指定给)\s*([\u4e00-\u9fffA-Za-z·]{2,4}?)\s*(?:来)?\s*(?:负责|处理|跟进|推进|完成|整理|开发|修复|跟踪|对接|输出|配置)/,
+    /请\s*([\u4e00-\u9fffA-Za-z·]{2,4}?)\s*(?:来)?\s*(?:负责|处理|跟进|推进|完成|整理|开发|修复|跟踪|对接|输出|配置)/,
+    /(?<!发)(?<!步)给\s*([\u4e00-\u9fffA-Za-z·]{2,4}?)\s*(?:安排|布置|分配)(?:任务)?/,
+    /([\u4e00-\u9fffA-Za-z·]{2,4}?)\s*(?:负责|来负责)\s*(?:处理|跟进|推进|完成|整理|开发|修复|跟踪|对接|输出|配置)/
+  ];
+
+  for (const sentence of sentences) {
+    for (const pattern of patterns) {
+      const match = sentence.match(pattern);
+      const executor = normalizeText(match?.[1]);
+      if (executor && !isPendingAssignee(executor) && !/^(这个|该|此|相关|当前|任务|事项|问题|方案)/.test(executor)) {
+        return executor;
+      }
+    }
+  }
+
+  return '';
+}
+
 function normalizeAssigneeAttribution(item) {
   const rawAssignee = normalizeText(item.assignee || item.owner || item.responsible || PENDING_ASSIGNEE);
   const sourceSpeaker = normalizeText(item.source_speaker || item.speaker);
@@ -177,6 +213,15 @@ function normalizeAssigneeAttribution(item) {
     || speakerConfidence < SPEAKER_CONFIDENCE_OWNER_THRESHOLD
     || isPendingAssignee(sourceSpeaker)
     || hasHighRiskAttributionWarning(warnings);
+  const evidenceExecutor = explicitExecutorFromEvidence(item);
+
+  if (evidenceExecutor) {
+    return {
+      assignee: evidenceExecutor,
+      assignee_source: 'explicit_mention',
+      needs_confirmation: Boolean(item.needs_confirmation)
+    };
+  }
 
   if (explicitAssignee) {
     return { assignee: rawAssignee, assignee_source: 'explicit_mention', needs_confirmation: Boolean(item.needs_confirmation) };
@@ -204,6 +249,7 @@ function normalizeTasks(tasks) {
     return {
       task_name: item.task_name || item.title || item.task || item.todo || '未命名任务',
       title: item.task_name || item.title || item.task || item.todo || '未命名任务',
+      candidate_id: item.candidate_id || item.id || '',
       task_brief: item.task_brief || item.brief || item.title || item.task || item.todo || '',
       task_description: item.task_description || item.description || item.detail || item.summary || '',
       description: item.task_description || item.description || item.detail || item.summary || '',
@@ -419,21 +465,21 @@ export async function generateMeetingTasks(meetingText) {
 
   console.log(`[AI Analyze] start content_source=${meetingInput.content_source} content_length=${meetingInput.content_length}`);
 
-   const prompt = `请根据以下会议转写原文和结构化发言记录，严格区分“今日新增任务”和“历史任务进展”，并生成结构化 JSON 对象。
+   const prompt = `请根据以下会议转写原文和结构化发言记录，先进行高召回“候选任务”提取，并生成结构化 JSON 对象。
 
  重要规则：
 1. 你正在分析的是会议转写原文，而不是会议摘要。
 2. 必须以原文中明确表达的信息为依据。
 3. Get笔记自带 summary 只能作为辅助参考，不能作为唯一依据。
 4. 不要因为 summary 中提到某个结论，就在原文没有依据时生成确定任务。
-5. 今天任务表只允许放“今天会议中新安排、会后明确要执行、今天明确产生新交付动作”的任务。
-6. 历史任务进展、已完成事项、正在做的汇报、之前安排过但今天没有新动作的事项，都不能放入 today_tasks。
+ 5. Stage 1 的 today_tasks 是候选任务池：凡是可能是今天会议中新安排、会后明确要执行、今天明确产生新交付动作的事项，都先进入 today_tasks，交给 Stage 2 再判定 keep/discard/merge。
+ 6. 历史任务进展、已完成事项、正在做的汇报、之前安排过但今天没有新动作的事项，若明显不是新增任务则放入 progress_updates；若存在新的交付动作或上下文不确定，可以先作为候选进入 today_tasks，但必须在 reason 中说明不确定点。
 7. 不要臆造负责人、截止时间。负责人不明确时填 "待确认"。截止时间不明确时填 "待确认"。
 8. 每个 today_tasks 和 progress_updates 项都必须给出原文依据短句 evidence_quote；没有原文依据时放入 discarded_items。
-9. 宁可少提取，也不要把普通讨论或历史进展误导成今日任务。
+ 9. 宁可多保留有原文依据的候选，不要在 Stage 1 过早丢弃边界案例；但普通讨论、无动作弱跟进、无证据臆测仍必须丢弃。
 10. task_name 必须让未参会的人一眼看懂“哪个项目/模块/业务对象 + 要交付什么”。
 11. 禁止输出“完成版本12验收”“活动上线”“品类运营”“功能优化”“处理问题”“完成测试”这类泛化短名；如果原文没有足够上下文补全项目/模块/交付结果，放入 discarded_items。
-12. 不要把“提到过的动词 + 名词”当作任务；只有明确交付物、负责人/角色或明确时间信号的事项才进入 today_tasks。
+ 12. 不要把“提到过的动词 + 名词”当作任务；候选至少需要明确交付物、负责人/角色、明确时间信号三者之一，并必须保留 evidence_quote。
   13. 结构化发言记录中的发言人标签只是证据，不是事实真值；不得仅凭文本风格、短句、口头禅或相邻上下文把文本改归属给另一个人。
   14. 负责人归属默认规则：speaker_status=provided、speaker_confidence 较高，且该发言人用第一人称/行动者语言描述具体可执行任务时，默认把该发言人作为负责人，assignee_source="speaker"，source_speaker/source_time 填原标签和时间。
   15. 显式执行人优先级最高：正文明确说“某人负责/某人来做/交给某人执行/某角色处理”时，用被明确指派的执行人覆盖发言人，assignee_source="explicit_mention"。
@@ -465,13 +511,13 @@ export async function generateMeetingTasks(meetingText) {
 - 如果历史任务需求不清、待澄清、还要确认、还没定，suggested_status 填 "需求建议集-基础需求（未澄清）"。
 - 如果无法明确判断状态，suggested_status 填 ""。
 
-只有满足以下任意条件，才可以进入 today_tasks：
+满足以下任意条件时，可以进入 Stage 1 today_tasks 候选池：
 - 会议中明确有人安排某人/某角色/某团队会后做某事。
 - 原文明确出现“今天、下午、明天、本周、会后、待会儿、稍后”等执行时间信号，并且有明确动作。
 - 原文明确出现“发到群里、整理出来、确认一下、统计一下、补一下、修一下、上线、提测、对接、拉群沟通、给出方案、输出文档”等新交付动作。
 - 历史任务今天产生了新的明确交付动作，例如“今天下午把错误日志整理出来发群里”。
 
-以下内容必须进入 progress_updates 或 discarded_items，不能进入 today_tasks：
+以下内容通常进入 progress_updates 或 discarded_items；只有同时出现新的具体交付动作时才进入 Stage 1 today_tasks 候选池：
 - “已经做了、已完成、昨天处理了、上周弄了、之前安排过”。
 - “目前在做、还在调试、正在看、继续推进中”，除非同时出现新的具体交付动作。
 - “这个问题之前提过/之前说过/之前安排过”。
@@ -531,6 +577,63 @@ export async function generateMeetingTasks(meetingText) {
 ${meetingInput.promptText}`;
 
   return normalizeTaskExtractionResult(await callAi(prompt, 'generateMeetingTasks'));
+}
+
+export async function validateMeetingTasks(input) {
+  const meetingInput = buildMeetingText(input?.meetingText || input?.text || '');
+  const candidates = Array.isArray(input?.candidates) ? input.candidates : [];
+
+  if (!candidates.length) {
+    return { decisions: [] };
+  }
+
+  if (!hasConfiguredAiKey()) {
+    return {
+      decisions: candidates.map((candidate) => ({
+        candidate_id: candidate.candidate_id,
+        action: 'keep',
+        reason: 'AI 未启用，验证阶段 fail-open 保留候选'
+      }))
+    };
+  }
+
+  const prompt = `请作为 Stage 2 会议任务验证器，根据完整转写上下文校验 Stage 1 候选任务，并只返回合法 JSON。
+
+目标：
+1. 对每个候选决定 keep、discard 或 merge。
+2. 纠正错误负责人，但 source_speaker 必须保留原始发言人证据，不要把 source_speaker 改成最终 assignee。
+3. 合并同一交付物的重复候选；同一负责人有多个不同交付物时必须分别 keep，不允许按负责人限量。
+4. 不要新增候选之外的任务；只能处理输入 candidates 中的 candidate_id。
+
+决策规则：
+- keep：原文上下文支持这是今天会议产生的新交付动作或会后明确执行事项。
+- discard：只是讨论、历史进展、已完成事项、弱跟进、无交付物、无原文依据或候选误读上下文。
+- merge：该候选与另一个候选是同一交付物；merge_into_candidate_id 必须指向被保留的候选。
+- corrected_assignee：只有原文明确执行人和候选 assignee 不一致时填写；不确定时留空或填 "待确认" 并说明 reason。
+
+必须返回 JSON 格式：
+{
+  "decisions": [
+    {
+      "candidate_id": "candidate_1",
+      "action": "keep/discard/merge",
+      "corrected_assignee": "负责人或空字符串",
+      "merge_into_candidate_id": "candidate_2 或空字符串",
+      "reason": "基于原文上下文的简短理由"
+    }
+  ]
+}
+
+候选任务：
+${JSON.stringify(candidates, null, 2)}
+
+会议内容：
+${meetingInput.promptText}`;
+
+  const result = await callAi(prompt, 'validateMeetingTasks');
+  return {
+    decisions: Array.isArray(result?.decisions) ? result.decisions : []
+  };
 }
 
 export async function resolveTaskHistoryDecision(input) {

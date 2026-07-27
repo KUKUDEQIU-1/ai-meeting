@@ -89,6 +89,60 @@ function testExplicitAssigneeOverridesReliableSpeakerDuringNormalization() {
   assert.equal(result.today_tasks[0].assignee_source, 'explicit_mention');
 }
 
+function testEvidenceExecutorOverridesSpeakerOwner() {
+  const phrases = [
+    '嘉华负责处理这个事项',
+    '让嘉华跟进这个事项',
+    '交给嘉华处理这个事项',
+    '给嘉华安排这个任务',
+    '请嘉华负责这个事项'
+  ];
+
+  for (const phrase of phrases) {
+    const result = normalizeTaskExtractionResult({
+      today_tasks: [{
+        task_name: '处理这个事项',
+        task_brief: phrase,
+        task_description: `伟填在会上说：${phrase}。`,
+        assignee: '伟填',
+        deadline: '待确认',
+        evidence_quote: phrase,
+        assignee_source: 'speaker',
+        source_speaker: '伟填',
+        source_speaker_status: 'provided',
+        source_speaker_confidence: 0.9
+      }]
+    });
+
+    assert.equal(result.today_tasks[0].assignee, '嘉华', phrase);
+    assert.equal(result.today_tasks[0].owner, '嘉华', phrase);
+    assert.equal(result.today_tasks[0].assignee_source, 'explicit_mention', phrase);
+    assert.equal(result.today_tasks[0].source_speaker, '伟填', phrase);
+  }
+}
+
+function testRecipientEvidenceDoesNotOverrideSpeakerOwner() {
+  const phrases = ['请嘉华确认这个事项', '发给嘉华看一下', '同步给嘉华', '和嘉华讨论这个方案'];
+
+  for (const phrase of phrases) {
+    const result = normalizeTaskExtractionResult({
+      today_tasks: [{
+        task_name: '整理方案',
+        task_description: phrase,
+        assignee: '伟填',
+        evidence_quote: phrase,
+        assignee_source: 'speaker',
+        source_speaker: '伟填',
+        source_speaker_status: 'provided',
+        source_speaker_confidence: 0.9
+      }]
+    });
+
+    assert.equal(result.today_tasks[0].assignee, '伟填', phrase);
+    assert.equal(result.today_tasks[0].assignee_source, 'speaker', phrase);
+  }
+}
+
 function testReliableSpeakerWithLowRiskWarningKeepsOwner() {
   const result = filterActionableTasks([
     {
@@ -200,6 +254,8 @@ function testDiscussionParticipantsAndRecipientAreNotOwnersForPrivateCard() {
 testLowRiskWarningRestoresReliableSpeakerOwnerDuringNormalization();
 testHighRiskWarningKeepsNormalizationPendingConfirmation();
 testExplicitAssigneeOverridesReliableSpeakerDuringNormalization();
+testEvidenceExecutorOverridesSpeakerOwner();
+testRecipientEvidenceDoesNotOverrideSpeakerOwner();
 testReliableSpeakerWithLowRiskWarningKeepsOwner();
 testPanyunzhiVersion14TimeGapKeepsOwner();
 testUnclearAssigneeRemainsPendingConfirmation();
