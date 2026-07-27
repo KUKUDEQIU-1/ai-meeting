@@ -12,14 +12,10 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
-function startOfDayMs(value = new Date()) {
-  const date = nowDate(value);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
-function endOfDayMs(value = new Date()) {
-  return startOfDayMs(value) + (24 * 60 * 60 * 1000) - 1;
-}
+const DAY_MS = 24 * 60 * 60 * 1000;
+const STALE_MODIFICATION_MS = 3 * DAY_MS;
+const DUE_SOON_MS = 3 * DAY_MS;
+const PENDING_STATUSES = new Set(['待开始', '未开始']);
 
 function toEpochMs(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -39,10 +35,21 @@ function toEpochMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function wasUpdatedToday(lastModifiedAt, now = new Date()) {
+function modifiedAgeMs(lastModifiedAt, now = new Date()) {
   const modifiedMs = toEpochMs(lastModifiedAt);
-  if (!modifiedMs) return false;
-  return modifiedMs >= startOfDayMs(now) && modifiedMs <= endOfDayMs(now);
+  if (!modifiedMs) return 0;
+  return Math.max(0, nowDate(now).getTime() - modifiedMs);
+}
+
+function isStale(lastModifiedAt, now = new Date()) {
+  const ageMs = modifiedAgeMs(lastModifiedAt, now);
+  return ageMs > STALE_MODIFICATION_MS;
+}
+
+function isDueSoonOrOverdue(dueAt, now = new Date()) {
+  const dueMs = toEpochMs(dueAt);
+  if (!dueMs) return false;
+  return dueMs - nowDate(now).getTime() <= DUE_SOON_MS;
 }
 
 function envEnabled(name, fallback = false) {
@@ -66,12 +73,21 @@ export function evaluateMasterTaskAuditRecord(record, options = {}) {
   }
 
   if (status === '进行中') {
-    if (wasUpdatedToday(record?.lastModifiedAt, now)) {
+    if (isDueSoonOrOverdue(record?.dueAt, now)) {
+      return {
+        audit_date: auditDate,
+        action: 'remind',
+        audit_type: 'in_progress_missing_update',
+        reason: 'due_soon_or_overdue'
+      };
+    }
+
+    if (!isStale(record?.lastModifiedAt, now)) {
       return {
         audit_date: auditDate,
         action: 'passed',
         audit_type: 'in_progress_missing_update',
-        reason: 'updated_today'
+        reason: 'recently_modified'
       };
     }
 
@@ -79,17 +95,35 @@ export function evaluateMasterTaskAuditRecord(record, options = {}) {
       audit_date: auditDate,
       action: 'remind',
       audit_type: 'in_progress_missing_update',
-      reason: 'progress_not_updated_today'
+      reason: 'stale_more_than_3_days'
+    };
+  }
+
+  if (PENDING_STATUSES.has(status)) {
+    if (!isStale(record?.lastModifiedAt, now)) {
+      return {
+        audit_date: auditDate,
+        action: 'passed',
+        audit_type: 'pending_status_review',
+        reason: 'recently_modified'
+      };
+    }
+
+    return {
+      audit_date: auditDate,
+      action: 'remind',
+      audit_type: 'pending_status_review',
+      reason: 'pending_more_than_3_days'
     };
   }
 
   if (status === '暂停') {
-    if (normalizeText(record?.remark)) {
+    if (!isStale(record?.lastModifiedAt, now)) {
       return {
         audit_date: auditDate,
         action: 'passed',
         audit_type: 'paused_missing_reason',
-        reason: 'pause_reason_present'
+        reason: 'recently_modified'
       };
     }
 
@@ -97,7 +131,7 @@ export function evaluateMasterTaskAuditRecord(record, options = {}) {
       audit_date: auditDate,
       action: 'remind',
       audit_type: 'paused_missing_reason',
-      reason: 'pause_reason_missing'
+      reason: 'paused_more_than_3_days'
     };
   }
 
