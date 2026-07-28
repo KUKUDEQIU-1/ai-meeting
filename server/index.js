@@ -58,7 +58,11 @@ function healthCapabilities() {
     semantic_task_dedupe: true,
     member_lookup: routeCapability('/api/feishu/group-members', Boolean(String(process.env.FEISHU_TASK_GROUP_CHAT_ID || '').trim())),
     draft_task_cards: true,
-    task_card_dispatch: routeCapability(canonicalCardActionRoute, Boolean(String(process.env.FEISHU_ASSIGNEE_MAP_JSON || '').trim() || String(process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim())),
+    task_card_dispatch: routeCapability(canonicalCardActionRoute, Boolean(
+      String(process.env.FEISHU_TASK_GROUP_CHAT_ID || '').trim()
+      || String(process.env.FEISHU_ASSIGNEE_MAP_JSON || '').trim()
+      || String(process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim()
+    )),
     failed_card_resend: routeCapability(recoveryRoute, true),
     targeted_card_resend: true,
     card_action_callback: routeCapability(canonicalCardActionRoute, true),
