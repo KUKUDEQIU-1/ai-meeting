@@ -43,7 +43,7 @@ export async function listConfiguredFeishuGroupMembers() {
 
     for (const member of data.data?.items || []) {
       const name = String(member.name || '').trim();
-      const receiveId = String(member.member_id || '').trim();
+      const receiveId = String(member.open_id || member.member_id || '').trim();
       if (name && receiveId) {
         members.push({
           assignee_key: normalizeAssigneeKey(name),
