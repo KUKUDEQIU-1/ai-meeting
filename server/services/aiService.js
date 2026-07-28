@@ -243,10 +243,13 @@ function normalizeTasks(tasks) {
     return [];
   }
 
-  return tasks.map((item) => {
-    const attribution = normalizeAssigneeAttribution(item);
+	return tasks.map((item) => {
+	  const attribution = normalizeAssigneeAttribution(item);
+	  const sourceTurnIds = Array.isArray(item.source_turn_ids)
+	    ? item.source_turn_ids.map(normalizeText).filter(Boolean)
+	    : [];
 
-    return {
+	  return {
       task_name: item.task_name || item.title || item.task || item.todo || '未命名任务',
       title: item.task_name || item.title || item.task || item.todo || '未命名任务',
       candidate_id: item.candidate_id || item.id || '',
@@ -271,11 +274,16 @@ function normalizeTasks(tasks) {
       assignee_source: attribution.assignee_source,
       source_speaker: item.source_speaker || '',
       source_time: item.source_time || '',
-      source_speaker_status: item.source_speaker_status || item.speaker_status || '',
-      source_speaker_confidence: item.source_speaker_confidence ?? item.speaker_confidence ?? null,
-      attribution_warnings: getAttributionWarnings(item)
-    };
-  });
+	    source_speaker_status: item.source_speaker_status || item.speaker_status || '',
+	    source_speaker_confidence: item.source_speaker_confidence ?? item.speaker_confidence ?? null,
+	    attribution_warnings: getAttributionWarnings(item),
+	    task_role: normalizeText(item.task_role || 'primary_task'),
+	    task_context: normalizeText(item.task_context),
+	    actionability: normalizeText(item.actionability || 'actionable'),
+	    primary_reason: normalizeText(item.primary_reason),
+	    source_turn_ids: sourceTurnIds
+	  };
+	});
 }
 
 function normalizeProgressUpdates(items) {
@@ -479,15 +487,20 @@ export async function generateMeetingTasks(meetingText) {
  9. 宁可多保留有原文依据的候选，不要在 Stage 1 过早丢弃边界案例；但普通讨论、无动作弱跟进、无证据臆测仍必须丢弃。
 10. task_name 必须让未参会的人一眼看懂“哪个项目/模块/业务对象 + 要交付什么”。
 11. 禁止输出“完成版本12验收”“活动上线”“品类运营”“功能优化”“处理问题”“完成测试”这类泛化短名；如果原文没有足够上下文补全项目/模块/交付结果，放入 discarded_items。
- 12. 不要把“提到过的动词 + 名词”当作任务；候选至少需要明确交付物、负责人/角色、明确时间信号三者之一，并必须保留 evidence_quote。
-  13. 结构化发言记录中的发言人标签只是证据，不是事实真值；不得仅凭文本风格、短句、口头禅或相邻上下文把文本改归属给另一个人。
-  14. 负责人归属默认规则：speaker_status=provided、speaker_confidence 较高，且该发言人用第一人称/行动者语言描述具体可执行任务时，默认把该发言人作为负责人，assignee_source="speaker"，source_speaker/source_time 填原标签和时间。
-  15. 显式执行人优先级最高：正文明确说“某人负责/某人来做/交给某人执行/某角色处理”时，用被明确指派的执行人覆盖发言人，assignee_source="explicit_mention"。
-  16. 讨论/评审参与者或收件人不是执行人：如“跟嘉华/伟填讨论”“请嘉华/伟填 review”“发给坤哥/同步给坤哥/抄送坤哥”只表示参与讨论、评审或接收材料，不得把这些姓名选为负责人；若发言人是可靠行动者，仍以发言人为负责人。
-  17. 低风险归属提示不得单独降级负责人：仅有 same_speaker_not_merged_time_gap 这类低风险 attribution_warnings，且 speaker_status=provided、speaker_confidence 不低、文本仍是同一发言人的具体执行动作时，可以继续使用发言人作为负责人，可将 needs_confirmation=true 保留为轻量复核，但 assignee 不要改为 "待确认"。
-  18. 高风险归属问题必须待确认：speaker_status 不是 provided、speaker_confidence 很低、缺少/未知发言人、多个候选说话人冲突、疑似串音/抢话/开放麦泄漏、跨人文本重叠/归属泄漏、review_required=true 且包含 embedded_speaker_header_detected/missing_initial_speaker_header/embedded_header_split_before/embedded_header_trailing_text/speaker_conflict 等高风险 warning，或正文显式执行人存在未解决冲突时，负责人填 "待确认"，needs_confirmation=true，assignee_source="unclear"，source_speaker 可以保留原标签但不得当成确定负责人。
-  19. 如果说话文本断断续续，但和上下文能形成逻辑联系，可结合上下文理解；如果无法建立逻辑联系，则忽略该段，不要据此生成任务。
-  20. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
+	 12. 不要把“提到过的动词 + 名词”当作任务；候选至少需要明确交付物、负责人/角色、明确时间信号三者之一，并必须保留 evidence_quote。
+	  13. 结构化发言记录中的发言人标签只是证据，不是事实真值；不得仅凭文本风格、短句、口头禅或相邻上下文把文本改归属给另一个人。
+	  14. 负责人归属默认规则：speaker_status=provided、speaker_confidence 较高，且该发言人用第一人称/行动者语言描述具体可执行任务时，默认把该发言人作为负责人，assignee_source="speaker"，source_speaker/source_time 填原标签和时间。
+	  15. 显式执行人优先级最高：正文明确说“某人负责/某人来做/交给某人执行/某角色处理”时，用被明确指派的执行人覆盖发言人，assignee_source="explicit_mention"。
+	  16. 讨论/评审参与者或收件人不是执行人：如“跟嘉华/伟填讨论”“请嘉华/伟填 review”“发给坤哥/同步给坤哥/抄送坤哥”只表示参与讨论、评审或接收材料，不得把这些姓名选为负责人；若发言人是可靠行动者，仍以发言人为负责人。
+	  17. 低风险归属提示不得单独降级负责人：仅有 same_speaker_not_merged_time_gap 这类低风险 attribution_warnings，且 speaker_status=provided、speaker_confidence 不低、文本仍是同一发言人的具体执行动作时，可以继续使用发言人作为负责人，可将 needs_confirmation=true 保留为轻量复核，但 assignee 不要改为 "待确认"。
+	  18. 高风险归属问题必须待确认：speaker_status 不是 provided、speaker_confidence 很低、缺少/未知发言人、多个候选说话人冲突、疑似串音/抢话/开放麦泄漏、跨人文本重叠/归属泄漏、review_required=true 且包含 embedded_speaker_header_detected/missing_initial_speaker_header/embedded_header_split_before/embedded_header_trailing_text/speaker_conflict 等高风险 warning，或正文显式执行人存在未解决冲突时，负责人填 "待确认"，needs_confirmation=true，assignee_source="unclear"，source_speaker 可以保留原标签但不得当成确定负责人。
+	  19. 如果说话文本断断续续，但和上下文能形成逻辑联系，可结合上下文理解；如果无法建立逻辑联系，则忽略该段，不要据此生成任务。
+	  20. task_name 只写“动作 + 业务对象/交付物”，不得写背景、原因、状态汇报或“解释一下”；task_description 只写执行要求和验收结果；task_context 只写支持执行的背景/原因，不得混入任务名称。
+	  21. task_role 必须区分 primary_task/context/progress/discarded：只有 primary_task 可进入 today_tasks；解释原因、背景铺垫、状态描述、观点讨论必须标为 context/progress/discarded 并放入 progress_updates 或 discarded_items，不得生成任务卡。
+	  22. actionability 必须区分 actionable/context_only/status_only/generic_follow_up/unclear：只有 actionable 可创建任务卡；context_only/status_only/generic_follow_up/unclear 不能进入 today_tasks。
+	  23. speaker/assignee 语义：speaker 只是原文发言者；assignee 是执行人；recipient/reviewer/讨论对象/收件人不是执行人，除非原文明说其负责执行。
+	  24. source_turn_ids 填引用的结构化发言 turn_id/id，无法取得时填空数组。
+	  25. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
 
 分类枚举：
 - today_new_task：今天会议中新安排的任务，或者会后明确开始执行的任务。只有这一类进入 today_tasks。
@@ -548,10 +561,15 @@ export async function generateMeetingTasks(meetingText) {
       "item_type": "today_new_task",
       "should_create_task": true,
       "assignee_source": "speaker/explicit_mention/history_inferred/unclear",
-      "source_speaker": "发言人姓名或空字符串",
-      "source_time": "发言时间或空字符串",
-      "reason": "为什么这是今日新增任务"
-    }
+	      "source_speaker": "发言人姓名或空字符串",
+	      "source_time": "发言时间或空字符串",
+	      "task_role": "primary_task/context/progress/discarded",
+	      "task_context": "支持执行的背景信息；没有则空字符串",
+	      "actionability": "actionable/context_only/status_only/generic_follow_up/unclear",
+	      "primary_reason": "为什么这是主任务而不是解释或进展",
+	      "source_turn_ids": ["turn_id_1"],
+	      "reason": "为什么这是今日新增任务"
+	    }
   ],
   "progress_updates": [
     {

@@ -191,17 +191,44 @@ function spokenWorkTitle(value) {
   if (!titles.length) return '';
   if (titles.length === 1) return titles[0];
 
-  return `${titles[0]}并${titles[1].replace(/^评审/, '评审')}`.slice(0, 40);
+	return `${titles[0]}并${titles[1].replace(/^评审/, '评审')}`.slice(0, 40);
+}
+
+function isExplanationOnlySegment(segment) {
+  const text = String(segment?.text || '').trim();
+
+  if (!text) return true;
+
+  return /解释一下|说明一下|补充背景|给大家补充背景|为什么|原因是|主要是.*导致|没有新的动作|不是要.*处理/.test(text)
+    && !/会后|明天|今天下午|待会儿|稍后|发到群里|整理出来|修一下|提测|上线|输出/.test(text);
+}
+
+function fallbackSegmentBySpeaker(segments) {
+  const bySpeaker = new Map();
+
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    if (!isReliableSpeakerSegment(segment) || isExplanationOnlySegment(segment) || !isSpecificSpeakerActionSegment(segment)) continue;
+
+    const speaker = assigneeOf({ assignee: segment.speaker });
+    const existing = bySpeaker.get(speaker);
+    const mergedText = [existing?.text, segment.text].filter(Boolean).join(' ').trim();
+
+    bySpeaker.set(speaker, {
+      ...segment,
+      text: mergedText,
+      time: existing?.time || segment.time
+    });
+  }
+
+  return bySpeaker;
 }
 
 export function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
   const covered = coveredAssignees(tasks, progressUpdates);
   const fallbackItems = [];
+  const fallbackSegments = fallbackSegmentBySpeaker(segments);
 
-  for (const segment of Array.isArray(segments) ? segments : []) {
-    if (!isReliableSpeakerSegment(segment)) continue;
-
-    const speaker = assigneeOf({ assignee: segment.speaker });
+  for (const [speaker, segment] of fallbackSegments) {
     if (covered.has(speaker)) continue;
 
     covered.add(speaker);
@@ -234,8 +261,8 @@ export function speakerCoverageTaskItems({ tasks, progressUpdates, segments }) {
 function isSpecificSpeakerActionSegment(segment) {
   const text = String(segment?.text || '').trim();
 
-  return /AI\s*智能会议助手|AI会议助手|事务管理需求|总表|接口|页面|功能|模块|代码|文档|测试|接入|优化|收尾|部署|上线|联调|验收|修复|开发|配置|输出|周会|会议|评审|OCR|数分|商家运营|运营/.test(text)
-    && /完成|推进|处理|修复|回归|准备|上线|验收|测试|联调|对接|接入|开发|搭建|输出|整理|梳理|配置|制定|优化|改造|迁移|发布|发版|跑通|部署|收尾|调试|维护|填写|填|评审|运营|开会/.test(text);
+	return /AI\s*智能会议助手|AI会议助手|事务管理需求|总表|接口|页面|功能|模块|代码|文档|测试|接入|优化|收尾|部署|上线|联调|验收|修复|开发|配置|输出|周会|会议|评审|OCR|数分|商家运营|运营/.test(text)
+	  && /完成|推进|处理|修复|修一下|回归|准备|上线|验收|测试|联调|对接|接入|开发|搭建|输出|整理|梳理|配置|制定|优化|改造|迁移|发布|发版|跑通|部署|收尾|调试|维护|填写|填|评审|运营|开会/.test(text);
 }
 
 function repairProgressAssigneesFromEvidence(progressUpdates, segments) {

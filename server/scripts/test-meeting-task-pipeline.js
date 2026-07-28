@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { analyzeMeetingText } from '../services/meetingService.js';
 
 const summary = {
@@ -136,6 +137,78 @@ async function testKeepsDistinctSameAssigneeTasksWithoutCap() {
   assert.deepEqual(result.tasks.map((item) => item.candidate_id), ['candidate_1', 'candidate_2']);
 }
 
+async function testFiltersContextOnlyCandidateBeforeScoring() {
+  const result = await analyzeWith([task({
+    task_role: 'context',
+    task_context: '张三解释为什么要先看订单接口错误日志，不是会后交付要求。',
+    actionability: 'context_only',
+    primary_reason: 'explanation_only',
+    task_name: '整理订单接口错误日志',
+    title: '整理订单接口错误日志',
+    task_description: '张三只是解释订单接口错误日志的背景，不形成今日任务卡片。',
+    evidence_quote: '我先说明一下订单接口错误日志为什么会出现，是因为昨天限流配置变更。'
+  })], {
+    decisions: [{ candidate_id: 'candidate_1', action: 'keep', reason: '模型误判解释为任务' }]
+  });
+
+  assert.equal(result.tasks.length, 0);
+  assert.equal(result.removed_tasks.at(-1).task, '整理订单接口错误日志');
+  assert.equal(result.removed_tasks.at(-1).reason, 'context_only');
+}
+
+async function testKeepsMultipleConcreteTasksForOneSpeakerWhileDroppingExplanation() {
+  const result = await analyzeWith([
+    task({ task_name: '整理订单接口错误日志', title: '整理订单接口错误日志' }),
+    task({
+      task_role: 'context',
+      actionability: 'context_only',
+      primary_reason: 'explanation_only',
+      task_name: '解释订单接口限流背景',
+      title: '解释订单接口限流背景',
+      task_description: '张三解释订单接口限流背景。',
+      evidence_quote: '这里先解释一下订单接口限流背景，不是要大家处理。'
+    }),
+    task({
+      task_name: '修复库存接口超时Bug',
+      title: '修复库存接口超时Bug',
+      task_brief: '修复库存接口超时Bug并提测',
+      task_description: '会后修复库存接口超时Bug并提测。',
+      evidence_quote: '张三明天修复库存接口超时Bug并提测',
+      deadline: '明天'
+    })
+  ], {
+    decisions: [
+      { candidate_id: 'candidate_1', action: 'keep', reason: '订单日志任务' },
+      { candidate_id: 'candidate_2', action: 'keep', reason: '模型误判解释为任务' },
+      { candidate_id: 'candidate_3', action: 'keep', reason: '库存修复任务' }
+    ]
+  });
+
+  assert.equal(result.tasks.length, 2);
+  assert.deepEqual(result.tasks.map((item) => item.assignee), ['张三', '张三']);
+  assert.deepEqual(result.tasks.map((item) => item.candidate_id), ['candidate_1', 'candidate_3']);
+  assert.equal(result.removed_tasks.at(-1).reason, 'context_only');
+}
+
+function testTaskExtractionNormalizationPreservesSemanticFields() {
+  const result = normalizeTaskExtractionResult({
+    today_tasks: [{
+      task_name: '整理订单接口错误日志',
+      task_role: 'primary_task',
+      task_context: '订单接口连续报错，需要整理日志给研发定位。',
+      actionability: 'actionable',
+      primary_reason: 'clear_owner_and_delivery',
+      source_turn_ids: ['turn_7', 8]
+    }]
+  });
+
+  assert.equal(result.today_tasks[0].task_role, 'primary_task');
+  assert.equal(result.today_tasks[0].task_context, '订单接口连续报错，需要整理日志给研发定位。');
+  assert.equal(result.today_tasks[0].actionability, 'actionable');
+  assert.equal(result.today_tasks[0].primary_reason, 'clear_owner_and_delivery');
+  assert.deepEqual(result.today_tasks[0].source_turn_ids, ['turn_7', '8']);
+}
+
 async function testValidatorFailureFallsOpen() {
   const result = await analyzeWith([task()], null, {
     validateMeetingTasks: async () => {
@@ -223,6 +296,9 @@ await testDiscardsValidatorRejectedCandidate();
 await testCorrectsAssigneeBeforeDeterministicFilter();
 await testMergesDuplicateCandidates();
 await testKeepsDistinctSameAssigneeTasksWithoutCap();
+await testFiltersContextOnlyCandidateBeforeScoring();
+await testKeepsMultipleConcreteTasksForOneSpeakerWhileDroppingExplanation();
+testTaskExtractionNormalizationPreservesSemanticFields();
 await testValidatorFailureFallsOpen();
 await testMalformedValidatorResponseFallsOpen();
 await testEmptyCandidatesSkipValidator();

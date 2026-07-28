@@ -51,6 +51,8 @@ const DEADLINE_HINTS = ['今天', '明天', '上午', '下午', '晚上', '会�
 const PROGRESS_SIGNALS = ['已经', '已完成', '昨天', '昨日', '上周', '之前', '前面', '上次', '目前', '现在是', '正在', '还在', '继续中', '持续', '一直在', '进展', '当前进展', '处理过', '上线了', '修好了', '跑通了', '看了一下', '做完了', '完成了', '已接好', '已经给了'];
 const NEW_ACTION_SIGNALS = ['今天', '下午', '明天', '本周', '会后', '待会儿', '稍后', '发到群里', '发群', '整理出来', '确认一下', '统计一下', '补一下', '修一下', '上线', '提测', '对接', '拉群沟通', '给出方案', '输出文档'];
 const STATUS_ONLY_SIGNALS = ['能看到', '表现', '带来', '数量', '尚未', '暂时', '停止', '停投', '偏低'];
+const CONTEXT_TASK_ROLES = new Set(['context', 'progress', 'discarded', 'discussion_only']);
+const CONTEXT_ACTIONABILITY = new Set(['context_only', 'status_only', 'generic_follow_up', 'unclear']);
 
 function getTaskName(task) {
   return task.task_name || task.title || task.task || task.name || '';
@@ -155,6 +157,21 @@ function containsAny(value, signals) {
 function hasTodayNewActionSignal(task) {
   const text = `${getTaskName(task)} ${task.task_brief || ''} ${task.task_description || ''} ${getEvidence(task)} ${task.reason || ''}`;
   return containsAny(text, NEW_ACTION_SIGNALS);
+}
+
+function semanticContextReason(task) {
+  const taskRole = String(task.task_role || '').trim();
+  const actionability = String(task.actionability || '').trim();
+
+  if (CONTEXT_TASK_ROLES.has(taskRole)) {
+    return taskRole === 'progress' ? 'progress_update' : 'context_only';
+  }
+
+  if (CONTEXT_ACTIONABILITY.has(actionability)) {
+    return actionability;
+  }
+
+  return '';
 }
 
 function isGenericContinuationTask(task) {
@@ -363,8 +380,21 @@ export function filterActionableTasks(tasks = []) {
   const removed = [];
   const progressUpdates = [];
 
-  for (const task of tasks) {
-    if (looksLikeProgressUpdate(task)) {
+	for (const task of tasks) {
+	  const contextReason = semanticContextReason(task);
+
+	  if (contextReason) {
+	    removed.push({
+	      task: getTaskName(task) || '未命名任务',
+	      reason: contextReason,
+	      actionable_score: 0,
+	      task_type: task.task_type || task.item_type || 'discussion_only'
+	    });
+	    console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=${contextReason}`);
+	    continue;
+	  }
+
+	  if (looksLikeProgressUpdate(task)) {
       const progress = taskToProgressUpdate(task, task.item_type || 'existing_task_progress', '进展/完成/历史延续表述，不写入今日任务表');
       progressUpdates.push(progress);
       removed.push({
