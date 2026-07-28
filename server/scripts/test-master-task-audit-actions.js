@@ -44,18 +44,61 @@ async function testNoUpdateDoesNotWriteProgress() {
   const auditLog = await createAuditLog();
   const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_no_update'));
   let updated = false;
+  let updateCardPayload = null;
 
   const response = await processPreparedFeishuCardAction(prepared, {
     updateProgress: async () => {
       updated = true;
     },
-    updateCard: async () => ({ status: 'updated' })
+    updateCard: async (payload) => {
+      updateCardPayload = payload;
+      return { status: 'updated' };
+    }
   });
   const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
 
   assert.equal(response.toast.content, '已记录为无更新');
   assert.equal(updated, false);
+  assert.deepEqual(updateCardPayload, { auditLogId: auditLog.id, terminal: true });
   assert.equal(stored.action_taken, 'confirmed_no_update');
+  assert.equal(stored.callback_id, prepared.parsed.callback_id);
+}
+
+async function testNoUpdateKeepsTerminalStateWhenCardPatchFails() {
+  const auditLog = await createAuditLog();
+  const payload = payloadFor(auditLog, 'master_task_no_update');
+  const prepared = await prepareFeishuCardAction(payload);
+  let updateCardCalls = 0;
+
+  const patchError = new Error('terminal card patch failed');
+  patchError.feishuResponse = { code: 200671 };
+
+  const response = await processPreparedFeishuCardAction(prepared, {
+    updateCard: async (updatePayload) => {
+      updateCardCalls += 1;
+      assert.deepEqual(updatePayload, { auditLogId: auditLog.id, terminal: true });
+      throw patchError;
+    }
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.equal(response.toast.content, '已记录为无更新');
+  assert.equal(updateCardCalls, 1);
+  assert.equal(stored.action_taken, 'confirmed_no_update');
+  assert.equal(stored.callback_id, prepared.parsed.callback_id);
+  assert.equal(stored.error_message || '', '');
+
+  const replayPrepared = await prepareFeishuCardAction(payload);
+  const replayResponse = await processPreparedFeishuCardAction(replayPrepared, {
+    updateCard: async () => {
+      updateCardCalls += 1;
+      return { status: 'updated' };
+    }
+  });
+
+  assert.equal(replayPrepared.shouldProcess, false);
+  assert.equal(replayResponse.toast.content, '已处理，无需重复操作');
+  assert.equal(updateCardCalls, 1);
 }
 
 async function testConfirmUpdateWritesProgressText() {
@@ -420,6 +463,7 @@ async function testLegacyCallbackUsesRootActorAndMessageId() {
 
 await initDatabase();
 await testNoUpdateDoesNotWriteProgress();
+await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
 await testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues();
 await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();

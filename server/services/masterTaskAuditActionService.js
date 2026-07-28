@@ -186,7 +186,27 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
       actionTaken: 'confirmed_no_update',
       callbackId: prepared.parsed.callback_id
     });
-    await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+    try {
+      await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+    } catch (error) {
+      const feishuResponse = error?.feishuResponse || {};
+      console.error('[Master Task Audit] terminal card patch failed', JSON.stringify({
+        action: prepared.parsed.action,
+        phase: 'terminal_card_patch',
+        audit_log_id: prepared.auditLog.id,
+        audit_record_id: prepared.auditLog.record_id,
+        audit_date: prepared.auditLog.audit_date,
+        audit_type: prepared.auditLog.audit_type,
+        callback_id: prepared.parsed.callback_id,
+        operator_open_id: prepared.parsed.operator_open_id,
+        message_id: prepared.parsed.message_id,
+        card_message_id: prepared.auditLog.card_message_id || '',
+        error_message: error instanceof Error ? error.message : String(error),
+        feishu_response_code: feishuResponse.code ?? null,
+        feishu_response_msg: feishuResponse.msg ?? null,
+        feishu_response_log_id: feishuResponse.log_id ?? null
+      }, null, 2));
+    }
     return feishuCallbackToast('已记录为无更新');
   }
 
