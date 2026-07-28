@@ -81,7 +81,7 @@ export function assigneeMembersToMap(members) {
 
   for (const member of Array.isArray(members) ? members : []) {
     const assigneeKey = normalizeAssigneeKey(member?.assignee_key || member?.name);
-    const receiveId = String(member?.receive_id || member?.member_id || '').trim();
+    const receiveId = String(member?.receive_id || member?.open_id || member?.member_id || '').trim();
 
     if (assigneeKey && receiveId) {
       assigneeMap.set(assigneeKey, {
@@ -96,6 +96,21 @@ export function assigneeMembersToMap(members) {
   return assigneeMap;
 }
 
+export function resolveAssigneeRecipient(assigneeName, assigneeMap) {
+  const assigneeKey = normalizeAssigneeKey(assigneeName);
+  const exact = assigneeMap.get(assigneeKey);
+
+  if (exact) return exact;
+  if (assigneeKey === '待确认') return null;
+
+  const relaxedMatches = [...assigneeMap.values()].filter((recipient) => {
+    const recipientKey = normalizeAssigneeKey(recipient?.assignee_key || recipient?.assignee_name);
+    return recipientKey.startsWith(assigneeKey);
+  });
+
+  return relaxedMatches.length === 1 ? relaxedMatches[0] : null;
+}
+
 export function groupDraftTasksByAssignee(tasks, assigneeMap = parseAssigneeMap()) {
   const grouped = new Map();
   const deliveryFailures = [];
@@ -103,7 +118,7 @@ export function groupDraftTasksByAssignee(tasks, assigneeMap = parseAssigneeMap(
   for (const task of Array.isArray(tasks) ? tasks : []) {
     const assigneeName = assigneeNameOf(task);
     const assigneeKey = normalizeAssigneeKey(assigneeName);
-    const recipient = assigneeMap.get(assigneeKey);
+    const recipient = resolveAssigneeRecipient(assigneeName, assigneeMap);
 
     if (!recipient) {
       deliveryFailures.push({

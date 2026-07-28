@@ -40,6 +40,44 @@ function testMappingAndGrouping() {
   assert.deepEqual(grouped.deliverable.map((item) => item.tasks.length), [1, 1]);
 }
 
+function testRelaxedAssigneeGroupingMatchesUniqueMemberDisplayNames() {
+  const assigneeMap = new Map([
+    ['洪伟填skill.md', { assignee_key: '洪伟填skill.md', assignee_name: '洪伟填skill.md', receive_id_type: 'open_id', receive_id: 'ou_fd3634b8' }],
+    ['李嘉华.agent', { assignee_key: '李嘉华.agent', assignee_name: '李嘉华.agent', receive_id_type: 'open_id', receive_id: 'ou_dc68d4' }],
+    ['胡涌昌CLI-skill.md', { assignee_key: '胡涌昌CLI-skill.md', assignee_name: '胡涌昌CLI-skill.md', receive_id_type: 'open_id', receive_id: 'ou_bdc7' }]
+  ]);
+  const tasks = [
+    { item_id: 'hong', task_name: '洪伟填任务', assignee: '洪伟填' },
+    { item_id: 'li', task_name: '李嘉华任务', owner: ' 李嘉华 ' },
+    { item_id: 'hu', task_name: '胡涌昌任务', assignee_name: '\u3000胡涌昌\u3000' }
+  ];
+
+  const grouped = groupDraftTasksByAssignee(tasks, assigneeMap);
+
+  assert.equal(grouped.deliverable.length, 3);
+  assert.equal(grouped.deliveryFailures.length, 0);
+  assert.deepEqual(
+    [...grouped.deliverable.map((item) => item.assignee_key)].sort(),
+    ['洪伟填skill.md', '李嘉华.agent', '胡涌昌CLI-skill.md'].sort()
+  );
+  assert.deepEqual(grouped.deliverable.flatMap((item) => item.tasks.map((task) => task.item_id)).sort(), ['hong', 'hu', 'li']);
+}
+
+function testRelaxedAssigneeGroupingFailsClosedOnAmbiguousMemberPrefixes() {
+  const assigneeMap = new Map([
+    ['李嘉华.agent', { assignee_key: '李嘉华.agent', assignee_name: '李嘉华.agent', receive_id_type: 'open_id', receive_id: 'ou_dc68d4' }],
+    ['李嘉华.ops', { assignee_key: '李嘉华.ops', assignee_name: '李嘉华.ops', receive_id_type: 'open_id', receive_id: 'ou_dc68d5' }]
+  ]);
+  const tasks = [{ item_id: 'ambiguous', task_name: '李嘉华任务', assignee: '李嘉华' }];
+
+  const grouped = groupDraftTasksByAssignee(tasks, assigneeMap);
+
+  assert.equal(grouped.deliverable.length, 0);
+  assert.equal(grouped.deliveryFailures.length, 1);
+  assert.equal(grouped.deliveryFailures[0].assignee_key, '李嘉华');
+  assert.equal(grouped.deliveryFailures[0].task.item_id, 'ambiguous');
+}
+
 function testCardPayloadContainsOnlyOwnedTasks() {
   const card = buildAssigneeTaskCard({
     draft: { id: 7, meeting_title: '例会', meeting_source: '飞书会议智能纪要' },
@@ -2863,6 +2901,8 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 
 
 testMappingAndGrouping();
+testRelaxedAssigneeGroupingMatchesUniqueMemberDisplayNames();
+testRelaxedAssigneeGroupingFailsClosedOnAmbiguousMemberPrefixes();
 testCardPayloadContainsOnlyOwnedTasks();
 testTaskCardInputDefaultsAreBoundedForLongDraftContent();
 testOldTaskDropdownReplacesManualFallback();
