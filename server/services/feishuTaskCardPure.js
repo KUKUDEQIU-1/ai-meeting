@@ -1,4 +1,12 @@
-import { VALID_TASK_STATUSES } from './taskHistoryService.js';
+const VALID_TASK_STATUSES = [
+  '已完成',
+  '进行中',
+  '待开始',
+  '未开始',
+  '搁置',
+  '已取消',
+  '需求建议集-基础需求（未澄清）'
+];
 
 function truncateText(value, maxLength) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -588,7 +596,7 @@ export function buildMasterTaskInProgressAuditCard({ audit, terminal = false }) 
           { tag: 'hr' },
           selectElement({
             tag: 'task_status',
-            options: [...VALID_TASK_STATUSES].map((status) => ({
+            options: VALID_TASK_STATUSES.map((status) => ({
               text: { tag: 'plain_text', content: status },
               value: status
             })),
