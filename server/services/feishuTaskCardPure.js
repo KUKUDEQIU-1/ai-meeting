@@ -1,3 +1,5 @@
+import { VALID_TASK_STATUSES } from './taskHistoryService.js';
+
 function truncateText(value, maxLength) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
@@ -160,6 +162,32 @@ function selectElement({ tag, options, value }) {
 
   if (selected) {
     element.columns[0].elements[0].initial_option = selected.value;
+  }
+
+  return element;
+}
+
+function datePickerElement({ tag, label, value }) {
+  const dateText = String(value || '').trim();
+  const element = {
+    tag: 'column_set',
+    flex_mode: 'none',
+    background_style: 'default',
+    columns: [{
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [{
+        tag: 'date_picker',
+        name: tag,
+        placeholder: { tag: 'plain_text', content: label }
+      }]
+    }]
+  };
+
+  const dateOnlyMatch = /^(\d{4}-\d{2}-\d{2})/.exec(dateText);
+  if (dateOnlyMatch) {
+    element.columns[0].elements[0].initial_date = dateOnlyMatch[1];
   }
 
   return element;
@@ -558,8 +586,15 @@ export function buildMasterTaskInProgressAuditCard({ audit, terminal = false }) 
         elements: [
           { tag: 'markdown', content: `**任务：** ${taskName}\n**状态：** 进行中\n**跟进人：** ${assigneeName}` },
           { tag: 'hr' },
-          inputElement({ tag: 'task_status', label: '任务状态', value: taskStatus }),
-          inputElement({ tag: 'completion_date', label: '完成日期', value: completionDate }),
+          selectElement({
+            tag: 'task_status',
+            options: [...VALID_TASK_STATUSES].map((status) => ({
+              text: { tag: 'plain_text', content: status },
+              value: status
+            })),
+            value: taskStatus
+          }),
+          datePickerElement({ tag: 'completion_date', label: '完成日期', value: completionDate }),
           labelElement(`**当前任务进展描述：** ${truncateText(progressText || '（当前为空）', 300)}`),
           inputElement({ tag: 'progress_text', label: '任务进展描述', value: progressText }),
           inputElement({ tag: 'task_note', label: '任务备注', value: taskNote }),

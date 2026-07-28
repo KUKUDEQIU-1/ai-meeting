@@ -44,15 +44,29 @@ function testInProgressAuditCardUsesCanonicalEditFieldDefaults() {
       id: 303,
       task_name: '锁定总表编辑字段契约',
       assignee_name: '胡涌昌',
-      task_status: '进行中-卡片默认值',
-      completion_date: '2026-08-19',
+      task_status: '进行中',
+      completion_date: '2026-08-19 16:45:00',
       progress_text: '卡片默认进展-731',
       task_note: '卡片默认备注-842'
     }
   });
 
-  assert.equal(formControl(card, 'task_status')?.default_value, '进行中-卡片默认值');
-  assert.equal(formControl(card, 'completion_date')?.default_value, '2026-08-19');
+  const statusControl = formControl(card, 'task_status');
+  const completionDateControl = formControl(card, 'completion_date');
+
+  assert.equal(statusControl?.tag, 'select_static');
+  assert.deepEqual(statusControl?.options, [
+    { text: { tag: 'plain_text', content: '已完成' }, value: '已完成' },
+    { text: { tag: 'plain_text', content: '进行中' }, value: '进行中' },
+    { text: { tag: 'plain_text', content: '待开始' }, value: '待开始' },
+    { text: { tag: 'plain_text', content: '未开始' }, value: '未开始' },
+    { text: { tag: 'plain_text', content: '搁置' }, value: '搁置' },
+    { text: { tag: 'plain_text', content: '已取消' }, value: '已取消' },
+    { text: { tag: 'plain_text', content: '需求建议集-基础需求（未澄清）' }, value: '需求建议集-基础需求（未澄清）' }
+  ]);
+  assert.equal(statusControl?.initial_option, '进行中');
+  assert.equal(completionDateControl?.tag, 'date_picker');
+  assert.equal(completionDateControl?.initial_date, '2026-08-19');
   assert.equal(formControl(card, 'progress_text')?.default_value, '卡片默认进展-731');
   assert.equal(formControl(card, 'task_note')?.default_value, '卡片默认备注-842');
   assert.equal(formControl(card, 'status'), undefined);
@@ -130,8 +144,10 @@ async function testSendMasterTaskAuditCardPreservesCanonicalEditDefaults() {
   assert.equal(upsertPayload.submittedCompletionDate, '2026-08-19');
   assert.equal(upsertPayload.submittedProgressText, '已经接入总表');
   assert.equal(upsertPayload.submittedNote, '正式总表备注-519');
-  assert.equal(formControl(sentCard, 'task_status')?.default_value, '进行中');
-  assert.equal(formControl(sentCard, 'completion_date')?.default_value, '2026-08-19');
+  assert.equal(formControl(sentCard, 'task_status')?.tag, 'select_static');
+  assert.equal(formControl(sentCard, 'task_status')?.initial_option, '进行中');
+  assert.equal(formControl(sentCard, 'completion_date')?.tag, 'date_picker');
+  assert.equal(formControl(sentCard, 'completion_date')?.initial_date, '2026-08-19');
   assert.equal(formControl(sentCard, 'progress_text')?.default_value, '已经接入总表');
   assert.equal(formControl(sentCard, 'task_note')?.default_value, '正式总表备注-519');
 }
@@ -172,10 +188,21 @@ async function testSendMasterTaskAuditCardPreservesProgressOnlyDefaultValue() {
   assert.equal(formControl(sentCard, 'progress_text')?.default_value, '只提交进展的兼容路径');
 }
 
+function testBlankCompletionDateOmitsInitialDate() {
+  const card = buildMasterTaskInProgressAuditCard({
+    audit: { task_status: '进行中', completion_date: '' }
+  });
+
+  const completionDateControl = formControl(card, 'completion_date');
+  assert.equal(completionDateControl?.tag, 'date_picker');
+  assert.equal('initial_date' in completionDateControl, false);
+}
+
 testInProgressAuditCardContainsEditableProgressForm();
 testInProgressAuditCardUsesCanonicalEditFieldDefaults();
 testPausedAuditCardContainsReminderOnly();
 testTerminalCardsRenderDoneState();
+testBlankCompletionDateOmitsInitialDate();
 await testSendMasterTaskAuditCardPreservesCanonicalEditDefaults();
 await testSendMasterTaskAuditCardPreservesProgressOnlyDefaultValue();
 
