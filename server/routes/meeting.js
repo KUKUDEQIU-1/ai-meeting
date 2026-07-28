@@ -528,18 +528,14 @@ router.post('/sync-getnote', async (req, res, next) => {
 
 router.post('/sync-feishu-docx', async (req, res, next) => {
   try {
-    const limit = Number(req.body?.limit) || undefined;
-    const force = req.body?.force === true || req.body?.force === 'true';
-    const reanalyze = req.body?.reanalyze === true || req.body?.reanalyze === 'true';
-    const { syncConfiguredFeishuDocxNotes } = await import('../services/feishuDocxNoteImportService.js');
-
-    const result = await feishuScanCoordinator.runScan('docx', () => syncConfiguredFeishuDocxNotes({
-      limit,
-      force,
-      reanalyze
-    }));
-
-    res.json(result);
+    res.status(409).json({
+      success: false,
+      status: 'use_canonical_route',
+      canonical_route: '/api/meeting/sync-feishu-wiki-docx',
+      route: '/api/meeting/sync-feishu-wiki-docx',
+      capability: 'feishu_wiki_docx_import',
+      message: 'Use the canonical wiki DOCX sync route.'
+    });
   } catch (error) {
     next(error);
   }
@@ -560,7 +556,14 @@ router.post('/sync-feishu-wiki-docx', async (req, res, next) => {
       nodeTokenOrUrl
     }));
 
-    res.json(result);
+    res.json({
+      ...result,
+      status: result.status,
+      route: '/api/meeting/sync-feishu-wiki-docx',
+      capability: 'feishu_wiki_docx_import',
+      scan_source: 'feishu_wiki_docx_library',
+      canonical_route: '/api/meeting/sync-feishu-wiki-docx'
+    });
   } catch (error) {
     next(error);
   }
