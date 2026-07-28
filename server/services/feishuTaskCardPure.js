@@ -265,6 +265,63 @@ function discardedTaskSummary(task, itemId) {
   return labelElement(`**事项 ${truncateText(itemId, 24)}｜已丢弃**\n${truncateText(taskNameOf(task), 120)}`);
 }
 
+function taskOutcome(task) {
+  if (task.action_result === 'new_task' || task.status === 'confirmed') return 'new_task';
+  if (task.action_result === 'old_task_progress' || task.task_choice === 'old_task_progress' && task.status === 'discarded') return 'old_task_progress';
+  if (task.action_result === 'discarded' || task.status === 'discarded') return 'discarded';
+  return '';
+}
+
+function taskOutcomeTitle(outcome) {
+  if (outcome === 'new_task') return '已处理为新任务';
+  if (outcome === 'old_task_progress') return '已处理为旧任务进展';
+  if (outcome === 'discarded') return '已丢弃';
+  return '';
+}
+
+function handledTaskSummary(task, itemId) {
+  const outcome = taskOutcome(task);
+  const title = taskOutcomeTitle(outcome);
+  const matchedName = matchedTaskNameOf(task);
+  const detail = outcome === 'old_task_progress' && matchedName
+    ? `\n**旧任务：** ${truncateText(matchedName, 120)}`
+    : '';
+
+  return title ? labelElement(`**事项 ${truncateText(itemId, 24)}｜${title}**\n${truncateText(taskNameOf(task), 120)}${detail}`) : null;
+}
+
+function terminalTaskSummaryContent({ draft, assignee, tasks }) {
+  const groups = { new_task: [], old_task_progress: [], discarded: [] };
+
+  for (const task of tasks || []) {
+    const outcome = taskOutcome(task);
+    if (outcome) groups[outcome].push(task);
+  }
+
+  if (!groups.new_task.length && !groups.old_task_progress.length && !groups.discarded.length) {
+    return `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的选择已确认：新任务会录入总任务表，旧任务进展会保存为进展记录。`;
+  }
+
+  const lines = [
+    `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}`,
+    `**负责人：** ${truncateText(assignee.assignee_name, 40)}`,
+    '',
+    `你的选择已确认：新任务 ${groups.new_task.length}；旧任务进展 ${groups.old_task_progress.length}；已丢弃 ${groups.discarded.length}。`
+  ];
+
+  for (const task of groups.new_task) {
+    lines.push(`- 新任务：${truncateText(taskNameOf(task), 120)}`);
+  }
+  for (const task of groups.old_task_progress) {
+    lines.push(`- 旧任务进展：${truncateText(matchedTaskNameOf(task) || taskNameOf(task), 120)}`);
+  }
+  for (const task of groups.discarded) {
+    lines.push(`- 已丢弃：${truncateText(taskNameOf(task), 120)}`);
+  }
+
+  return lines.join('\n');
+}
+
 function compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) {
   const elements = [
     { tag: 'markdown', content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 60)}\n**负责人：** ${truncateText(assignee.assignee_name, 30)}\n卡片内容较长，已切换为精简确认模式。` },
@@ -305,7 +362,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
       body: {
         elements: [{
           tag: 'markdown',
-          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的选择已确认：新任务会录入总任务表，旧任务进展会保存为进展记录。`
+          content: terminalTaskSummaryContent({ draft, assignee, tasks })
         }]
       }
     };
@@ -354,7 +411,14 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     const itemId = String(task.item_id || '');
     const matchedTaskName = matchedTaskNameOf(task);
 
-    if (task.status && task.status !== 'pending') continue;
+    if (task.status && task.status !== 'pending') {
+      const summary = handledTaskSummary(task, itemId);
+      if (summary) {
+        elements.push(summary);
+        elements.push({ tag: 'hr' });
+      }
+      continue;
+    }
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**\n${taskChoiceStatusText(task)}` });
     elements.push(labelElement('**新任务**'));

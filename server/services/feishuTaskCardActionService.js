@@ -142,6 +142,24 @@ function feishuCallbackToast(content) {
   return { toast: { type: 'info', content } };
 }
 
+function scopedRefreshItemId(parsed, state) {
+  return state.split_item_id || state.split_card_message_id ? (parsed.item_id || state.split_item_id || '') : '';
+}
+
+function hasPendingAssigneeTask(draft, assigneeKey) {
+  return (draft?.draft_tasks || []).some((task) => (
+    normalizeAssigneeKey(assigneeNameOf(task)) === assigneeKey && task.status === 'pending'
+  ));
+}
+
+function hasPendingScopedTask(draft, assigneeKey, itemId) {
+  return (draft?.draft_tasks || []).some((task) => (
+    normalizeAssigneeKey(assigneeNameOf(task)) === assigneeKey
+    && task.status === 'pending'
+    && (!itemId || String(task.item_id || '') === itemId)
+  ));
+}
+
 function dependencySet(overrides = {}) {
   return {
     finalizeAssignee: overrides.finalizeAssignee || finalizeMeetingTaskDraftForAssignee,
@@ -244,6 +262,8 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
         matched_task_name: validatedValues.matchedTaskName || task.matched_task_name,
         task_choice: taskChoice,
         status: taskChoice === 'new_task' ? 'confirmed' : 'discarded',
+        action_result: taskChoice,
+        action_result_at: new Date().toISOString(),
         confirmed_by: parsed.operator_open_id,
         confirmed_at: new Date().toISOString(),
         updated_by: parsed.operator_open_id,
@@ -276,16 +296,32 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
 
     await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
     const latestDraft = await getMeetingTaskDraftById(parsed.draft_id);
-    const hasRemainingPendingTasks = (latestDraft?.draft_tasks || []).some((task) => (
-      normalizeAssigneeKey(assigneeNameOf(task)) === state.assignee_key && task.status === 'pending'
-    ));
+    const scopedItemId = scopedRefreshItemId(parsed, state);
+    const hasRemainingPendingTasks = hasPendingAssigneeTask(latestDraft, state.assignee_key);
+    const hasRemainingScopedTasks = hasPendingScopedTask(latestDraft, state.assignee_key, scopedItemId);
+    if (hasRemainingPendingTasks) {
+      await resetDraftAssigneeConfirmationToPending({
+        draftId: parsed.draft_id,
+        assigneeKey: state.assignee_key,
+        cardKind: state.card_kind,
+        callbackId: parsed.callback_id
+      });
+    } else {
+      await markDraftAssigneeConfirmed({
+        draftId: parsed.draft_id,
+        assigneeKey: state.assignee_key,
+        cardKind: state.card_kind,
+        confirmedBy: parsed.operator_open_id,
+        callbackId: parsed.callback_id
+      });
+    }
     await dependencies.updateCard({
       messageId: parsed.message_id,
       draftId: parsed.draft_id,
       assigneeKey: state.assignee_key,
       cardKind: state.card_kind,
-      terminal: !hasRemainingPendingTasks,
-      itemId: state.split_item_id || ''
+      terminal: !hasRemainingScopedTasks,
+      itemId: scopedItemId
     });
     return feishuCallbackToast(taskChoice === 'old_task_progress' ? '旧任务进展已处理' : '新任务已处理');
   } catch (error) {
@@ -313,13 +349,28 @@ async function discardTask(parsed, state, dependencies) {
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
     ...task,
     status: 'discarded',
+    action_result: 'discarded',
+    action_result_at: new Date().toISOString(),
     updated_by: parsed.operator_open_id,
     updated_at: new Date().toISOString()
   }));
 
   assertOwnedItem(result?.item, state.assignee_key, '只能丢弃本人名下任务');
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
+  const latestDraft = await getMeetingTaskDraftById(parsed.draft_id);
+  const scopedItemId = scopedRefreshItemId(parsed, state);
+  const hasRemainingPendingTasks = hasPendingAssigneeTask(latestDraft, state.assignee_key);
+  const hasRemainingScopedTasks = hasPendingScopedTask(latestDraft, state.assignee_key, scopedItemId);
+  if (!hasRemainingPendingTasks) {
+    await markDraftAssigneeConfirmed({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      cardKind: state.card_kind,
+      confirmedBy: parsed.operator_open_id,
+      callbackId: parsed.callback_id
+    });
+  }
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: !hasRemainingScopedTasks, itemId: scopedItemId });
   return feishuCallbackToast('任务已丢弃');
 }
 
@@ -360,6 +411,8 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
         matched_task_name: task.matched_task_name,
         task_choice: task.task_choice,
         status: nextStatus,
+        action_result: task.task_choice === 'old_task_progress' ? 'old_task_progress' : 'new_task',
+        action_result_at: timestamp,
         confirmed_by: parsed.operator_open_id,
         confirmed_at: timestamp,
         updated_by: parsed.operator_open_id,

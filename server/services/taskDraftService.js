@@ -30,10 +30,17 @@ function normalizeDraftTask(task, draftId, index) {
     matched_task_name: String(task?.matched_task_name || ''),
     updated_by: String(task?.updated_by || ''),
     updated_at: String(task?.updated_at || ''),
-    confirmed_by: String(task?.confirmed_by || ''),
-    confirmed_at: String(task?.confirmed_at || ''),
-    comment: String(task?.comment || '')
-  };
+	    confirmed_by: String(task?.confirmed_by || ''),
+	    confirmed_at: String(task?.confirmed_at || ''),
+	    action_result: ['new_task', 'old_task_progress', 'discarded'].includes(task?.action_result) ? task.action_result : '',
+	    action_result_at: String(task?.action_result_at || ''),
+	    comment: String(task?.comment || ''),
+	    task_role: String(task?.task_role || ''),
+	    task_context: String(task?.task_context || ''),
+	    actionability: String(task?.actionability || ''),
+	    primary_reason: String(task?.primary_reason || ''),
+	    source_turn_ids: Array.isArray(task?.source_turn_ids) ? task.source_turn_ids.map((item) => String(item).trim()).filter(Boolean) : []
+	  };
 }
 
 function normalizeDraftTasks(tasks, draftId) {

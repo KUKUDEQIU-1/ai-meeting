@@ -258,7 +258,7 @@ function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
   const names = buttonNames(card);
   const text = JSON.stringify(card);
 
-  assert.doesNotMatch(text, /已丢弃/);
+  assert.match(text, /已丢弃/);
   assert.equal(names.includes('edit_discarded_task'), false);
   assert.equal(names.includes('mark_new_discarded_task'), false);
   assert.equal(names.includes('mark_old_discarded_task'), false);
@@ -268,6 +268,74 @@ function testDiscardedTaskDoesNotDisableRemainingTaskActions() {
   assert.equal(names.includes('mark_old_pending_task'), true);
   assert.equal(names.includes('discard_pending_task'), true);
   assert.equal(names.includes('confirm_tasks'), false);
+}
+
+function testHandledTaskCardShowsOutcomeWhileSiblingRemainsActionable() {
+  const draft = { id: 14, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
+  const assignee = { assignee_key: '张三', assignee_name: '张三' };
+  const card = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{
+      item_id: 'handled_new_task',
+      task_name: '已确认新任务',
+      assignee: '张三',
+      status: 'confirmed',
+      task_choice: 'new_task'
+    }, {
+      item_id: 'pending_sibling_task',
+      task_name: '待处理兄弟任务',
+      assignee: '张三',
+      status: 'pending'
+    }]
+  });
+  const text = JSON.stringify(card);
+  const names = buttonNames(card);
+
+  assert.match(text, /已确认新任务/);
+  assert.match(text, /已处理为新任务/);
+  assert.equal(names.includes('mark_new_handled_new_task'), false);
+  assert.equal(names.includes('mark_new_pending_sibling_task'), true);
+  assert.equal(names.includes('mark_old_pending_sibling_task'), true);
+  assert.equal(names.includes('discard_pending_sibling_task'), true);
+}
+
+function testTerminalTaskCardShowsAggregateOutcomeSummary() {
+  const card = buildAssigneeTaskCard({
+    draft: { id: 15, meeting_title: '例会', meeting_source: '飞书会议智能纪要' },
+    assignee: { assignee_key: '张三', assignee_name: '张三' },
+    terminal: true,
+    tasks: [{
+      item_id: 'terminal_new_task',
+      task_name: '已录入总表的新任务',
+      assignee: '张三',
+      status: 'confirmed',
+      task_choice: 'new_task'
+    }, {
+      item_id: 'terminal_old_progress',
+      task_name: '旧任务进展记录',
+      matched_task_name: '总表旧任务',
+      progress_summary: '继续推进联调',
+      assignee: '张三',
+      status: 'discarded',
+      task_choice: 'old_task_progress'
+    }, {
+      item_id: 'terminal_discarded_task',
+      task_name: '不需要跟进的讨论',
+      assignee: '张三',
+      status: 'discarded'
+    }]
+  });
+  const text = JSON.stringify(card);
+
+  assert.match(text, /新任务 1/);
+  assert.match(text, /旧任务进展 1/);
+  assert.match(text, /已丢弃 1/);
+  assert.match(text, /已录入总表的新任务/);
+  assert.match(text, /总表旧任务/);
+  assert.match(text, /不需要跟进的讨论/);
+  assert.doesNotMatch(text, /标记为新任务/);
+  assert.doesNotMatch(text, /discard_task/);
 }
 
 function testOldTaskDropdownUsesMatchedNameWhenProvided() {
@@ -463,6 +531,50 @@ function testSpeakerCoverageIncludesMeetingReviewAndOperationWork() {
   assert.ok(items[0].task_name.includes('周会'));
   assert.ok(items[0].task_name.includes('评审'));
   assert.ok(items[0].task_name.length <= 40);
+}
+
+function testSpeakerCoverageSkipsExplanationOnlySegments() {
+  const items = speakerCoverageTaskItems({
+    tasks: [],
+    progressUpdates: [],
+    segments: [{
+      speaker: '张三',
+      speaker_status: 'provided',
+      speaker_confidence: 0.96,
+      time: '00:08:15',
+      text: '我这里解释一下订单接口为什么昨天会报错，主要是限流配置调整导致的，先给大家补充背景，没有新的动作要安排。'
+    }]
+  });
+
+  assert.equal(items.length, 0);
+}
+
+function testSpeakerCoverageAggregatesReliableConcreteSegmentsBeforeFallback() {
+  const items = speakerCoverageTaskItems({
+    tasks: [],
+    progressUpdates: [],
+    segments: [
+      {
+        speaker: '李四',
+        speaker_status: 'provided',
+        speaker_confidence: 0.93,
+        time: '00:09:01',
+        text: '我这里先解释一下库存接口超时的背景，是压测流量上来之后连接池不够。'
+      },
+      {
+        speaker: '李四',
+        speaker_status: 'provided',
+        speaker_confidence: 0.94,
+        time: '00:09:34',
+        text: '会后我把库存接口超时 Bug 修一下，明天提测。'
+      }
+    ]
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].assignee, '李四');
+  assert.match(items[0].task_description, /库存接口超时 Bug 修一下/);
+  assert.doesNotMatch(items[0].task_name, /解释一下/);
 }
 
 function testNotifyTextIncludesTaskCountsByAssignee() {
@@ -976,6 +1088,30 @@ async function testLongDraftItemIdsAreCompactedBeforeCardRendering() {
   assert.doesNotMatch(JSON.stringify(card), new RegExp(longItemId.slice(0, 80)));
 }
 
+async function testDraftNormalizationPreservesSemanticTaskFields() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit_test',
+    sourceId: `semantic_${Date.now()}`,
+    meetingTitle: '语义字段会议',
+    meetingSource: '单元测试',
+    draftTasks: [{
+      task_name: '整理订单接口错误日志',
+      assignee: '张三',
+      task_role: 'primary_task',
+      task_context: '订单接口连续报错，需要整理日志给研发定位。',
+      actionability: 'actionable',
+      primary_reason: 'clear_owner_and_delivery',
+      source_turn_ids: ['turn_7', 8]
+    }]
+  });
+
+  assert.equal(draft.draft_tasks[0].task_role, 'primary_task');
+  assert.equal(draft.draft_tasks[0].task_context, '订单接口连续报错，需要整理日志给研发定位。');
+  assert.equal(draft.draft_tasks[0].actionability, 'actionable');
+  assert.equal(draft.draft_tasks[0].primary_reason, 'clear_owner_and_delivery');
+  assert.deepEqual(draft.draft_tasks[0].source_turn_ids, ['turn_7', '8']);
+}
+
 async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
   const suffix = Date.now();
   const itemIds = [`split_retry_1_${suffix}`, `split_retry_2_${suffix}`, `split_retry_3_${suffix}`];
@@ -1184,6 +1320,157 @@ async function testSplitCardSingleConfirmLeavesSiblingTaskActionable() {
   assert.equal(updatedDraft.draft_tasks[0].status, 'confirmed');
   assert.equal(updatedDraft.draft_tasks[1].status, 'pending');
   assert.equal(state.confirmation_status, 'pending');
+}
+
+async function testSharedCardIndividualActionKeepsSiblingVisibleAndActionable() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `shared-individual-action-${Date.now()}`,
+    meetingTitle: '共享卡片逐条处理会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-24',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [
+      { item_id: 'shared_action_1', task_name: '第一条确认为新任务', assignee: '张三' },
+      { item_id: 'shared_action_2', task_name: '第二条仍待处理', assignee: '张三' }
+    ],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_shared_individual_action',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    cardMessageId: 'om_shared_individual_action',
+    deliveryStatus: 'sent'
+  });
+
+  let refreshedCard = null;
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_shared_mark_new' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      context: { open_message_id: 'om_shared_individual_action' },
+      action: {
+        value: { action: 'mark_task_as_new', draft_id: draft.id, assignee_key: '张三', item_id: 'shared_action_1' },
+        form_value: { task_name_shared_action_1: '第一条确认为新任务' }
+      }
+    }
+  }, {
+    finalizeAssignee: async () => ({ status: 'synced' }),
+    updateCard: async ({ itemId }) => {
+      const latestDraft = await getMeetingTaskDraftById(draft.id);
+      refreshedCard = buildAssigneeTaskCard({
+        draft: latestDraft,
+        assignee: { assignee_key: '张三', assignee_name: '张三' },
+        tasks: latestDraft.draft_tasks.filter((task) => normalizeAssigneeKey(task.assignee) === '张三')
+      });
+      assert.equal(itemId, '');
+      return { status: 'updated' };
+    }
+  });
+  const text = JSON.stringify(refreshedCard);
+  const names = buttonNames(refreshedCard);
+
+  assert.equal(response.toast.content, '新任务已处理');
+  assert.match(text, /第一条确认为新任务/);
+  assert.match(text, /已处理为新任务/);
+  assert.match(text, /第二条仍待处理/);
+  assert.equal(names.includes('mark_new_shared_action_1'), false);
+  assert.equal(names.includes('mark_new_shared_action_2'), true);
+  assert.equal(names.includes('mark_old_shared_action_2'), true);
+  assert.equal(names.includes('discard_shared_action_2'), true);
+}
+
+async function testSplitCardIndividualActionTerminalShowsScopedOutcome() {
+  const messageId = `om_split_mark_new_${Date.now()}`;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `split-individual-action-${Date.now()}`,
+    meetingTitle: '拆分卡片逐条处理会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-24',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [
+      { item_id: 'split_action_1', task_name: '拆分第一条新任务', assignee: '张三' },
+      { item_id: 'split_action_2', task_name: '拆分第二条仍待处理', assignee: '张三' }
+    ],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_split_individual_action',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    cardKind: 'tasks',
+    itemId: 'split_action_1',
+    cardMessageId: messageId,
+    deliveryStatus: 'sent'
+  });
+
+  let terminalCard = null;
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_split_mark_new' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      context: { open_message_id: messageId },
+      action: {
+        value: { action: 'mark_task_as_new', draft_id: draft.id, assignee_key: '张三', item_id: 'split_action_1' },
+        form_value: { task_name_split_action_1: '拆分第一条新任务' }
+      }
+    }
+  }, {
+    finalizeAssignee: async () => ({ status: 'synced' }),
+    updateCard: async ({ terminal, itemId }) => {
+      const latestDraft = await getMeetingTaskDraftById(draft.id);
+      terminalCard = buildAssigneeTaskCard({
+        draft: latestDraft,
+        assignee: { assignee_key: '张三', assignee_name: '张三' },
+        tasks: latestDraft.draft_tasks.filter((task) => task.item_id === itemId),
+        terminal
+      });
+      assert.equal(itemId, 'split_action_1');
+      assert.equal(terminal, true);
+      return { status: 'updated' };
+    }
+  });
+  const text = JSON.stringify(terminalCard);
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '新任务已处理');
+  assert.match(text, /新任务 1/);
+  assert.match(text, /拆分第一条新任务/);
+  assert.doesNotMatch(text, /拆分第二条仍待处理/);
+  assert.equal(updatedDraft.draft_tasks[1].status, 'pending');
 }
 
 async function testTaskChoiceCanConvertDraftTaskToProgress() {
@@ -2496,6 +2783,8 @@ testOldTaskDropdownReplacesManualFallback();
 testSingleTaskCardKeepsFullControlsAndScopedConfirmation();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
+testHandledTaskCardShowsOutcomeWhileSiblingRemainsActionable();
+testTerminalTaskCardShowsAggregateOutcomeSummary();
 testOldTaskDropdownUsesMatchedNameWhenProvided();
 testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
 testFailureCardShowsConfirmationError();
@@ -2523,9 +2812,12 @@ testActionOnlyOverlapDoesNotMatchUnrelatedMasterTask();
 testMasterTableDuplicateMarksDraftTaskAsOldProgress();
 testMasterTableDuplicateFillsMatchedNameForExistingProgress();
 testSpeakerCoverageIncludesMeetingReviewAndOperationWork();
+testSpeakerCoverageSkipsExplanationOnlySegments();
+testSpeakerCoverageAggregatesReliableConcreteSegmentsBeforeFallback();
 testNotifyTextIncludesTaskCountsByAssignee();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
+await testDraftNormalizationPreservesSemanticTaskFields();
 await testDispatchKeepsOversizedTaskCardAsOneAttempt();
 await testOldTaskDropdownIncludesSharedAssigneeTasks();
 await testDispatchEmptyDraftDoesNotReportFailure();
@@ -2534,6 +2826,8 @@ await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();
 await testValidNewTaskConfirmationShowsTerminalFeedback();
 await testSplitCardSingleConfirmLeavesSiblingTaskActionable();
+await testSharedCardIndividualActionKeepsSiblingVisibleAndActionable();
+await testSplitCardIndividualActionTerminalShowsScopedOutcome();
 await testValidOldProgressConfirmationUsesMasterCandidateOnly();
 await testInvalidDirectOldNameInputRollsBackAndUpdatesFailureCard();
 await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
