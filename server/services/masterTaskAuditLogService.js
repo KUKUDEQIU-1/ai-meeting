@@ -13,6 +13,26 @@ function normalizeAction(value) {
   return action || 'pending';
 }
 
+function submittedValue(rawValue, snakeKey, camelKey) {
+  return normalizeText(rawValue?.[snakeKey] ?? rawValue?.[camelKey] ?? '');
+}
+
+function normalizeSubmittedValues(rawValue = {}) {
+  return {
+    status: submittedValue(rawValue, 'task_status', 'taskStatus'),
+    completionDate: submittedValue(rawValue, 'completion_date', 'completionDate'),
+    progressText: submittedValue(rawValue, 'progress_text', 'progressText'),
+    note: submittedValue(rawValue, 'task_note', 'taskNote')
+  };
+}
+
+function normalizeSubmittedText(submittedText, submittedValues) {
+  const text = normalizeText(submittedText);
+  if (text) return text;
+  if (!submittedValues || Object.keys(submittedValues).length === 0) return '';
+  return JSON.stringify(submittedValues);
+}
+
 export async function getMasterTaskAuditLog(recordId, auditDate, auditType) {
   return get(
     'SELECT * FROM master_task_audit_logs WHERE record_id = ? AND audit_date = ? AND audit_type = ? LIMIT 1',
@@ -52,16 +72,27 @@ export async function upsertMasterTaskAuditLog({
   auditType,
   actionTaken = 'pending',
   submittedText = '',
+  submittedValues,
+  submittedStatus = '',
+  submittedCompletionDate = '',
+  submittedProgressText = '',
+  submittedNote = '',
   cardMessageId = '',
   callbackId = '',
   errorMessage = ''
 }) {
   const timestamp = nowIso();
+  const canonicalSubmittedValues = normalizeSubmittedValues(submittedValues);
+  const normalizedSubmittedText = normalizeSubmittedText(submittedText, submittedValues);
+  const normalizedSubmittedStatus = normalizeText(submittedStatus) || canonicalSubmittedValues.status;
+  const normalizedSubmittedCompletionDate = normalizeText(submittedCompletionDate) || canonicalSubmittedValues.completionDate;
+  const normalizedSubmittedProgressText = normalizeText(submittedProgressText) || canonicalSubmittedValues.progressText;
+  const normalizedSubmittedNote = normalizeText(submittedNote) || canonicalSubmittedValues.note;
 
   await run(
     `INSERT INTO master_task_audit_logs
-      (record_id, task_name, assignee_key, assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, card_message_id, callback_id, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (record_id, task_name, assignee_key, assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, submitted_status, submitted_completion_date, submitted_progress_text, submitted_note, card_message_id, callback_id, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(record_id, audit_date, audit_type) DO UPDATE SET
       task_name = excluded.task_name,
       assignee_key = excluded.assignee_key,
@@ -71,6 +102,10 @@ export async function upsertMasterTaskAuditLog({
       task_status = excluded.task_status,
       action_taken = excluded.action_taken,
       submitted_text = CASE WHEN excluded.submitted_text != '' THEN excluded.submitted_text ELSE submitted_text END,
+      submitted_status = CASE WHEN excluded.submitted_status != '' THEN excluded.submitted_status ELSE submitted_status END,
+      submitted_completion_date = CASE WHEN excluded.submitted_completion_date != '' THEN excluded.submitted_completion_date ELSE submitted_completion_date END,
+      submitted_progress_text = CASE WHEN excluded.submitted_progress_text != '' THEN excluded.submitted_progress_text ELSE submitted_progress_text END,
+      submitted_note = CASE WHEN excluded.submitted_note != '' THEN excluded.submitted_note ELSE submitted_note END,
       card_message_id = CASE WHEN excluded.card_message_id != '' THEN excluded.card_message_id ELSE card_message_id END,
       callback_id = CASE WHEN excluded.callback_id != '' THEN excluded.callback_id ELSE callback_id END,
       error_message = excluded.error_message,
@@ -86,7 +121,11 @@ export async function upsertMasterTaskAuditLog({
       normalizeText(auditDate),
       normalizeText(auditType),
       normalizeAction(actionTaken),
-      normalizeText(submittedText),
+      normalizedSubmittedText,
+      normalizedSubmittedStatus,
+      normalizedSubmittedCompletionDate,
+      normalizedSubmittedProgressText,
+      normalizedSubmittedNote,
       normalizeText(cardMessageId),
       normalizeText(callbackId),
       normalizeText(errorMessage),
@@ -113,20 +152,44 @@ export async function markMasterTaskAuditAction({
   auditType,
   actionTaken,
   submittedText = '',
+  submittedValues,
+  submittedStatus = '',
+  submittedCompletionDate = '',
+  submittedProgressText = '',
+  submittedNote = '',
   callbackId = ''
 }) {
+  const canonicalSubmittedValues = normalizeSubmittedValues(submittedValues);
+  const normalizedSubmittedText = normalizeSubmittedText(submittedText, submittedValues);
+  const normalizedSubmittedStatus = normalizeText(submittedStatus) || canonicalSubmittedValues.status;
+  const normalizedSubmittedCompletionDate = normalizeText(submittedCompletionDate) || canonicalSubmittedValues.completionDate;
+  const normalizedSubmittedProgressText = normalizeText(submittedProgressText) || canonicalSubmittedValues.progressText;
+  const normalizedSubmittedNote = normalizeText(submittedNote) || canonicalSubmittedValues.note;
+
   await run(
     `UPDATE master_task_audit_logs
      SET action_taken = ?,
          submitted_text = CASE WHEN ? != '' THEN ? ELSE submitted_text END,
+         submitted_status = CASE WHEN ? != '' THEN ? ELSE submitted_status END,
+         submitted_completion_date = CASE WHEN ? != '' THEN ? ELSE submitted_completion_date END,
+         submitted_progress_text = CASE WHEN ? != '' THEN ? ELSE submitted_progress_text END,
+         submitted_note = CASE WHEN ? != '' THEN ? ELSE submitted_note END,
          callback_id = CASE WHEN ? != '' THEN ? ELSE callback_id END,
          error_message = '',
          updated_at = ?
      WHERE record_id = ? AND audit_date = ? AND audit_type = ?`,
     [
       normalizeAction(actionTaken),
-      normalizeText(submittedText),
-      normalizeText(submittedText),
+      normalizedSubmittedText,
+      normalizedSubmittedText,
+      normalizedSubmittedStatus,
+      normalizedSubmittedStatus,
+      normalizedSubmittedCompletionDate,
+      normalizedSubmittedCompletionDate,
+      normalizedSubmittedProgressText,
+      normalizedSubmittedProgressText,
+      normalizedSubmittedNote,
+      normalizedSubmittedNote,
       normalizeText(callbackId),
       normalizeText(callbackId),
       nowIso(),
@@ -144,10 +207,9 @@ export async function markMasterTaskAuditFailed({ recordId, auditDate, auditType
     `UPDATE master_task_audit_logs
      SET action_taken = ?,
          error_message = ?,
-         callback_id = CASE WHEN ? != '' THEN ? ELSE callback_id END,
          updated_at = ?
      WHERE record_id = ? AND audit_date = ? AND audit_type = ?`,
-    ['failed', normalizeText(errorMessage), normalizeText(callbackId), normalizeText(callbackId), nowIso(), recordId, auditDate, auditType]
+    ['failed', normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType]
   );
 
   return getMasterTaskAuditLog(recordId, auditDate, auditType);

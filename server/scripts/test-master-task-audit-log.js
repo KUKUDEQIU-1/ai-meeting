@@ -115,9 +115,50 @@ async function testFailedActionIsRetryableAndUpdatedActionPersistsText() {
   assert.equal(isMasterTaskAuditTerminal(row.action_taken), true);
 }
 
+async function testUpdatedActionPersistsCanonicalSubmittedValues() {
+  const recordId = `record_submitted_${Date.now()}`;
+  const auditDate = '2026-08-26';
+  const auditType = 'in_progress_missing_update';
+  const submittedValues = {
+    task_status: '已完成-日志-147',
+    completion_date: '2026-08-27',
+    progress_text: '日志进展-258',
+    task_note: '日志备注-369'
+  };
+
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: '日志提交值持久化',
+    assigneeKey: '洪伟填',
+    assigneeName: '洪伟填',
+    receiveId: 'ou_actor_4',
+    taskStatus: '进行中',
+    auditDate,
+    auditType,
+    actionTaken: 'sent'
+  });
+
+  await markMasterTaskAuditAction({
+    recordId,
+    auditDate,
+    auditType,
+    actionTaken: 'confirmed_updated',
+    submittedValues,
+    callbackId: 'evt_audit_callback_4'
+  });
+  const row = await getMasterTaskAuditLog(recordId, auditDate, auditType);
+
+  assert.equal(row.submitted_text, JSON.stringify(submittedValues));
+  assert.equal(row.submitted_status, '已完成-日志-147');
+  assert.equal(row.submitted_completion_date, '2026-08-27');
+  assert.equal(row.submitted_progress_text, '日志进展-258');
+  assert.equal(row.submitted_note, '日志备注-369');
+}
+
 await initDatabase();
 await testUpsertUsesOneRowPerRecordDateAndType();
 await testMarkSentActionAndCallbackLookups();
 await testFailedActionIsRetryableAndUpdatedActionPersistsText();
+await testUpdatedActionPersistsCanonicalSubmittedValues();
 
 console.log('master task audit log tests passed');
