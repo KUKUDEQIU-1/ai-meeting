@@ -1,5 +1,5 @@
 import { createTaskRecord, getTenantAccessToken, listBitableRecords, resolveMasterTaskTableConfig, validateMasterTaskTableSchema } from './feishuBitableClient.js';
-import { generateMeetingSummary, generateMeetingTasks, validateMeetingTasks } from './aiService.js';
+import { deduplicateMeetingTasksSemantically, generateMeetingSummary, generateMeetingTasks, validateMeetingTasks } from './aiService.js';
 import { findDuplicateTaskName, improveAndValidateTaskName } from '../utils/taskQuality.js';
 
 const GENERIC_TASK_NAMES = new Set([
@@ -613,10 +613,137 @@ function applyValidatorDecisions(candidates, decisions) {
   return { tasks, removed };
 }
 
+function normalizeSemanticDedupeGroups(dedupeResult, tasks) {
+  if (!dedupeResult || !Array.isArray(dedupeResult.merge_groups)) {
+    return null;
+  }
+
+  const knownIds = new Set(tasks.map((task) => String(task.candidate_id || '').trim()).filter(Boolean));
+  const usedIds = new Set();
+  const mergeGroups = [];
+
+  for (const group of dedupeResult.merge_groups) {
+    const canonicalId = String(group?.canonical_candidate_id || '').trim();
+    const duplicateIds = Array.isArray(group?.duplicate_candidate_ids)
+      ? group.duplicate_candidate_ids.map((id) => String(id || '').trim())
+      : null;
+
+    if (!knownIds.has(canonicalId) || !duplicateIds || duplicateIds.length === 0 || duplicateIds.includes(canonicalId) || usedIds.has(canonicalId)) {
+      return null;
+    }
+
+    usedIds.add(canonicalId);
+
+    for (const duplicateId of duplicateIds) {
+      if (!knownIds.has(duplicateId) || usedIds.has(duplicateId)) {
+        return null;
+      }
+
+      usedIds.add(duplicateId);
+    }
+
+    mergeGroups.push({
+      canonical_candidate_id: canonicalId,
+      duplicate_candidate_ids: duplicateIds,
+      reason: String(group.reason || 'semantic_duplicate').trim() || 'semantic_duplicate'
+    });
+  }
+
+  return mergeGroups;
+}
+
+function canMergeSemanticTasks(canonical, duplicate) {
+  const canonicalAssignee = String(canonical.assignee || canonical.owner || '').trim();
+  const duplicateAssignee = String(duplicate.assignee || duplicate.owner || '').trim();
+  const canonicalDeadline = String(canonical.deadline || '').trim();
+  const duplicateDeadline = String(duplicate.deadline || '').trim();
+  const canonicalStatus = String(canonical.status || '').trim();
+  const duplicateStatus = String(duplicate.status || '').trim();
+
+  return (!canonicalAssignee || !duplicateAssignee || canonicalAssignee === duplicateAssignee)
+    && (!canonicalDeadline || !duplicateDeadline || isUnclear(canonicalDeadline) || isUnclear(duplicateDeadline) || canonicalDeadline === duplicateDeadline)
+    && (!canonicalStatus || !duplicateStatus || canonicalStatus === duplicateStatus);
+}
+
+function mergeSemanticTask(canonical, duplicate) {
+  const evidenceQuotes = [canonical.evidence_quote, duplicate.evidence_quote, getTaskName(duplicate)]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  const evidenceQuote = [...new Set(evidenceQuotes)].join('；');
+  const sourceTurnIds = [...new Set([...(canonical.source_turn_ids || []), ...(duplicate.source_turn_ids || [])])];
+
+  return betterTask(canonical, duplicate) === canonical
+    ? {
+        ...canonical,
+        evidence_quote: evidenceQuote || canonical.evidence_quote,
+        source_turn_ids: sourceTurnIds
+      }
+    : {
+        ...duplicate,
+        candidate_id: canonical.candidate_id,
+        evidence_quote: evidenceQuote || duplicate.evidence_quote,
+        source_turn_ids: sourceTurnIds
+      };
+}
+
+async function applySemanticDedupe(aiInput, tasks, dedupeTasks) {
+  if (tasks.length < 2) {
+    return { tasks, removed: [] };
+  }
+
+  try {
+    const dedupeResult = await dedupeTasks({ aiInput, tasks });
+    const mergeGroups = normalizeSemanticDedupeGroups(dedupeResult, tasks);
+
+    if (!mergeGroups) {
+      console.warn('[Task Semantic Dedupe] malformed response, fail-open keep all tasks');
+      return { tasks, removed: [] };
+    }
+
+    const byId = new Map(tasks.map((task) => [task.candidate_id, task]));
+    const removedIds = new Set();
+    const mergedByCanonicalId = new Map();
+    const removed = [];
+
+    for (const group of mergeGroups) {
+      const canonical = byId.get(group.canonical_candidate_id);
+
+      for (const duplicateId of group.duplicate_candidate_ids) {
+        const duplicate = byId.get(duplicateId);
+
+        if (!canMergeSemanticTasks(canonical, duplicate)) {
+          return { tasks, removed: [] };
+        }
+
+        const currentCanonical = mergedByCanonicalId.get(group.canonical_candidate_id) || canonical;
+        mergedByCanonicalId.set(group.canonical_candidate_id, mergeSemanticTask(currentCanonical, duplicate));
+        removedIds.add(duplicateId);
+        removed.push({
+          task: getTaskName(duplicate) || '未命名任务',
+          reason: `semantic_merge:${group.reason}`,
+          candidate_id: duplicateId,
+          merged_into: group.canonical_candidate_id
+        });
+      }
+    }
+
+    return {
+      tasks: tasks
+        .filter((task) => !removedIds.has(task.candidate_id))
+        .map((task) => mergedByCanonicalId.get(task.candidate_id) || task),
+      removed
+    };
+  } catch (error) {
+    console.warn(`[Task Semantic Dedupe] skipped error=${error.message}`);
+    return { tasks, removed: [] };
+  }
+}
+
 export async function analyzeMeetingText(text, meetingSource = '手动输入', options = {}) {
   const summarizeMeeting = options.generateMeetingSummary || generateMeetingSummary;
   const extractMeetingTasks = options.generateMeetingTasks || generateMeetingTasks;
   const validateTasks = options.validateMeetingTasks || validateMeetingTasks;
+  const dedupeTasks = options.dedupeMeetingTasksSemantically || deduplicateMeetingTasksSemantically;
   const aiInput = typeof text === 'string'
     ? {
         content: text,
@@ -651,22 +778,24 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
   const rawCleanTasks = assignCandidateIds(rawTasks.map(cleanTask).filter(Boolean));
   const validationResult = await validateCandidateTasks(aiInput, rawCleanTasks, validateTasks);
   const filterResult = filterActionableTasks(validationResult.tasks);
+  const semanticDedupeResult = await applySemanticDedupe(aiInput, filterResult.tasks, dedupeTasks);
   const progressUpdates = [...aiProgressUpdates, ...(filterResult.progress_updates || [])];
-  const removedTasks = [...validationResult.removed, ...filterResult.removed];
+  const removedTasks = [...validationResult.removed, ...filterResult.removed, ...semanticDedupeResult.removed];
+  const finalTasks = semanticDedupeResult.tasks;
 
   return {
     meeting_title: meetingTitle,
     meeting_source: meetingSource,
     summary,
-    tasks: filterResult.tasks,
+    tasks: finalTasks,
     raw_tasks: rawCleanTasks,
     progress_updates: progressUpdates,
     discarded_items: discardedItems,
     removed_tasks: removedTasks,
     after_filter_count: filterResult.after_filter_count,
-    after_dedupe_count: filterResult.after_dedupe_count,
+    after_dedupe_count: finalTasks.length,
     removed_reasons: removedReasonsSummary(removedTasks),
-    needs_confirmation_count: filterResult.needs_confirmation_count,
+    needs_confirmation_count: finalTasks.filter((task) => task.needs_confirmation).length,
     progress_updates_count: progressUpdates.length,
     discarded_items_count: discardedItems.length
   };

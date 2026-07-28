@@ -326,6 +326,63 @@ function normalizeDiscardedItems(items) {
   }));
 }
 
+function compactTaskForSemanticDedupe(task) {
+  return {
+    candidate_id: String(task.candidate_id || '').trim(),
+    task_name: task.task_name || task.title || task.task || '',
+    task_brief: task.task_brief || '',
+    task_description: task.task_description || task.description || '',
+    assignee: task.assignee || task.owner || '',
+    deadline: task.deadline || '',
+    status: task.status || '',
+    evidence_quote: task.evidence_quote || task.evidence || '',
+    source_turn_ids: Array.isArray(task.source_turn_ids) ? task.source_turn_ids : []
+  };
+}
+
+function normalizeSemanticDedupeGroups(result, tasks) {
+  if (!result || !Array.isArray(result.merge_groups)) {
+    return null;
+  }
+
+  const knownIds = new Set(tasks.map((task) => String(task.candidate_id || '').trim()).filter(Boolean));
+  const usedIds = new Set();
+  const mergeGroups = [];
+
+  for (const group of result.merge_groups) {
+    const canonicalId = String(group?.canonical_candidate_id || '').trim();
+    const duplicateIds = Array.isArray(group?.duplicate_candidate_ids)
+      ? group.duplicate_candidate_ids.map((id) => String(id || '').trim())
+      : null;
+
+    if (!knownIds.has(canonicalId) || !duplicateIds || duplicateIds.length === 0 || duplicateIds.includes(canonicalId)) {
+      return null;
+    }
+
+    if (usedIds.has(canonicalId)) {
+      return null;
+    }
+
+    usedIds.add(canonicalId);
+
+    for (const duplicateId of duplicateIds) {
+      if (!knownIds.has(duplicateId) || usedIds.has(duplicateId)) {
+        return null;
+      }
+
+      usedIds.add(duplicateId);
+    }
+
+    mergeGroups.push({
+      canonical_candidate_id: canonicalId,
+      duplicate_candidate_ids: duplicateIds,
+      reason: String(group.reason || 'semantic_duplicate').trim() || 'semantic_duplicate'
+    });
+  }
+
+  return { merge_groups: mergeGroups };
+}
+
 export function normalizeTaskExtractionResult(result) {
   if (Array.isArray(result)) {
     return {
@@ -340,6 +397,51 @@ export function normalizeTaskExtractionResult(result) {
     progress_updates: normalizeProgressUpdates(result?.progress_updates || []),
     discarded_items: normalizeDiscardedItems(result?.discarded_items || [])
   };
+}
+
+export async function deduplicateMeetingTasksSemantically({ aiInput, tasks }) {
+  const candidates = Array.isArray(tasks) ? tasks : [];
+
+  if (candidates.length < 2 || !hasConfiguredAiKey()) {
+    return { merge_groups: [] };
+  }
+
+  const taskProjections = candidates.map(compactTaskForSemanticDedupe);
+  const meetingInput = buildMeetingText(aiInput || '');
+  const prompt = `请判断候选会议任务中是否存在语义重复，并只返回合法 JSON。
+
+规则：
+1. 只处理输入里的 candidate_id，不要新增、改名或合并任务内容。
+2. 只有同一执行人、同一交付物、同一时间约束且只是措辞不同的候选才可归为一组。
+3. 若负责人、截止时间、状态等已知字段冲突，必须保持为空组。
+4. canonical_candidate_id 填要保留的候选 ID；duplicate_candidate_ids 填被合并候选 ID 数组。
+5. 不确定时返回空数组。
+6. 必须返回合法 JSON，不要返回 Markdown。
+
+返回格式：
+{
+  "merge_groups": [
+    {
+      "canonical_candidate_id": "candidate_1",
+      "duplicate_candidate_ids": ["candidate_2"],
+      "reason": "same_delivery_different_wording"
+    }
+  ]
+}
+
+候选任务：
+${JSON.stringify(taskProjections)}
+
+会议上下文：
+${meetingInput.promptText}`;
+
+  try {
+    const result = await callAi(prompt, 'deduplicateMeetingTasksSemantically');
+    return normalizeSemanticDedupeGroups(result, taskProjections) || { merge_groups: [] };
+  } catch (error) {
+    console.warn(`[Task Semantic Dedupe] skipped error=${error.message}`);
+    return { merge_groups: [] };
+  }
 }
 
 async function callAi(prompt, label = 'AI') {
