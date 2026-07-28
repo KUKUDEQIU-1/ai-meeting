@@ -128,6 +128,48 @@ router.get('/draft-task-diagnostics/:draftId', async (req, res, next) => {
   }
 });
 
+router.get('/feishu-wiki-task-drafts/:documentId', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const documentId = String(req.params.documentId || '').trim();
+
+    if (!documentId) {
+      res.status(400).json({ message: 'documentId 必须是正整数' });
+      return;
+    }
+
+    const draft = await getMeetingTaskDraftBySource('feishu_meeting_note', documentId, { includeAnyStatus: true });
+
+    if (!draft) {
+      res.status(404).json({ message: 'draft 不存在' });
+      return;
+    }
+
+    res.json({
+      draft_id: draft.id,
+      document_id: documentId,
+      source_type: draft.source_type,
+      source_id: draft.source_id,
+      meeting_title: draft.meeting_title,
+      meeting_source: draft.meeting_source,
+      confirmation_status: draft.confirmation_status,
+      tasks: (draft.draft_tasks || []).map((task) => ({
+        item_id: task.item_id,
+        assignee: task.assignee || task.owner || task.assignee_name || '待确认',
+        task_name: task.task_name || task.title || task.task || task.name || '',
+        task_choice: task.task_choice || '',
+        status: task.status || '',
+        progress_summary: task.progress_summary || '',
+        matched_task_name: task.matched_task_name || task.matched_history?.task_name || task.matched_history_task_name || task.matched_first_task_name || '',
+        evidence_quote: task.evidence_quote || '',
+        task_description: task.task_description || task.description || '',
+        source_speaker: task.source_speaker || ''
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/refresh-draft-task-cards', requireMaintenanceToken, async (req, res, next) => {
   try {
     const draftId = Number(req.body?.draft_id || req.body?.draftId || 0);

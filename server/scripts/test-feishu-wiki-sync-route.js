@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import meetingRouter from '../routes/meeting.js';
 import { initDatabase } from '../db/database.js';
-import { createMeetingTaskDraft, upsertDraftAssigneeState } from '../services/taskDraftService.js';
+import { createMeetingTaskDraft, getMeetingTaskDraftBySource, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 
 function createApp() {
   const app = express();
@@ -61,6 +61,138 @@ async function testWikiSyncDisabledWithoutSource() {
       delete process.env.FEISHU_WIKI_SOURCE_NODE_URL;
     } else {
       process.env.FEISHU_WIKI_SOURCE_NODE_URL = previousNodeUrl;
+    }
+  }
+}
+
+async function testWikiTaskDraftLookupRejectsMissingDocumentId() {
+  const previousToken = process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  process.env.FEISHU_DOCX_SOURCE_API_TOKEN = 'wiki-draft-route-token';
+  const server = await listen(createApp());
+
+  try {
+    const address = server.address();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/meeting/feishu-wiki-task-drafts/${encodeURIComponent('   ')}`, {
+      headers: { Authorization: 'Bearer wiki-draft-route-token' }
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.message, 'documentId 必须是正整数');
+  } finally {
+    await close(server);
+
+    if (previousToken === undefined) {
+      delete process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+    } else {
+      process.env.FEISHU_DOCX_SOURCE_API_TOKEN = previousToken;
+    }
+  }
+}
+
+async function testWikiTaskDraftLookupReturnsFocusedProjectionAndDoesNotMutateDraft() {
+  const previousToken = process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  process.env.FEISHU_DOCX_SOURCE_API_TOKEN = 'wiki-draft-route-token';
+  const documentId = `wiki-doc-${Date.now()}`;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'feishu_meeting_note',
+    sourceId: documentId,
+    meetingTitle: 'Wiki 会议纪要',
+    meetingSource: '飞书 Wiki',
+    meetingTime: '2026-07-28',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [
+      {
+        item_id: 'wiki_1',
+        task_name: '整理 Wiki 会议纪要',
+        task_description: '整理 Wiki 会议纪要并同步',
+        assignee: '张三',
+        owner: '张三',
+        status: '待开始',
+        task_choice: 'A',
+        progress_summary: '尚未开始',
+        matched_task_name: '整理 Wiki 会议纪要',
+        evidence_quote: '张三负责整理 Wiki 会议纪要',
+        source_speaker: '主持人'
+      }
+    ],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'tbl_wiki',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+  const before = await getMeetingTaskDraftBySource('feishu_meeting_note', documentId, { includeAnyStatus: true });
+  const server = await listen(createApp());
+
+  try {
+    const address = server.address();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/meeting/feishu-wiki-task-drafts/${encodeURIComponent(documentId)}`, {
+      headers: { Authorization: 'Bearer wiki-draft-route-token' }
+    });
+    const body = await response.json();
+    const after = await getMeetingTaskDraftBySource('feishu_meeting_note', documentId, { includeAnyStatus: true });
+
+    assert.equal(response.status, 200);
+    assert.equal(body.draft_id, draft.id);
+    assert.equal(body.document_id, documentId);
+    assert.equal(body.source_type, 'feishu_meeting_note');
+    assert.equal(body.source_id, documentId);
+    assert.equal(body.meeting_title, 'Wiki 会议纪要');
+    assert.equal(body.confirmation_status, 'pending_confirmation');
+    assert.deepEqual(body.tasks, [{
+      item_id: 'wiki_1',
+      assignee: '张三',
+      task_name: '整理 Wiki 会议纪要',
+      task_choice: '',
+      status: 'pending',
+      progress_summary: '尚未开始',
+      matched_task_name: '整理 Wiki 会议纪要',
+      evidence_quote: '张三负责整理 Wiki 会议纪要',
+      task_description: '整理 Wiki 会议纪要并同步',
+      source_speaker: '主持人'
+    }]);
+    assert.equal(after.updated_at, before.updated_at);
+    assert.deepEqual(after.draft_tasks, before.draft_tasks);
+  } finally {
+    await close(server);
+
+    if (previousToken === undefined) {
+      delete process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+    } else {
+      process.env.FEISHU_DOCX_SOURCE_API_TOKEN = previousToken;
+    }
+  }
+}
+
+async function testWikiTaskDraftLookupReturns404ForMissingDocument() {
+  const previousToken = process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  process.env.FEISHU_DOCX_SOURCE_API_TOKEN = 'wiki-draft-route-token';
+  const server = await listen(createApp());
+
+  try {
+    const address = server.address();
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/meeting/feishu-wiki-task-drafts/missing-document`, {
+      headers: { Authorization: 'Bearer wiki-draft-route-token' }
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 404);
+    assert.equal(body.message, 'draft 不存在');
+  } finally {
+    await close(server);
+
+    if (previousToken === undefined) {
+      delete process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+    } else {
+      process.env.FEISHU_DOCX_SOURCE_API_TOKEN = previousToken;
     }
   }
 }
@@ -166,6 +298,9 @@ async function testMasterTaskAuditTestRouteIsProtectedAndRejectsMissingTask() {
 
 await initDatabase();
 await testWikiSyncDisabledWithoutSource();
+await testWikiTaskDraftLookupRejectsMissingDocumentId();
+await testWikiTaskDraftLookupReturnsFocusedProjectionAndDoesNotMutateDraft();
+await testWikiTaskDraftLookupReturns404ForMissingDocument();
 await testRefreshDraftTaskCardsDryRunUsesProtectedEndpoint();
 await testMasterTaskAuditTestRouteIsProtectedAndRejectsMissingTask();
 
