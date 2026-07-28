@@ -30,6 +30,19 @@ function buildAuditCard(auditLog, terminal = false) {
   return buildMasterTaskInProgressAuditCard({ audit: auditLog, terminal });
 }
 
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function normalizeDateOnlyText(value) {
+  const text = normalizeText(value);
+  if (!text) return '';
+  const date = new Date(text.replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return text;
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 export async function resolveAuditRecipient(assigneeKey) {
   const memberResult = await listConfiguredFeishuGroupMembers();
   const map = assigneeMapFromMembers(memberResult.members || []);
@@ -50,6 +63,10 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
   const markFailed = deps.markFailed || markMasterTaskAuditFailed;
 
   const recipient = await resolveRecipient(auditLog.assignee_key);
+  const taskStatus = normalizeText(auditLog.task_status || auditLog.submitted_status);
+  const completionDate = normalizeDateOnlyText(auditLog.completion_date || auditLog.submitted_completion_date);
+  const progressText = normalizeText(auditLog.progress_text || auditLog.submitted_progress_text || auditLog.submitted_text);
+  const taskNote = normalizeText(auditLog.task_note || auditLog.submitted_note);
   const nextLog = await upsertAuditLog({
     recordId: auditLog.record_id,
     taskName: auditLog.task_name,
@@ -57,18 +74,25 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
     assigneeName: auditLog.assignee_name,
     receiveIdType: recipient.receive_id_type,
     receiveId: recipient.receive_id,
-    taskStatus: auditLog.task_status,
+    taskStatus,
     auditDate: auditLog.audit_date,
     auditType: auditLog.audit_type,
     actionTaken: 'pending',
-    submittedText: auditLog.progress_text || auditLog.submitted_text || ''
+    submittedText: progressText,
+    submittedStatus: taskStatus,
+    submittedCompletionDate: completionDate,
+    submittedProgressText: progressText,
+    submittedNote: taskNote
   });
 
   try {
     const card = buildAuditCard({
       ...nextLog,
       assignee_name: recipient.assignee_name,
-      progress_text: nextLog.submitted_text || auditLog.progress_text || auditLog.submitted_text || ''
+      task_status: normalizeText(nextLog.submitted_status || nextLog.task_status || taskStatus),
+      completion_date: normalizeDateOnlyText(nextLog.submitted_completion_date || completionDate),
+      progress_text: normalizeText(nextLog.submitted_progress_text || nextLog.submitted_text || progressText),
+      task_note: normalizeText(nextLog.submitted_note || taskNote)
     });
     const messageId = await sendMessage({ receiveId: recipient.receive_id, card });
     return markSent({

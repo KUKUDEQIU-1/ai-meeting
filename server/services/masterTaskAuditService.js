@@ -12,6 +12,15 @@ function normalizeText(value) {
   return String(value || '').trim();
 }
 
+function normalizeDateOnlyText(value) {
+  const text = normalizeText(value);
+  if (!text) return '';
+  const date = new Date(text.replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return text;
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MODIFICATION_MS = 3 * DAY_MS;
 const DUE_SOON_MS = 3 * DAY_MS;
@@ -183,6 +192,10 @@ export async function auditMasterTaskTable(dependencies = {}) {
 
   for (const record of records) {
     const evaluation = evaluateMasterTaskAuditRecord(record, { now });
+    const taskStatus = normalizeText(record.taskStatus || record.task_status || record.status);
+    const completionDate = normalizeDateOnlyText(record.completionDate || record.completion_date);
+    const progressText = normalizeText(record.progressText || record.progress_text);
+    const taskNote = normalizeText(record.taskNote || record.task_note || record.remark);
     const result = {
       record_id: record.recordId,
       task_name: record.taskName,
@@ -207,11 +220,15 @@ export async function auditMasterTaskTable(dependencies = {}) {
           taskName: record.taskName,
           assigneeKey: record.assigneeKey,
           assigneeName: record.assigneeName,
-          taskStatus: record.status,
+          taskStatus,
           auditDate: evaluation.audit_date,
           auditType: evaluation.audit_type,
           actionTaken: 'passed',
-          submittedText: record.progressText || ''
+          submittedText: progressText,
+          submittedStatus: taskStatus,
+          submittedCompletionDate: completionDate,
+          submittedProgressText: progressText,
+          submittedNote: taskNote
         });
       }
       results.push(result);
@@ -229,11 +246,15 @@ export async function auditMasterTaskTable(dependencies = {}) {
       taskName: record.taskName,
       assigneeKey: record.assigneeKey,
       assigneeName: record.assigneeName,
-      taskStatus: record.status,
+      taskStatus,
       auditDate: evaluation.audit_date,
       auditType: evaluation.audit_type,
       actionTaken: dryRun ? 'skipped' : 'pending',
-      submittedText: record.progressText || ''
+      submittedText: progressText,
+      submittedStatus: taskStatus,
+      submittedCompletionDate: completionDate,
+      submittedProgressText: progressText,
+      submittedNote: taskNote
     });
 
     if (dryRun) {
@@ -244,7 +265,10 @@ export async function auditMasterTaskTable(dependencies = {}) {
     try {
       await sendCard({
         ...auditLog,
-        progress_text: record.progressText || ''
+        task_status: taskStatus,
+        completion_date: completionDate,
+        progress_text: progressText,
+        task_note: taskNote
       });
       results.push({ ...result, action: 'remind' });
     } catch (error) {
