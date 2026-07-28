@@ -9,7 +9,7 @@ import { upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
-import { updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
+import { resendFailedDraftTaskCards, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 
 const router = express.Router();
 
@@ -26,7 +26,7 @@ function bearerToken(req) {
 function requireMaintenanceToken(req, res, next) {
   const token = configuredMaintenanceToken();
 
-  if (!token || bearerToken(req) === token) {
+  if (token && bearerToken(req) === token) {
     next();
     return;
   }
@@ -223,6 +223,34 @@ router.post('/refresh-draft-task-cards', requireMaintenanceToken, async (req, re
     }
 
     res.json({ success: true, draft_id: draft.id, refreshed_count: results.filter((item) => item.status === 'updated').length, results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/resend-failed-draft-task-cards', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const draftId = Number(req.body?.draft_id || req.body?.draftId || 0);
+    const assigneeKeys = Array.isArray(req.body?.assignee_keys)
+      ? req.body.assignee_keys
+      : Array.isArray(req.body?.assigneeKeys)
+        ? req.body.assigneeKeys
+        : [];
+    const cardKind = String(req.body?.card_kind || req.body?.cardKind || 'tasks').trim() || 'tasks';
+    const execute = req.body?.execute === true;
+
+    if (!Number.isFinite(draftId) || draftId <= 0) {
+      res.status(400).json({ success: false, message: 'draft_id 必须是正整数' });
+      return;
+    }
+
+    if (!assigneeKeys.length || assigneeKeys.some((key) => !String(key || '').trim())) {
+      res.status(400).json({ success: false, message: 'assignee_keys 必须显式提供且不能为空' });
+      return;
+    }
+
+    const result = await resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKind, execute });
+    res.json({ success: result.status === 'success', draft_id: draftId, execute, ...result });
   } catch (error) {
     next(error);
   }

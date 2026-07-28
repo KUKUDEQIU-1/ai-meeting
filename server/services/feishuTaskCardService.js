@@ -1,8 +1,8 @@
 import crypto from 'crypto';
 import { getTenantAccessToken, listMasterTaskAuditRecords } from './feishuBitableClient.js';
-import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap } from './feishuTaskCardPure.js';
+import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, groupDraftTasksByAssignee, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState } from './taskDraftService.js';
+import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState } from './taskDraftService.js';
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
 
@@ -200,6 +200,85 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
     return { assignee_key: assignee.assignee_key, status: 'failed', error: error.message };
   }
+}
+
+function selectedFailedStates(states, assigneeKeys, cardKind) {
+  const requested = (Array.isArray(assigneeKeys) ? assigneeKeys : []).map(normalizeAssigneeKey).filter(Boolean);
+  const stateByKey = new Map((Array.isArray(states) ? states : [])
+    .filter((state) => state.card_kind === cardKind)
+    .map((state) => [normalizeAssigneeKey(state.assignee_key || state.assignee_name), state]));
+
+  return requested.map((assigneeKey) => stateByKey.get(assigneeKey)).filter(Boolean);
+}
+
+export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKind = 'tasks', execute = false }, deps = {}) {
+  const draft = await getMeetingTaskDraftById(draftId);
+
+  if (!draft) {
+    const error = new Error('draft 不存在');
+    error.status = 404;
+    throw error;
+  }
+
+  const listGroupMembers = deps.listGroupMembers || listConfiguredFeishuGroupMembers;
+  const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
+  const states = await listDraftAssigneeStates(draft.id);
+  const selectedStates = selectedFailedStates(states, assigneeKeys, cardKind);
+  const memberResult = await listGroupMembers();
+  const members = memberResult?.status === 'success' ? memberResult.members : [];
+  const memberMap = assigneeMembersToMap(members);
+  const requested = new Set((Array.isArray(assigneeKeys) ? assigneeKeys : []).map(normalizeAssigneeKey).filter(Boolean));
+  const selectedKeys = new Set(selectedStates.map((state) => normalizeAssigneeKey(state.assignee_key || state.assignee_name)));
+  const results = [];
+
+  for (const state of selectedStates) {
+    const assigneeKey = normalizeAssigneeKey(state.assignee_key || state.assignee_name);
+
+    if (state.delivery_status !== 'failed') {
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'skipped', reason: state.delivery_status === 'sent' ? 'already_sent' : 'not_failed' });
+      continue;
+    }
+
+    const resolved = resolveAssigneeRecipient(assigneeKey, memberMap);
+    if (!resolved) {
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'failed', error: 'current_member_not_found' });
+      continue;
+    }
+
+    const assignee = {
+      assignee_key: assigneeKey,
+      assignee_name: state.assignee_name || assigneeKey,
+      receive_id_type: 'open_id',
+      receive_id: resolved.receive_id,
+      tasks: itemsForAssignee(cardKind === 'progress' ? draft.progress_updates || [] : draft.draft_tasks || [], assigneeKey)
+    };
+
+    if (!execute) {
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'dry_run', resolved: true });
+      continue;
+    }
+
+    const oldTaskOptions = cardKind === 'tasks'
+      ? await loadOldTaskOptionsForAssignee(assigneeKey, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords)
+      : [];
+    results.push({ card_kind: state.card_kind, ...(await sendAssigneeCard(draft, assignee, cardKind, postMessage, oldTaskOptions)) });
+  }
+
+  for (const state of states) {
+    const assigneeKey = normalizeAssigneeKey(state.assignee_key || state.assignee_name);
+    if (requested.has(assigneeKey) && state.card_kind === cardKind && !selectedKeys.has(assigneeKey)) {
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'skipped', reason: state.delivery_status === 'sent' ? 'already_sent' : 'not_failed' });
+    }
+  }
+
+  return {
+    status: results.some((item) => item.status === 'sent' || item.status === 'dry_run') ? 'success' : 'failed',
+    sent_count: results.filter((item) => item.status === 'sent').length,
+    skipped_count: results.filter((item) => item.status === 'skipped').length,
+    failed_count: results.filter((item) => item.status === 'failed').length,
+    dry_run_count: results.filter((item) => item.status === 'dry_run').length,
+    results
+  };
 }
 
 export async function dispatchDraftTaskCards(draft, deps = {}) {
