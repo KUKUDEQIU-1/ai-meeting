@@ -1014,6 +1014,61 @@ function recordFieldText(fields, names) {
   return bitableCellText(recordFieldValue(fields, names));
 }
 
+function progressValueForMasterTaskStatus(status) {
+  if (status === '已完成') return 1;
+  if (status === '进行中') return 0.5;
+  if (status === '待开始' || status === '未开始') return 0;
+  return undefined;
+}
+
+function normalizeDateOnlyTimestamp(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const date = new Date(text.replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return text;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function normalizeDateOnlyText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const date = new Date(text.replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return text;
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function buildMasterTaskUpdateFields({ fieldNames, taskStatus, completionDate, progressText, taskNote }) {
+  const fields = {};
+  const status = String(taskStatus || '').trim();
+  const date = normalizeDateOnlyTimestamp(completionDate);
+  const progress = String(progressText || '').trim();
+  const note = String(taskNote || '').trim();
+
+  if (status) {
+    fields.需求状态 = status;
+    const progressValue = progressValueForMasterTaskStatus(status);
+    if (progressValue !== undefined && fieldNames.has('进度评估')) {
+      fields.进度评估 = progressValue;
+    }
+  }
+
+  if (date !== '' && fieldNames.has('完成日期')) {
+    fields.完成日期 = date;
+  }
+
+  if (progress) {
+    const progressFieldName = fieldNames.has('任务进展描述') ? '任务进展描述' : '任务进展';
+    fields[progressFieldName] = progress;
+  }
+
+  if (note && fieldNames.has('备注')) {
+    fields.备注 = note;
+  }
+
+  return fields;
+}
+
 export async function validateMasterTaskAuditFields(context = {}) {
   const config = await resolveMasterTaskTableConfig(context);
   const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
@@ -1039,36 +1094,48 @@ export async function listMasterTaskAuditRecords(context = {}) {
   await validateMasterTaskAuditFields({ ...context, tenantAccessToken });
   const records = await listBitableRecords({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
 
-  return records.map((record) => ({
-    recordId: record.record_id || record.id || '',
-    taskName: recordFieldText(record.fields, ['事务需求名称', '任务名称']),
-    status: recordFieldText(record.fields, ['需求状态', '状态']),
-    assigneeName: recordFieldText(record.fields, ['跟进人']),
-    assigneeKey: recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim(),
-    progressText: recordFieldText(record.fields, ['任务进展描述', '任务进展']),
-    remark: recordFieldText(record.fields, ['备注']),
-    dueAt: recordFieldText(record.fields, ['截止时间', '截止日期', '结束日期', '完成日期']),
-    lastModifiedAt: record.last_modified_time || record.lastModifiedTime || record.updated_at || '',
-    fields: record.fields || {},
-    rawRecord: record
-  }));
+  return records.map((record) => {
+    const status = recordFieldText(record.fields, ['需求状态', '状态']);
+    const progressText = recordFieldText(record.fields, ['任务进展描述', '任务进展']);
+    const completionDate = normalizeDateOnlyText(recordFieldText(record.fields, ['完成日期']));
+    const taskNote = recordFieldText(record.fields, ['备注']);
+
+    return {
+      recordId: record.record_id || record.id || '',
+      taskName: recordFieldText(record.fields, ['事务需求名称', '任务名称']),
+      status,
+      taskStatus: status,
+      task_status: status,
+      assigneeName: recordFieldText(record.fields, ['跟进人']),
+      assigneeKey: recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim(),
+      progressText,
+      progress_text: progressText,
+      completionDate,
+      completion_date: completionDate,
+      taskNote,
+      task_note: taskNote,
+      remark: taskNote,
+      dueAt: recordFieldText(record.fields, ['截止时间', '截止日期', '结束日期', '完成日期']),
+      lastModifiedAt: record.last_modified_time || record.lastModifiedTime || record.updated_at || '',
+      fields: record.fields || {},
+      rawRecord: record
+    };
+  });
 }
 
-export async function updateMasterTaskProgress({ recordId, progressText, tenantAccessToken, ...context } = {}) {
+export async function updateMasterTaskProgress({ recordId, progressText, taskStatus, completionDate, taskNote, tenantAccessToken, ...context } = {}) {
   const config = await resolveMasterTaskTableConfig(context);
   const token = tenantAccessToken || await getTenantAccessToken();
   const auditSchema = await validateMasterTaskAuditFields({ ...context, tenantAccessToken: token });
   const fieldNames = new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean));
-  const progressFieldName = fieldNames.has('任务进展描述') ? '任务进展描述' : '任务进展';
+  const fields = buildMasterTaskUpdateFields({ fieldNames, taskStatus, completionDate, progressText, taskNote });
 
   return updateBitableRecord({
     appToken: config.appToken,
     tableId: config.tableId,
     tenantAccessToken: token,
     recordId,
-    fields: {
-      [progressFieldName]: String(progressText || '').trim()
-    }
+    fields
   });
 }
 

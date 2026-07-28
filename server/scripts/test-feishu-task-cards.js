@@ -12,7 +12,7 @@ import {
 import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
-import { createTaskRecord, formatTaskForMasterTable } from '../services/feishuBitableClient.js';
+import { createTaskRecord, formatTaskForMasterTable, updateMasterTaskProgress } from '../services/feishuBitableClient.js';
 import { markDraftTasksMatchedInMasterTable, repairDraftAssigneesFromPreviousDraft, speakerCoverageTaskItems } from '../services/feishuMeetingNotesImportService.js';
 import { buildMeetingTableNotifyText } from '../services/feishuBitableClient.js';
 import { normalizeTaskExtractionResult } from '../services/aiService.js';
@@ -702,6 +702,92 @@ function testCallbackParsingPrefersOldTaskDropdownValue() {
 
   assert.equal(parsed.form_values.matched_task_name, '下拉旧任务');
   assert.equal(parsed.raw_form_values.matched_task_name_select_task_b, '不应读取');
+}
+
+function testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly() {
+  const parsed = parseFeishuCardActionPayload({
+    header: { event_id: 'evt_master_audit_contract_1' },
+    event: {
+      operator: { open_id: 'ou_master_audit_actor' },
+      context: { open_message_id: 'om_master_audit_contract_1' },
+      action: {
+        value: { action: 'master_task_confirm_update', audit_log_id: 404, card_kind: 'master_task_audit' },
+        form_value: {
+          task_status: '已完成-解析-135',
+          completion_date: '2026-08-28',
+          progress_text: '解析进展-246',
+          task_note: '解析备注-357',
+          status: '旧状态字段不应读取',
+          note: '旧备注字段不应读取',
+          assignee: '恶意改负责人'
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.form_values.task_status, '已完成-解析-135');
+  assert.equal(parsed.form_values.completion_date, '2026-08-28');
+  assert.equal(parsed.form_values.progress_text, '解析进展-246');
+  assert.equal(parsed.form_values.task_note, '解析备注-357');
+  assert.equal('status' in parsed.form_values, false);
+  assert.equal('note' in parsed.form_values, false);
+  assert.equal(parsed.form_values.assignee, undefined);
+}
+
+async function testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping() {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+
+    if (String(url).endsWith('/fields')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 0,
+          data: {
+            items: [
+              { field_name: '事务需求名称' },
+              { field_name: '跟进人' },
+              { field_name: '需求状态' },
+              { field_name: '进度评估' },
+              { field_name: '完成日期' },
+              { field_name: '任务进展描述' },
+              { field_name: '备注' }
+            ]
+          }
+        })
+      };
+    }
+
+    return {
+      ok: true,
+      json: async () => ({ code: 0, data: { record: { record_id: 'rec_master_audit_contract' } } })
+    };
+  };
+
+  try {
+    await updateMasterTaskProgress({
+      appToken: 'app_master_audit_contract',
+      tableId: 'tbl_master_audit_contract',
+      tenantAccessToken: 'tenant_master_audit_contract',
+      recordId: 'rec_master_audit_contract',
+      taskStatus: '已完成-映射-468',
+      completionDate: '2026-08-29',
+      progressText: '映射进展-579',
+      taskNote: '映射备注-680'
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  const updateCall = calls.find((call) => call.options.method === 'PUT');
+  const fields = JSON.parse(updateCall.options.body).fields;
+  assert.equal(fields.需求状态, '已完成-映射-468');
+  assert.equal('进度评估' in fields, false);
+  assert.equal(fields.完成日期, new Date(2026, 7, 29).getTime());
+  assert.equal(fields.任务进展描述, '映射进展-579');
+  assert.equal(fields.备注, '映射备注-680');
 }
 
 function testConfirmedManualProgressBuildsBitableProgressFields() {
@@ -2791,6 +2877,7 @@ testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testCallbackParsingAndSafety();
 testCallbackParsingPrefersOldTaskDropdownValue();
+testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
 testConfirmedProgressBuildsFollowerField();
@@ -2815,6 +2902,7 @@ testSpeakerCoverageIncludesMeetingReviewAndOperationWork();
 testSpeakerCoverageSkipsExplanationOnlySegments();
 testSpeakerCoverageAggregatesReliableConcreteSegmentsBeforeFallback();
 testNotifyTextIncludesTaskCountsByAssignee();
+await testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDraftNormalizationPreservesSemanticTaskFields();
