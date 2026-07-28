@@ -375,6 +375,21 @@ function migrateDatabase() {
     UNIQUE(draft_id, assignee_key, card_kind, item_id),
     UNIQUE(card_message_id)
   )`);
+
+  const masterTaskAuditColumns = db.exec('PRAGMA table_info(master_task_audit_logs)')[0]?.values || [];
+  const masterTaskAuditColumnNames = masterTaskAuditColumns.map((column) => column[1]);
+  const masterTaskAuditMigrations = [
+    ['submitted_status', 'TEXT'],
+    ['submitted_completion_date', 'TEXT'],
+    ['submitted_progress_text', 'TEXT'],
+    ['submitted_note', 'TEXT']
+  ];
+
+  for (const [columnName, columnType] of masterTaskAuditMigrations) {
+    if (!masterTaskAuditColumnNames.includes(columnName)) {
+      db.run(`ALTER TABLE master_task_audit_logs ADD COLUMN ${columnName} ${columnType}`);
+    }
+  }
 }
 
 export function run(sql, params = []) {
