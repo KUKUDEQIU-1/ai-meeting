@@ -102,6 +102,24 @@ function auditValue(rawValue, snakeKey, camelKey) {
   return rawValue?.[snakeKey] || rawValue?.[camelKey] || '';
 }
 
+function safeAuditCallbackMetadata(parsed) {
+  return {
+    action: parsed.action,
+    callback_id: parsed.callback_id,
+    operator_open_id: parsed.operator_open_id,
+    message_id: parsed.message_id,
+    audit_log_id: auditValue(parsed.raw_value, 'audit_log_id', 'auditLogId') || null,
+    audit_record_id: auditValue(parsed.raw_value, 'audit_record_id', 'auditRecordId') || '',
+    audit_date_present: Boolean(auditValue(parsed.raw_value, 'audit_date', 'auditDate')),
+    audit_type_present: Boolean(auditValue(parsed.raw_value, 'audit_type', 'auditType')),
+    form_fields_present: Boolean(Object.keys(parsed.raw_form_values || {}).length)
+  };
+}
+
+function feishuPatchFailureClass(feishuResponse) {
+  return Number(feishuResponse.code) === 200671 ? 'feishu_card_patch_failed' : 'terminal_card_patch_failed';
+}
+
 async function loadAuditState(parsed) {
   const auditLogId = Number(auditValue(parsed.raw_value, 'audit_log_id', 'auditLogId') || 0);
   let auditLog = Number.isFinite(auditLogId) && auditLogId > 0
@@ -145,14 +163,7 @@ export async function prepareMasterTaskAuditCardAction(payload) {
   const { parseFeishuCardActionPayload } = await import('./feishuTaskCardPure.js');
   const parsed = parseFeishuCardActionPayload(payload);
 
-  console.log('[Master Task Audit] callback received', JSON.stringify({
-    action: parsed.action,
-    message_id: parsed.message_id,
-    operator_open_id: parsed.operator_open_id,
-    callback_id: parsed.callback_id,
-    raw_value: parsed.raw_value,
-    raw_form_values: parsed.raw_form_values
-  }));
+  console.log('[Master Task Audit] callback received', JSON.stringify(safeAuditCallbackMetadata(parsed)));
 
   if (!['master_task_no_update', 'master_task_confirm_update'].includes(parsed.action)) {
     return null;
@@ -193,6 +204,9 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
       console.error('[Master Task Audit] terminal card patch failed', JSON.stringify({
         action: prepared.parsed.action,
         phase: 'terminal_card_patch',
+        failure_class: feishuPatchFailureClass(feishuResponse),
+        status: error?.status ?? null,
+        code: feishuResponse.code ?? null,
         audit_log_id: prepared.auditLog.id,
         audit_record_id: prepared.auditLog.record_id,
         audit_date: prepared.auditLog.audit_date,
