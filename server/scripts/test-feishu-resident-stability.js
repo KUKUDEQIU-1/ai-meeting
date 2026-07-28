@@ -5,16 +5,62 @@ import { createFeishuResidentWorker } from '../services/feishuResidentWorker.js'
 async function testCoordinatorReturnsBusyWithoutOverlap() {
   let releaseScan;
   const coordinator = createFeishuScanCoordinator();
-  const first = coordinator.runScan('meeting', async () => new Promise((resolve) => { releaseScan = resolve; }));
+  const first = coordinator.runScan('meeting', async () => new Promise((resolve) => { releaseScan = resolve; }), {
+    route: '/api/meeting/sync-feishu-meeting-notes',
+    capability: 'feishu_meeting_notes_import',
+    equivalenceKey: 'meeting-notes-active-scan'
+  });
 
   const busy = await coordinator.runScan('docx', async () => ({ should_not_run: true }));
+  const snapshot = coordinator.snapshot();
   releaseScan({ ok: true });
   const completed = await first;
 
   assert.equal(busy.success, false);
   assert.equal(busy.status, 'already_running');
   assert.equal(busy.running_scan.type, 'meeting');
+  assert.equal(busy.running_scan.route, '/api/meeting/sync-feishu-meeting-notes');
+  assert.equal(busy.running_scan.capability, 'feishu_meeting_notes_import');
+  assert.equal(busy.running_scan.equivalence_key, 'meeting-notes-active-scan');
+  assert.equal(typeof busy.running_scan.run_id, 'string');
+  assert.match(busy.running_scan.run_id, /^feishu_scan_/);
+  assert.equal(snapshot.active_scan.type, 'meeting');
+  assert.equal(snapshot.active_scan.route, '/api/meeting/sync-feishu-meeting-notes');
+  assert.equal(snapshot.active_scan.capability, 'feishu_meeting_notes_import');
+  assert.equal(snapshot.active_scan.equivalence_key, 'meeting-notes-active-scan');
+  assert.equal(snapshot.active_scan.run_id, busy.running_scan.run_id);
   assert.deepEqual(completed, { ok: true });
+}
+
+async function testCoordinatorRejectsEquivalentScanWithoutSecondInvocation() {
+  let releaseScan;
+  let calls = 0;
+  const coordinator = createFeishuScanCoordinator();
+  const metadata = {
+    route: '/api/meeting/sync-feishu-wiki-docx',
+    capability: 'feishu_wiki_docx_import',
+    equivalenceKey: 'wiki-docx-library-active-scan'
+  };
+  const first = coordinator.runScan('wiki', async () => {
+    calls += 1;
+    return new Promise((resolve) => { releaseScan = resolve; });
+  }, metadata);
+
+  const busy = await coordinator.runScan('wiki', async () => {
+    calls += 1;
+    return { should_not_run: true };
+  }, metadata);
+  releaseScan({ success: true, imported: [], skipped: [], failed: [] });
+  await first;
+
+  assert.equal(calls, 1);
+  assert.equal(busy.success, false);
+  assert.equal(busy.status, 'already_running');
+  assert.equal(busy.reason, 'feishu_equivalent_scan_already_running');
+  assert.equal(busy.running_scan.type, 'wiki');
+  assert.equal(busy.running_scan.route, '/api/meeting/sync-feishu-wiki-docx');
+  assert.equal(busy.running_scan.capability, 'feishu_wiki_docx_import');
+  assert.equal(busy.running_scan.equivalence_key, 'wiki-docx-library-active-scan');
 }
 
 async function testWorkerDisabledAndSafetyGateDoNotScan() {
@@ -133,6 +179,7 @@ async function testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay() {
 }
 
 await testCoordinatorReturnsBusyWithoutOverlap();
+await testCoordinatorRejectsEquivalentScanWithoutSecondInvocation();
 await testWorkerDisabledAndSafetyGateDoNotScan();
 await testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish();
 await testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay();
