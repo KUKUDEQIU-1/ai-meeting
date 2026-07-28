@@ -522,7 +522,10 @@ export function buildAssigneeProgressCard({ draft, assignee, progressUpdates, te
 export function buildMasterTaskInProgressAuditCard({ audit, terminal = false }) {
   const taskName = truncateText(audit?.task_name || '未命名任务', 100);
   const assigneeName = truncateText(audit?.assignee_name || '待确认', 40);
+  const taskStatus = String(audit?.task_status || '').trim();
+  const completionDate = String(audit?.completion_date || '').trim();
   const progressText = String(audit?.progress_text || '').trim();
+  const taskNote = String(audit?.task_note || '').trim();
 
   if (terminal) {
     return {
@@ -555,8 +558,11 @@ export function buildMasterTaskInProgressAuditCard({ audit, terminal = false }) 
         elements: [
           { tag: 'markdown', content: `**任务：** ${taskName}\n**状态：** 进行中\n**跟进人：** ${assigneeName}` },
           { tag: 'hr' },
+          inputElement({ tag: 'task_status', label: '任务状态', value: taskStatus }),
+          inputElement({ tag: 'completion_date', label: '完成日期', value: completionDate }),
           labelElement(`**当前任务进展描述：** ${truncateText(progressText || '（当前为空）', 300)}`),
           inputElement({ tag: 'progress_text', label: '任务进展描述', value: progressText }),
+          inputElement({ tag: 'task_note', label: '任务备注', value: taskNote }),
           {
             tag: 'column_set',
             columns: [
@@ -653,7 +659,10 @@ function extractAllowedFormValues(formValue, itemId) {
       formValue?.[`matched_task_name${suffix}`],
       formValue?.matched_task_name
     ),
-    progress_text: firstString(formValue?.[`progress_text${suffix}`], formValue?.progress_text)
+    task_status: firstString(formValue?.[`task_status${suffix}`], formValue?.task_status),
+    completion_date: firstString(formValue?.[`completion_date${suffix}`], formValue?.completion_date),
+    progress_text: firstString(formValue?.[`progress_text${suffix}`], formValue?.progress_text),
+    task_note: firstString(formValue?.[`task_note${suffix}`], formValue?.task_note)
   };
 }
 
