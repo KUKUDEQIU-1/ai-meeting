@@ -441,6 +441,7 @@ GETNOTE_MIN_NOTE_AGE_MINUTES=5
 GETNOTE_MAX_LOOKBACK_DAYS=7
 GETNOTE_WORKER_INTERVAL_MINUTES=15
 GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
+GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
 ```
 
 - `GETNOTE_REQUIRE_TAG=false`：默认不按标签过滤，扫描最近 Get笔记列表中的所有新笔记。
@@ -449,6 +450,7 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 - `GETNOTE_MIN_NOTE_AGE_MINUTES=5`：笔记创建后至少等待 5 分钟再处理，避免转写未完成。
 - `GETNOTE_MAX_LOOKBACK_DAYS=7`：最多处理最近 7 天内的笔记。
 - `GETNOTE_PROCESSING_TIMEOUT_MINUTES=30`：`processing` 状态超过 30 分钟允许重试。
+- `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=`：Get笔记任务分配卡片接收人的飞书 `open_id`，生产应配置为伟填。Get笔记不会按任务负责人分发卡片，也不会直接写入正式总表；每篇笔记只给该接收人发送一张待处理卡片。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID_TYPE=chat_id`：群通知接收 ID 类型。仅用于非草稿确认类群通知；飞书会议纪要/docx 草稿确认不再使用群确认链接。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID=`：目标群聊 ID。该变量不再控制草稿确认投递，草稿确认改为按负责人私发交互卡片。
 - `FEISHU_ASSIGNEE_MAP_JSON=`：负责人到飞书 `open_id` 的映射，键会按去空格后的负责人姓名匹配；未映射负责人会记录为投递失败，不会回退发送到全局收件人。示例：`{"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}`。

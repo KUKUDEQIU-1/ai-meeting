@@ -22,6 +22,7 @@
     "test:feishu-card-action-diagnostics": "node scripts/test-feishu-card-action-diagnostics.js",
     "test:master-task-audit-runner": "node scripts/test-master-task-audit-runner.js",
     "test:getnote-import": "node scripts/test-getnote-import.js",
+    "test:getnote-workflow": "node scripts/test-getnote-workflow.js",
     "debug:feishu-create-table": "node scripts/debug-feishu-create-table.ts",
     "debug:feishu-permission": "node scripts/debug-feishu-bitable-permission.ts",
     "debug:getnote-one": "node scripts/debug-getnote-one.ts",
