@@ -197,6 +197,10 @@ function hasPendingScopedReviewTask(draft, state, itemId) {
   return hasPendingScopedTask(draft, state.assignee_key, itemId);
 }
 
+function itemActionTerminal(state, hasRemainingScopedTasks) {
+  return state.card_kind === 'getnote_tasks' ? false : !hasRemainingScopedTasks;
+}
+
 async function selectedGetNoteAssignee(parsed, currentTask, dependencies) {
   if (parsed.card_kind !== 'getnote_tasks') return '';
 
@@ -420,7 +424,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
       draftId: parsed.draft_id,
       assigneeKey: state.assignee_key,
       cardKind: state.card_kind,
-      terminal: !hasRemainingScopedTasks,
+      terminal: itemActionTerminal(state, hasRemainingScopedTasks),
       itemId: scopedItemId
     });
     return feishuCallbackToast(taskChoice === 'old_task_progress' ? '旧任务进展已处理' : '新任务已处理');
@@ -489,7 +493,7 @@ async function discardTask(parsed, state, dependencies) {
       callbackId: parsed.callback_id
     });
   }
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: !hasRemainingScopedTasks, itemId: scopedItemId });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: itemActionTerminal(state, hasRemainingScopedTasks), itemId: scopedItemId });
   return feishuCallbackToast('任务已丢弃');
 }
 

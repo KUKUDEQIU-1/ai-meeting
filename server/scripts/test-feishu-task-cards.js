@@ -5,6 +5,7 @@ import {
   buildAssigneeProgressCard,
   parseFeishuCardActionPayload,
   groupDraftTasksByAssignee,
+  itemScopeIncludes,
   isReplayCallback,
   normalizeAssigneeKey,
   parseAssigneeMap,
@@ -1678,7 +1679,81 @@ async function testGetNotePendingItemStaysActionableAfterReviewerConfirmedState(
   assert.equal(response.toast.content, '新任务已处理');
   assert.equal(stored.draft_tasks.find((task) => task.item_id === 'getnote_item_pending').status, 'confirmed');
   assert.deepEqual(finalized[0].itemIds, ['getnote_item_pending']);
-  assert.equal(updates[0].terminal, true);
+  assert.equal(updates[0].terminal, false);
+}
+
+async function testGetNoteLastSplitItemUsesMixedFeedbackCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-last-split-feedback-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 最后一项反馈测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'getnote_split_done_1', task_name: '已完成项 1', assignee: '洪伟填', status: 'confirmed', action_result: 'new_task' },
+      { item_id: 'getnote_split_done_2', task_name: '已完成项 2', assignee: '洪伟填', status: 'discarded', action_result: 'discarded' },
+      { item_id: 'getnote_split_last', task_name: '最后待点项', assignee: '待确认', status: 'pending' }
+    ],
+    tableId: 'table_getnote_last_split',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const messageId = `om_getnote_last_split_${draft.id}`;
+  let refreshedCard = null;
+  let updateTerminal = null;
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    assigneeName: 'Wei Tian',
+    receiveId: 'ou_getnote_reviewer',
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    itemId: 'getnote_split_done_1,getnote_split_done_2,getnote_split_last',
+    cardMessageId: messageId,
+    deliveryStatus: 'sent'
+  });
+
+  const response = await handleFeishuCardAction(getNotePayloadForActor({
+    draft,
+    eventId: 'evt_getnote_last_split_feedback',
+    action: 'mark_task_as_new',
+    operatorOpenId: 'ou_getnote_reviewer',
+    itemId: 'getnote_split_last',
+    messageId,
+    formValue: {
+      task_name_getnote_split_last: '最后待点项',
+      assignee_select_getnote_split_last: '洪伟填'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [{ assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
+    finalizeAssignee: async () => ({ status: 'synced', created_count: 1 }),
+    updateCard: async ({ terminal, itemId }) => {
+      const latestDraft = await getMeetingTaskDraftById(draft.id);
+      updateTerminal = terminal;
+      refreshedCard = buildGetNoteTaskReviewCard({
+        draft: latestDraft,
+        assignee: { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' },
+        tasks: latestDraft.draft_tasks.filter((task) => itemScopeIncludes(itemId, task.item_id)),
+        assigneeOptions: [{ text: { tag: 'plain_text', content: '洪伟填' }, value: '洪伟填' }],
+        terminal
+      });
+      return { status: 'updated' };
+    }
+  });
+  const text = JSON.stringify(refreshedCard);
+
+  assert.equal(response.toast.content, '新任务已处理');
+  assert.equal(updateTerminal, false);
+  assert.match(text, /已完成项 1/);
+  assert.match(text, /已丢弃/);
+  assert.match(text, /最后待点项/);
+  assert.match(text, /已处理为新任务/);
+  assert.doesNotMatch(text, /GetNote 任务已处理/);
 }
 
 async function testGetNoteSplitCardDiscardRefreshesClickedSplitScope() {
@@ -3523,6 +3598,7 @@ await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
 await testGetNotePendingItemStaysActionableAfterReviewerConfirmedState();
+await testGetNoteLastSplitItemUsesMixedFeedbackCard();
 await testGetNoteSplitCardDiscardRefreshesClickedSplitScope();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();
