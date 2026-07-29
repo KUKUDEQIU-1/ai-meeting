@@ -190,6 +190,48 @@ async function testKeepsMultipleConcreteTasksForOneSpeakerWhileDroppingExplanati
   assert.equal(result.removed_tasks.at(-1).reason, 'context_only');
 }
 
+async function testGetNoteMainlineMergesSupportAndRequiresAssigneeConfirmation() {
+  const result = await analyzeWith([
+    task({
+      task_name: '修复AI会议助手卡片响应Bug',
+      task_description: '修复 AI 会议助手卡片响应不及时的问题。',
+      evidence_quote: '我今天修复 AI 会议助手卡片响应不及时的 bug',
+      assignee: '张三',
+      owner: '张三',
+      assignee_source: 'speaker',
+      source_speaker: '张三',
+      source_speaker_status: 'provided',
+      source_speaker_confidence: 0.95,
+      task_role: 'primary_task',
+      actionability: 'actionable',
+      source_turn_ids: ['turn_1']
+    }),
+    task({
+      task_name: '修复负责人不准确问题',
+      task_description: '同时修复发送负责人不准确的问题。',
+      evidence_quote: '以及发送负责人不准确的问题',
+      assignee: '张三',
+      owner: '张三',
+      assignee_source: 'speaker',
+      source_speaker: '张三',
+      source_speaker_status: 'provided',
+      source_speaker_confidence: 0.95,
+      task_role: 'context',
+      actionability: 'context_only',
+      source_turn_ids: ['turn_2']
+    })
+  ], {
+    decisions: [{ candidate_id: 'candidate_1', action: 'keep', reason: '主线任务' }]
+  }, { source_type: 'getnote' });
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].assignee, '待确认');
+  assert.equal(result.tasks[0].owner, '待确认');
+  assert.equal(result.tasks[0].assignee_source, 'speaker_pending_confirmation');
+  assert.match(result.tasks[0].task_description, /发送负责人不准确/);
+  assert.deepEqual(result.tasks[0].source_turn_ids, ['turn_1', 'turn_2']);
+}
+
 function testTaskExtractionNormalizationPreservesSemanticFields() {
   const result = normalizeTaskExtractionResult({
     today_tasks: [{
@@ -298,6 +340,7 @@ await testMergesDuplicateCandidates();
 await testKeepsDistinctSameAssigneeTasksWithoutCap();
 await testFiltersContextOnlyCandidateBeforeScoring();
 await testKeepsMultipleConcreteTasksForOneSpeakerWhileDroppingExplanation();
+await testGetNoteMainlineMergesSupportAndRequiresAssigneeConfirmation();
 testTaskExtractionNormalizationPreservesSemanticFields();
 await testValidatorFailureFallsOpen();
 await testMalformedValidatorResponseFallsOpen();

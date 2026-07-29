@@ -1,5 +1,5 @@
 import { createTaskRecord, getTenantAccessToken, listBitableRecords, resolveMasterTaskTableConfig, validateMasterTaskTableSchema } from './feishuBitableClient.js';
-import { deduplicateMeetingTasksSemantically, generateMeetingSummary, generateMeetingTasks, validateMeetingTasks } from './aiService.js';
+import { deduplicateMeetingTasksSemantically, generateMeetingSummary, generateMeetingTasks, normalizeTaskExtractionResult, validateMeetingTasks } from './aiService.js';
 import { findDuplicateTaskName, improveAndValidateTaskName } from '../utils/taskQuality.js';
 
 const GENERIC_TASK_NAMES = new Set([
@@ -764,7 +764,9 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
   const summaryResult = summarySettled.status === 'fulfilled'
     ? summarySettled.value
     : { title: '未命名会议', overview: '' };
-  const extractionResult = extractionSettled.value;
+  const extractionResult = meetingSource === 'Get笔记' || options.source_type === 'getnote'
+    ? normalizeTaskExtractionResult({ ...extractionSettled.value, source_type: 'getnote' })
+    : extractionSettled.value;
 
   if (summarySettled.status === 'rejected') {
     console.warn(`[AI Analyze] summary skipped source=${meetingSource} error=${summarySettled.reason?.message || summarySettled.reason}`);

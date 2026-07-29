@@ -32,6 +32,7 @@ const fallbackTasks = () => [
 ];
 
 const PENDING_ASSIGNEE = '待确认';
+const GETNOTE_SOURCE_TYPES = new Set(['getnote', 'Get笔记']);
 const SPEAKER_CONFIDENCE_OWNER_THRESHOLD = 0.65;
 const LOW_RISK_ATTRIBUTION_WARNINGS = new Set([
   'same_speaker_not_merged_time_gap',
@@ -286,6 +287,61 @@ function normalizeTasks(tasks) {
 	});
 }
 
+function isGetNoteSource(sourceType) {
+  return GETNOTE_SOURCE_TYPES.has(normalizeText(sourceType));
+}
+
+function mergeGetNoteSupportingItems(tasks) {
+  const primaryTasks = [];
+  const supportItems = [];
+
+  for (const task of tasks) {
+    if (normalizeText(task.task_role || 'primary_task') === 'primary_task' && normalizeText(task.actionability || 'actionable') === 'actionable') {
+      primaryTasks.push(task);
+    } else {
+      supportItems.push(task);
+    }
+  }
+
+  if (primaryTasks.length !== 1 || supportItems.length === 0) {
+    return tasks;
+  }
+
+  const supportText = supportItems
+    .map((item) => normalizeText(item.task_description || item.task_context || item.task_brief || item.evidence_quote || item.task_name))
+    .filter(Boolean)
+    .join('；');
+
+  if (!supportText) {
+    return primaryTasks;
+  }
+
+  return [{
+    ...primaryTasks[0],
+    task_description: normalizeText(`${primaryTasks[0].task_description || primaryTasks[0].task_brief || primaryTasks[0].task_name}；补充说明：${supportText}`).slice(0, 500),
+    description: normalizeText(`${primaryTasks[0].description || primaryTasks[0].task_description || primaryTasks[0].task_name}；补充说明：${supportText}`).slice(0, 500),
+    task_context: normalizeText(`${primaryTasks[0].task_context || ''}${primaryTasks[0].task_context ? '；' : ''}${supportText}`).slice(0, 500),
+    evidence_quote: [...new Set([primaryTasks[0].evidence_quote, ...supportItems.map((item) => item.evidence_quote)].map(normalizeText).filter(Boolean))].join('；').slice(0, 500),
+    source_turn_ids: [...new Set([...(primaryTasks[0].source_turn_ids || []), ...supportItems.flatMap((item) => item.source_turn_ids || [])])]
+  }];
+}
+
+function normalizeGetNoteTasks(tasks) {
+  return mergeGetNoteSupportingItems(tasks).map((task) => {
+    if (task.assignee_source === 'speaker') {
+      return {
+        ...task,
+        assignee: PENDING_ASSIGNEE,
+        owner: PENDING_ASSIGNEE,
+        needs_confirmation: true,
+        assignee_source: 'speaker_pending_confirmation'
+      };
+    }
+
+    return task;
+  });
+}
+
 function normalizeProgressUpdates(items) {
   if (!Array.isArray(items)) {
     return [];
@@ -384,6 +440,8 @@ function normalizeSemanticDedupeGroups(result, tasks) {
 }
 
 export function normalizeTaskExtractionResult(result) {
+  const sourceType = Array.isArray(result) ? '' : normalizeText(result?.source_type || result?.sourceType || result?.meeting_source || result?.meetingSource);
+
   if (Array.isArray(result)) {
     return {
       today_tasks: normalizeTasks(result),
@@ -393,7 +451,7 @@ export function normalizeTaskExtractionResult(result) {
   }
 
   return {
-    today_tasks: normalizeTasks(result?.today_tasks || result?.tasks || []),
+    today_tasks: isGetNoteSource(sourceType) ? normalizeGetNoteTasks(normalizeTasks(result?.today_tasks || result?.tasks || [])) : normalizeTasks(result?.today_tasks || result?.tasks || []),
     progress_updates: normalizeProgressUpdates(result?.progress_updates || []),
     discarded_items: normalizeDiscardedItems(result?.discarded_items || [])
   };
