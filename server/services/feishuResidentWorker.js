@@ -5,8 +5,18 @@ import { getMasterTaskAuditLog, markMasterTaskAuditFailed, upsertMasterTaskAudit
 import { auditMasterTaskTable } from './masterTaskAuditService.js';
 import { syncFeishuWikiDocxNotes } from './feishuWikiDocxImportService.js';
 
-const DEFAULT_INTERVAL_MINUTES = 15;
+const DEFAULT_INTERVAL_MINUTES = 1;
 const RETRY_DELAY_MS = 60 * 1000;
+const AUDIT_TIME_ZONE = 'Asia/Shanghai';
+
+function errorStatus(error) {
+  return Number(error?.status || error?.response?.status || error?.response?.code);
+}
+
+function isPermissionError(error) {
+  const status = errorStatus(error);
+  return status === 401 || status === 403;
+}
 
 function envEnabled(env, name, fallback = false) {
   const value = String(env[name] ?? '').trim().toLowerCase();
@@ -26,14 +36,35 @@ function nowIso() {
 
 function localDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
-  const pad = (number) => String(number).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: AUDIT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date);
 }
 
 function hasReachedAuditTime(value, hour, minute) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
-  const current = (date.getHours() * 60) + date.getMinutes();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: AUDIT_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const hourPart = Number(parts.find((part) => part.type === 'hour')?.value);
+  const minutePart = Number(parts.find((part) => part.type === 'minute')?.value);
+  const current = (hourPart * 60) + minutePart;
   return current >= ((hour * 60) + minute);
+}
+
+function isBeijingWorkday(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now());
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: AUDIT_TIME_ZONE,
+    weekday: 'short'
+  }).format(date);
+  return weekday !== 'Sat' && weekday !== 'Sun';
 }
 
 function defaultScheduler(task, delayMs) {
@@ -53,7 +84,7 @@ function summarizeResult(result) {
 
 function summarizeFailure(error) {
   return {
-    status: 'failed',
+    status: isPermissionError(error) ? 'blocked' : 'failed',
     scan_source: 'feishu_wiki_docx_library',
     imported_count: 0,
     skipped_count: 0,
@@ -137,7 +168,7 @@ export function createFeishuResidentWorker({
     }, delayMs);
   }
 
-  async function runScan(type, scan) {
+async function runScan(type, scan) {
     try {
       const result = await coordinator.runScan(type, scan);
       return summarizeResult(result);
@@ -160,7 +191,7 @@ export function createFeishuResidentWorker({
       const currentTime = now();
       const currentAuditDate = localDateKey(currentTime);
 
-      if (auditEnabled && hasReachedAuditTime(currentTime, auditHour, auditMinute) && lastAuditDate !== currentAuditDate) {
+      if (auditEnabled && isBeijingWorkday(currentTime) && hasReachedAuditTime(currentTime, auditHour, auditMinute) && lastAuditDate !== currentAuditDate) {
         try {
           auditResult = summarizeAuditResult(await runAudit());
           lastAuditDate = currentAuditDate;
@@ -180,17 +211,18 @@ export function createFeishuResidentWorker({
         }
       }
 
+      const blocked = wiki.status === 'blocked';
       const failed = wiki.status === 'failed';
       lastCycle = {
         started_at: startedAt,
         finished_at: nowIso(),
-        status: failed || auditResult?.status === 'failed' ? 'partial_failed' : 'success',
+        status: blocked ? 'blocked' : failed || auditResult?.status === 'failed' ? 'partial_failed' : 'success',
         scan_source: wiki.scan_source,
         wiki,
         audit: auditResult
       };
-      status = 'idle';
-      scheduleNext(failed ? RETRY_DELAY_MS : intervalMinutes * 60 * 1000);
+      status = blocked ? 'blocked' : 'idle';
+      if (!blocked) scheduleNext(failed ? RETRY_DELAY_MS : intervalMinutes * 60 * 1000);
       return snapshot();
     } finally {
       running = false;

@@ -85,6 +85,7 @@ async function testWorkerDisabledAndSafetyGateDoNotScan() {
   assert.equal(start.status, 'blocked');
   assert.equal(snapshot.enabled, true);
   assert.equal(snapshot.status, 'blocked');
+  assert.equal(snapshot.interval_minutes, 1);
   assert.equal(calls, 0);
 }
 
@@ -140,7 +141,7 @@ async function testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish() {
 
 async function testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay() {
   let auditCalls = 0;
-  let currentTime = new Date('2026-07-24 17:50:00');
+  let currentTime = new Date('2026-07-24T09:50:00.000Z');
   const worker = createFeishuResidentWorker({
     env: {
       FEISHU_RESIDENT_WORKER_ENABLED: 'true',
@@ -165,17 +166,49 @@ async function testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay() {
   await worker.runCycle();
   assert.equal(auditCalls, 0);
 
-  currentTime = new Date('2026-07-24 18:05:00');
+  currentTime = new Date('2026-07-24T10:05:00.000Z');
   await worker.runCycle();
   assert.equal(auditCalls, 1);
 
-  currentTime = new Date('2026-07-24 18:30:00');
+  currentTime = new Date('2026-07-24T10:30:00.000Z');
   await worker.runCycle();
   assert.equal(auditCalls, 1);
 
-  currentTime = new Date('2026-07-25 18:10:00');
+  currentTime = new Date('2026-07-27T10:10:00.000Z');
   await worker.runCycle();
   assert.equal(auditCalls, 2);
+}
+
+async function testWorkerSkipsAuditOnBeijingWeekend() {
+  let auditCalls = 0;
+  let currentTime = new Date('2026-07-25T10:05:00.000Z');
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false',
+      FEISHU_MASTER_TASK_AUDIT_ENABLED: 'true',
+      FEISHU_MASTER_TASK_AUDIT_HOUR: '18',
+      FEISHU_MASTER_TASK_AUDIT_MINUTE: '0'
+    },
+    scans: {
+      wiki: async () => ({ imported: [], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' })
+    },
+    audit: {
+      run: async () => {
+        auditCalls += 1;
+        return { status: 'success', audit_date: '2026-07-25', dry_run: false, summary: { total: 1, remindable: 1, passed: 0, skipped: 0, failed: 0 } };
+      }
+    },
+    scheduler: () => ({ cancel() {} }),
+    now: () => currentTime
+  });
+
+  await worker.runCycle();
+  assert.equal(auditCalls, 0);
+
+  currentTime = new Date('2026-07-26T10:05:00.000Z');
+  await worker.runCycle();
+  assert.equal(auditCalls, 0);
 }
 
 await testCoordinatorReturnsBusyWithoutOverlap();
@@ -183,5 +216,6 @@ await testCoordinatorRejectsEquivalentScanWithoutSecondInvocation();
 await testWorkerDisabledAndSafetyGateDoNotScan();
 await testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish();
 await testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay();
+await testWorkerSkipsAuditOnBeijingWeekend();
 
 console.log('feishu resident stability tests passed');
