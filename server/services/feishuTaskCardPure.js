@@ -415,7 +415,14 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeO
     const itemId = String(task.item_id || '');
     const matchedTaskName = matchedTaskNameOf(task);
 
-    if (task.status && task.status !== 'pending') continue;
+    if (task.status && task.status !== 'pending') {
+      const summary = handledTaskSummary(task, itemId);
+      if (summary) {
+        elements.push(summary);
+        elements.push({ tag: 'hr' });
+      }
+      continue;
+    }
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
@@ -427,6 +434,7 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeO
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
     elements.push(taskActionSet({ draft, assignee, task, cardKind }));
+    elements.push({ tag: 'hr' });
   }
 
   return elements;

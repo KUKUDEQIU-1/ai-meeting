@@ -697,6 +697,25 @@ function testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect
   assert.doesNotMatch(text, /getnote_submit_task/);
 }
 
+function testGetNoteCompactCardShowsHandledItemAndPendingSibling() {
+  const card = buildGetNoteTaskReviewCard({
+    draft: { id: 42, meeting_title: 'GetNote 反馈测试' },
+    assignee: { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' },
+    tasks: [
+      { item_id: 'getnote_done', task_name: '已点击任务', assignee: '洪伟填', status: 'confirmed', action_result: 'new_task' },
+      { item_id: 'getnote_pending', task_name: '待点击任务', assignee: '待确认', status: 'pending' }
+    ],
+    assigneeOptions: [{ text: { tag: 'plain_text', content: '洪伟填' }, value: '洪伟填' }]
+  });
+  const text = JSON.stringify(card);
+
+  assert.match(text, /已处理为新任务/);
+  assert.match(text, /已点击任务/);
+  assert.match(text, /task_name_getnote_pending/);
+  assert.match(text, /mark_new_getnote_pending/);
+  assert.doesNotMatch(text, /mark_new_getnote_done/);
+}
+
 function testCallbackParsingAndSafety() {
   const payload = {
     schema: '2.0',
@@ -3456,6 +3475,7 @@ testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
 testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect();
+testGetNoteCompactCardShowsHandledItemAndPendingSibling();
 testCallbackParsingAndSafety();
 testCallbackParsingPrefersOldTaskDropdownValue();
 testCallbackParsingAcceptsGetNoteAssigneeSelectOnlyForScopedItem();
