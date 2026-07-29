@@ -227,9 +227,7 @@ export function extractGetNoteContentWithMeta(note) {
     ['audio.transcript', note?.audio?.transcript],
     ['transcript', note?.transcript],
     ['audio.text', note?.audio?.text],
-    ['content', note?.content],
-    ['summary', note?.summary],
-    ['web_page.excerpt', note?.web_page?.excerpt]
+    ['content', note?.content]
   ].map(([source, value]) => [source, normalizeContentValue(value)]);
   const matched = candidates.find(([, content]) => content.trim());
 

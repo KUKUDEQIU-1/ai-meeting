@@ -1,8 +1,11 @@
+import crypto from 'crypto';
 import { get, run } from '../db/database.js';
 import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser, writeMeetingIndexRecord } from './feishuBitableClient.js';
 import { addTagsToNote, extractGetNoteContent, extractGetNoteContentWithMeta, getNoteDetail, getNoteList, getTopicNoteList } from './getnoteClient.js';
-import { analyzeMeetingText, syncTasksToFeishu } from './meetingService.js';
-import { saveTaskHistory, saveTaskInstances, saveTaskProgress, suppressHistoricalTasks, updateTaskInstancesFromProgress } from './taskHistoryService.js';
+import { analyzeMeetingText } from './meetingService.js';
+import { dispatchGetNoteTaskCard } from './feishuTaskCardService.js';
+import { createMeetingTaskDraft, getMeetingTaskDraftBySource, updateMeetingTaskDraftContent } from './taskDraftService.js';
+import { suppressHistoricalTasks } from './taskHistoryService.js';
 
 const SKIPPED_MESSAGE = '该 Get笔记已同步，跳过重复写入';
 
@@ -33,6 +36,10 @@ function getNotifyTarget() {
 }
 
 async function notifyUserSafe(params) {
+  if (params?.notifyUser) {
+    return params.notifyUser(params);
+  }
+
   try {
     const result = await sendMeetingTableToFeishuUser(params);
 
@@ -84,6 +91,14 @@ function getNoteTags(note) {
   }
 
   return tags.map((tag) => (typeof tag === 'string' ? tag : tag?.name || tag?.title || '')).filter(Boolean);
+}
+
+export function isDatedTodayWorkArrangementTitle(title) {
+  const value = String(title || '').trim();
+  const hasTodayWorkArrangement = /今日\s*工作\s*安排/.test(value);
+  const hasDate = /(?:\d{4}[-/.年]\s*)?\d{1,2}\s*(?:[-/.月]\s*)\d{1,2}\s*(?:日)?/.test(value);
+
+  return hasTodayWorkArrangement && hasDate;
 }
 
 function getNoteTopics(note) {
@@ -166,6 +181,22 @@ function parseJson(value) {
   }
 }
 
+function normalizeHashContent(value) {
+  return String(value || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+}
+
+export function buildGetNoteContentHash({ noteId, contentSource, rawText }) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify({
+      source_type: 'getnote',
+      note_id: String(noteId || '').trim(),
+      content_source: String(contentSource || '').trim(),
+      content: normalizeHashContent(rawText)
+    }))
+    .digest('hex');
+}
+
 function countRawTasks(analysis) {
   return analysis.raw_tasks?.length || analysis.tasks?.length || 0;
 }
@@ -219,14 +250,15 @@ async function upsertSyncRecord({
   notifyTargetId,
   notifyStatus,
   notifyError,
-  errorMessage
+  errorMessage,
+  contentHash
 }) {
   const timestamp = nowIso();
 
   await run(
     `INSERT INTO getnote_sync_records
-      (note_id, title, status, table_id, table_name, table_url, table_schema_version, content_source, content_length, used_transcript, summary, analysis_json, feishu_result_json, notify_target_type, notify_target_id, notify_status, notify_error, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (note_id, title, status, table_id, table_name, table_url, table_schema_version, content_source, content_length, content_hash, used_transcript, summary, analysis_json, feishu_result_json, notify_target_type, notify_target_id, notify_status, notify_error, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(note_id) DO UPDATE SET
       title = excluded.title,
       status = excluded.status,
@@ -236,6 +268,7 @@ async function upsertSyncRecord({
       table_schema_version = excluded.table_schema_version,
       content_source = excluded.content_source,
       content_length = excluded.content_length,
+      content_hash = excluded.content_hash,
       used_transcript = excluded.used_transcript,
       summary = excluded.summary,
       analysis_json = excluded.analysis_json,
@@ -256,6 +289,7 @@ async function upsertSyncRecord({
       tableSchemaVersion || null,
       contentSource || null,
       contentLength || 0,
+      contentHash || null,
       usedTranscript ? 1 : 0,
       summary || null,
       analysisJson ? JSON.stringify(analysisJson) : null,
@@ -284,7 +318,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
   console.log(`[GetNote Sync] import start note_id=${normalizedNoteId}`);
   logFeishuRuntimeDiagnostics('importGetNoteMeeting');
 
-  if (existingRecord?.status === 'success' && !options.force) {
+  if (existingRecord?.status === 'success' && !existingRecord.content_hash && !options.force) {
     return {
       success: true,
       note_id: normalizedNoteId,
@@ -306,6 +340,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
   let meetingTitle = 'Get笔记会议';
   let rawText = '';
   let contentMeta = null;
+  let contentHash = '';
   let meetingTable = null;
   let notifyStatus = 'pending';
   let notifyError = null;
@@ -340,7 +375,40 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     contentMeta = extractGetNoteContentWithMeta(note);
     rawText = contentMeta.content;
     const usedTranscript = ['audio.original', 'audio.transcript', 'transcript', 'audio.text'].includes(contentMeta.source);
+    contentHash = buildGetNoteContentHash({ noteId: normalizedNoteId, contentSource: contentMeta.source, rawText });
     console.log(`[GetNote Sync] content extracted note_id=${normalizedNoteId} source=${contentMeta.source} length=${contentMeta.length} has_summary=${contentMeta.has_summary}`);
+
+    if (!options.force && existingRecord?.content_hash === contentHash && ['success', 'pending_confirmation'].includes(existingRecord.status)) {
+      await upsertSyncRecord({
+        noteId: normalizedNoteId,
+        title: meetingTitle,
+        status: existingRecord.status,
+        tableId: existingRecord.table_id,
+        tableName: existingRecord.table_name,
+        tableUrl: existingRecord.table_url,
+        tableSchemaVersion: existingRecord.table_schema_version,
+        contentSource: contentMeta.source,
+        contentLength: contentMeta.length,
+        contentHash,
+        usedTranscript,
+        summary: existingRecord.summary,
+        analysisJson: parseJson(existingRecord.analysis_json),
+        feishuResult: parseJson(existingRecord.feishu_result_json),
+        notifyTargetType,
+        notifyTargetId,
+        notifyStatus: existingRecord.notify_status,
+        notifyError: existingRecord.notify_error
+      });
+      return {
+        success: true,
+        note_id: normalizedNoteId,
+        title: meetingTitle,
+        status: 'skipped',
+        reason: 'content_unchanged',
+        table_url: existingRecord.table_url || undefined,
+        content_hash: contentHash
+      };
+    }
 
     if (!hasTranscriptContent(contentMeta)) {
       console.warn(`[GetNote Sync] transcript not ready note_id=${normalizedNoteId} source=${contentMeta.source}`);
@@ -353,6 +421,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
         status: 'skipped',
         contentSource: contentMeta.source,
         contentLength: contentMeta.length,
+        contentHash,
         usedTranscript: false,
         summary: contentMeta.summary,
         errorMessage: 'transcript_not_ready',
@@ -378,6 +447,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
         status: 'skipped',
         contentSource: contentMeta.source,
         contentLength: contentMeta.length,
+        contentHash,
         usedTranscript: false,
         summary: contentMeta.summary,
         errorMessage: 'transcript_not_ready',
@@ -405,7 +475,11 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       aiResult = await analyzeMeetingText(rawText, 'Get笔记', {
         content_source: contentMeta.source,
         content_length: contentMeta.length,
-        getnote_summary: contentMeta.summary || ''
+        source_type: 'getnote',
+        generateMeetingSummary: options.generateMeetingSummary,
+        generateMeetingTasks: options.generateMeetingTasks,
+        validateMeetingTasks: options.validateMeetingTasks,
+        dedupeMeetingTasksSemantically: options.dedupeMeetingTasksSemantically
       });
       const rawTasksBeforeHistory = countRawTasks(aiResult);
       const candidateTasksBeforeHistory = aiResult.tasks.length;
@@ -435,7 +509,11 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       .filter(Boolean)
       .slice(0, 5)
       .join('；');
-    console.log(`[GetNote Sync] format tasks for bitable start today_tasks_count=${todayTasksCount} progress_updates_count=${progressUpdatesCount} history_suppressed_count=${historySuppressedCount}`);
+    if (todayTasksCount === 0) {
+      throw new Error('GetNote 未提取到可确认的新任务');
+    }
+
+    console.log(`[GetNote Sync] prepare pending draft today_tasks_count=${todayTasksCount} progress_updates_count=${progressUpdatesCount} history_suppressed_count=${historySuppressedCount}`);
     const meetingMeta = {
       meeting_title: meetingTitle,
       meeting_source: 'Get笔记',
@@ -445,7 +523,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
 
     console.log(`[GetNote Sync] load master task table start note_id=${normalizedNoteId} title=${meetingTitle}`);
 
-    meetingTable = await getMasterTaskTable();
+    meetingTable = await (options.getMasterTaskTable || getMasterTaskTable)();
 
     console.log(`[GetNote Sync] master task table ready table_id=${meetingTable.table_id} table_name=${meetingTable.table_name} table_url=${meetingTable.table_url || ''}`);
 
@@ -463,6 +541,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       tableSchemaVersion: meetingTable.table_schema_version,
       contentSource: contentMeta.source,
       contentLength: contentMeta.length,
+      contentHash,
       usedTranscript,
       summary: aiResult.summary,
       analysisJson: aiResult,
@@ -472,61 +551,45 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       notifyError
     });
 
-    console.log(`[GetNote Sync] sync final tasks to master table start table_id=${meetingTable.table_id} tasks_count=${aiResult.tasks.length}`);
+    const existingDraft = await getMeetingTaskDraftBySource('getnote', normalizedNoteId, { includeAnyStatus: true });
+    const draftPayload = {
+      meetingTitle,
+      meetingSource: 'Get笔记',
+      meetingTime: note.created_at || note.updated_at || '',
+      summary: aiResult.summary,
+      draftTasks: aiResult.tasks,
+      progressUpdates: aiResult.progress_updates,
+      discardedItems: aiResult.discarded_items || [],
+      contentSource: contentMeta.source,
+      contentLength: contentMeta.length,
+      rawContent: rawText,
+      tableId: meetingTable.table_id,
+      tableName: meetingTable.table_name,
+      tableUrl: meetingTable.table_url,
+      resolutionJson: { source_type: 'getnote', content_hash: contentHash }
+    };
+    const draft = existingDraft
+      ? await updateMeetingTaskDraftContent(existingDraft.id, draftPayload)
+      : await createMeetingTaskDraft({ sourceType: 'getnote', sourceId: normalizedNoteId, segments: [], discardedSegments: [], existingMatches: [], uncertainTasks: [], ...draftPayload });
+    const feishuResult = await dispatchGetNoteTaskCard(draft, options.cardDispatchDeps || {});
 
-    const feishuResult = await syncTasksToFeishu(
-      aiResult.tasks,
-      {
-        ...meetingMeta,
-        table_id: meetingTable.table_id,
-        app_token: meetingTable.app_token
-      },
-      { table_id: meetingTable.table_id, app_token: meetingTable.app_token, requireDynamicTable: true, masterTaskTable: true }
-    );
-
-    if (!feishuResult.success) {
-      const firstFailure = feishuResult.failed[0];
-      const error = new Error(firstFailure?.reason || '飞书同步失败');
+    if (feishuResult.status !== 'success') {
+      const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片发送失败');
       error.feishuSync = feishuResult;
       throw error;
     }
 
-    console.log(`[GetNote Sync] sync final tasks to master table done table_id=${meetingTable.table_id} success_count=${feishuResult.created_count} failed_count=${feishuResult.failed.length}`);
-
-    await saveTaskHistory(aiResult.tasks, {
-      note_id: normalizedNoteId,
-      meeting_title: meetingTitle,
-      table_id: meetingTable.table_id,
-      table_url: meetingTable.table_url
-    });
-    await saveTaskInstances(aiResult.tasks, feishuResult.created_records || [], {
-      note_id: normalizedNoteId,
-      meeting_title: meetingTitle,
-      table_id: meetingTable.table_id,
-      table_url: meetingTable.table_url,
-      app_token: meetingTable.app_token
-    });
-    await saveTaskProgress(aiResult.progress_updates, {
-      note_id: normalizedNoteId,
-      meeting_title: meetingTitle
-    });
-    const linkedProgressResult = await updateTaskInstancesFromProgress(aiResult.progress_updates, {
-      note_id: normalizedNoteId,
-      meeting_title: meetingTitle,
-      meeting_time: note.created_at || note.updated_at || ''
-    });
-    console.log(`[GetNote Sync] task progress status update updated=${linkedProgressResult.updated_count} skipped=${linkedProgressResult.skipped_count} failed=${linkedProgressResult.failed.length}`);
-
     await upsertSyncRecord({
       noteId: normalizedNoteId,
       title: meetingTitle,
-      status: 'success',
+      status: 'pending_confirmation',
       tableId: meetingTable.table_id,
       tableName: meetingTable.table_name,
       tableUrl: meetingTable.table_url,
       tableSchemaVersion: meetingTable.table_schema_version,
       contentSource: contentMeta.source,
       contentLength: contentMeta.length,
+      contentHash,
       usedTranscript,
       summary: aiResult.summary,
       analysisJson: aiResult,
@@ -536,10 +599,10 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       notifyStatus,
       notifyError
     });
-    console.log(`[GetNote Sync] record saved note_id=${normalizedNoteId} table_id=${meetingTable.table_id} status=success`);
+    console.log(`[GetNote Sync] record saved note_id=${normalizedNoteId} table_id=${meetingTable.table_id} status=pending_confirmation`);
 
     try {
-      await writeMeetingIndexRecord({
+      await (options.writeMeetingIndex || writeMeetingIndexRecord)({
         meeting_title: meetingTitle,
         meeting_time: note.created_at || note.updated_at || '',
         meeting_source: 'Get笔记',
@@ -547,7 +610,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
         summary: aiResult.summary,
         table_url: meetingTable.table_url,
         note_id: normalizedNoteId,
-        status: 'success',
+        status: 'pending_confirmation',
         content_source: contentMeta.source,
         content_length: contentMeta.length,
         used_transcript: usedTranscript,
@@ -561,32 +624,20 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       console.warn(`[GetNote Sync] write meeting index skipped error=${error.message}`);
     }
 
-    const notifyResult = await notifyUserSafe({
-      meeting_title: meetingTitle,
-      meeting_source: 'Get笔记',
-      table_name: meetingTable.table_name,
-      table_url: meetingTable.table_url,
-      note_id: normalizedNoteId,
-      status: 'success',
-      tasks_count: aiResult.tasks.length,
-      today_tasks_count: todayTasksCount,
-      progress_updates_count: progressUpdatesCount,
-      discarded_items_count: discardedItemsCount,
-      needs_confirmation_count: needsConfirmationCount
-    });
-    notifyStatus = notifyResult.status;
-    notifyError = notifyResult.error;
+    notifyStatus = 'skipped';
+    notifyError = null;
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,
       title: meetingTitle,
-      status: 'success',
+      status: 'pending_confirmation',
       tableId: meetingTable.table_id,
       tableName: meetingTable.table_name,
       tableUrl: meetingTable.table_url,
       tableSchemaVersion: meetingTable.table_schema_version,
       contentSource: contentMeta.source,
       contentLength: contentMeta.length,
+      contentHash,
       usedTranscript,
       summary: aiResult.summary,
       analysisJson: aiResult,
@@ -596,15 +647,15 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       notifyStatus,
       notifyError
     });
-    console.log(`[GetNote Sync] notify user done note_id=${normalizedNoteId} status=${notifyStatus}${notifyError ? ` error=${notifyError}` : ''}`);
+    console.log(`[GetNote Sync] legacy notify skipped note_id=${normalizedNoteId} status=${notifyStatus}`);
 
-    await addTagsToNote(normalizedNoteId, [process.env.GETNOTE_PROCESSED_TAG?.trim() || '已同步飞书']);
+    await (options.addTags || addTagsToNote)(normalizedNoteId, [process.env.GETNOTE_PROCESSED_TAG?.trim() || '已同步飞书']);
 
     return {
       success: true,
       note_id: normalizedNoteId,
       title: meetingTitle,
-      status: 'success',
+      status: 'pending_confirmation',
       meeting_title: meetingTitle,
       table_id: meetingTable.table_id,
       table_name: meetingTable.table_name,
@@ -630,22 +681,15 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       needs_confirmation_count: needsConfirmationCount,
       extracted_content_length: rawText.length,
       generated_tasks_count: aiResult.tasks.length,
-      feishu_result: feishuResult
+      feishu_result: feishuResult,
+      draft_id: draft.id,
+      content_hash: contentHash
     };
   } catch (error) {
     const feishuResult = error.feishuSync || null;
 
-    const failureNotifyResult = await notifyUserSafe({
-      meeting_title: meetingTitle,
-      meeting_source: 'Get笔记',
-      note_id: normalizedNoteId,
-      status: 'failed',
-      table_name: meetingTable?.table_name,
-      table_url: meetingTable?.table_url,
-      error_message: error.message
-    });
-    notifyStatus = failureNotifyResult.status;
-    notifyError = failureNotifyResult.error;
+    notifyStatus = 'skipped';
+    notifyError = null;
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,
@@ -657,6 +701,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       tableSchemaVersion: meetingTable?.table_schema_version,
       contentSource: contentMeta?.source,
       contentLength: contentMeta?.length,
+      contentHash,
       usedTranscript: contentMeta ? ['audio.original', 'audio.transcript', 'transcript', 'audio.text'].includes(contentMeta.source) : false,
       feishuResult,
       notifyTargetType,
@@ -712,6 +757,12 @@ export async function syncRecentGetNotes({ limit, tag, ignoreTag = false, reanal
       if (!isWithinLookback(note, maxLookbackDays)) {
         skipped.push({ note_id: noteId, title, reason: 'outside_lookback' });
         console.log(`[GetNote Sync] skipped note_id=${noteId} reason=outside_lookback`);
+        continue;
+      }
+
+      if (!isDatedTodayWorkArrangementTitle(title)) {
+        skipped.push({ note_id: noteId, title, reason: 'title_not_dated_today_work_arrangement', table_url: null });
+        console.log(`[GetNote Sync] skipped note_id=${noteId} reason=title_not_dated_today_work_arrangement`);
         continue;
       }
 
