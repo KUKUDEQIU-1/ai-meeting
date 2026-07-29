@@ -571,7 +571,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     const draft = existingDraft
       ? await updateMeetingTaskDraftContent(existingDraft.id, draftPayload)
       : await createMeetingTaskDraft({ sourceType: 'getnote', sourceId: normalizedNoteId, segments: [], discardedSegments: [], existingMatches: [], uncertainTasks: [], ...draftPayload });
-    const feishuResult = await dispatchGetNoteTaskCard(draft, options.cardDispatchDeps || {});
+    const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), force: options.force });
 
     if (feishuResult.status !== 'success') {
       const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片发送失败');

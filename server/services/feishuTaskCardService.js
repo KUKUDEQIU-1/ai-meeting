@@ -228,7 +228,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
   const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
   const hasSentSplitMessages = existingMessages.some((message) => message.delivery_status === 'sent' && message.card_message_id);
-  if (existingState?.delivery_status === 'sent' && (existingState.card_message_id || hasSentSplitMessages)) {
+  if (!deps.force && existingState?.delivery_status === 'sent' && (existingState.card_message_id || hasSentSplitMessages)) {
     return { status: 'success', sent_count: 0, skipped_count: 1, failed_count: 0, results: [{ status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id }] };
   }
 

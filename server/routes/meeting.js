@@ -23,6 +23,17 @@ function bearerToken(req) {
   return header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';
 }
 
+function requestBool(value) {
+  return value === true || value === 'true' || value === '1';
+}
+
+function getNoteImportOptions(body) {
+  return {
+    force: requestBool(body?.force),
+    reanalyze: requestBool(body?.reanalyze)
+  };
+}
+
 function requireMaintenanceToken(req, res, next) {
   const token = configuredMaintenanceToken();
 
@@ -422,7 +433,7 @@ router.post('/import-getnote', async (req, res, next) => {
       return;
     }
 
-    const result = await importGetNoteMeeting(noteId);
+    const result = await importGetNoteMeeting(noteId, getNoteImportOptions(req.body));
 
     if (result.status === 'skipped') {
       res.json({
@@ -473,7 +484,7 @@ router.post('/sync-getnote', async (req, res, next) => {
       let result;
 
       try {
-        result = await importGetNoteMeeting(noteId);
+        result = await importGetNoteMeeting(noteId, getNoteImportOptions(req.body));
       } catch (error) {
         res.status(error.status || 502).json({
           success: false,
