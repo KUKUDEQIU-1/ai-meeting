@@ -1481,6 +1481,38 @@ async function testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit() {
   assert.equal(assigneeSelect.options[0].value, '负责人1');
 }
 
+async function testGetNoteDispatchForceResendsExistingSentCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-force-resend-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 强制重发测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{ item_id: 'getnote_force_1', task_name: 'GetNote 强制重发任务', assignee: '待确认' }],
+    tableId: 'table_getnote_force',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentCards = [];
+  const deps = {
+    receiveId: 'ou_getnote_reviewer',
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      return `om_getnote_force_${draft.id}_${sentCards.length}`;
+    }
+  };
+
+  const first = await dispatchGetNoteTaskCard(draft, deps);
+  const skipped = await dispatchGetNoteTaskCard(draft, deps);
+  const resent = await dispatchGetNoteTaskCard(draft, { ...deps, force: true });
+
+  assert.equal(first.sent_count, 1);
+  assert.equal(skipped.skipped_count, 1);
+  assert.equal(skipped.results[0].reason, 'already_sent');
+  assert.equal(resent.sent_count, 1);
+  assert.equal(sentCards.length, 2);
+}
+
 async function testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership() {
   const draft = await createGetNoteActionDraft(`getnote-regular-mark-new-${Date.now()}`);
   const finalized = [];
@@ -3403,6 +3435,7 @@ await testGetNoteSubmitFinalizesOnlyOneTaskAndIsReplaySafe();
 await testGetNoteDiscardWritesNothingAndIsReplaySafe();
 await testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions();
 await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
+await testGetNoteDispatchForceResendsExistingSentCard();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
