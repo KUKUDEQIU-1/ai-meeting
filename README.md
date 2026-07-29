@@ -179,6 +179,20 @@ npm run list:feishu-group-members
 
 该命令只输出成员姓名和 `open_id`，不会输出应用密钥或访问令牌。
 
+统一运维脚本仅用于手动诊断。它只编排现有健康检查、bot 群成员读取、draft 投递状态和失败卡片补发接口；不会重新实现任务分析、不会直接写数据库、不会扫描 Wiki，也不会启动常驻 worker。
+
+```bash
+npm run ops:feishu -- --health
+npm run ops:feishu -- --members
+npm run ops:feishu -- --draft 130
+npm run ops:feishu -- --resend-failed --draft 130 --assignee "洪伟填"
+npm run ops:feishu -- --resend-failed --draft 130 --assignee "洪伟填" --execute
+```
+
+默认是检查/预演模式；只有显式传入 `--execute` 才会调用现有补发接口真正发送失败卡片。补发仍然走服务端 bot `open_id` 发卡链路，`FEISHU_DOCX_SOURCE_API_TOKEN` 只用于保护维护接口。不要把 `ops:feishu` 当成 Wiki 扫描或 worker 启动命令。
+
+如需周期性诊断，可以手动运行 `npm --prefix server run ops:feishu -- --interval 1m --health --members --draft 130`；生产 Wiki 扫描仍由 `server/index.js` 内的 resident worker 负责。
+
 手动映射仅作为群成员接口不可用时的兜底配置：
 
 ```env
@@ -450,17 +464,76 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 
 ## 飞书会议原文目录自动扫描
 
-常驻 worker 会扫描 `FEISHU_WIKI_SOURCE_NODE_URL` 指向的飞书 Wiki 目录，也就是“会议原文”节点下的 docx 子文档。用户在该目录下新增或更新会议原文文档后，worker 每 15 分钟读取子文档内容，生成待确认草稿，并通过飞书私聊卡片发送给对应负责人。
+生产固定流程为：`server/index.js` 启动内置 resident worker，worker 扫描 `FEISHU_WIKI_SOURCE_NODE_URL` 或 `FEISHU_WIKI_SOURCE_NODE_TOKEN` 指向的飞书 Wiki 目录，读取子 docx 原文，然后走同一条 bot-only 导入链路：
 
-该流程使用飞书 Wiki/docx 读取能力，不扫描飞书会议接口，也不需要配置会议 `user_access_token` 或 `refresh_token`。
+```text
+Wiki 目录 -> docx raw content -> AI/import draft -> bot 私聊任务卡片 -> 负责人确认入总任务表
+```
 
-生产默认目录：
+该流程不会调用飞书 Meeting Notes 详情/产物接口，不需要也不会回退到会议 `user_access_token` 或 `refresh_token`。如果 Wiki/docx 扫描遇到 HTTP 401/403，应按权限/配置阻断处理：检查应用凭证、知识库权限、docx 权限、总任务表权限和机器人发卡权限，不要切换到用户 token 或其他来源。
+
+常驻 worker 会扫描 Wiki 目录下的 docx 子文档。用户在该目录下新增或更新会议原文文档后，worker 默认每 1 分钟读取子文档内容，生成待确认草稿，并通过飞书私聊卡片发送给对应负责人。可通过 `FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES` 调整间隔。
+
+必须配置的 bot-only 生产变量：
+
+```env
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+FEISHU_WIKI_SOURCE_NODE_URL=https://qcn65gkeqmrk.feishu.cn/wiki/K40WwNEP3ipVSRkaKwec3dlwnrh?fromScene=spaceOverview
+# 或：FEISHU_WIKI_SOURCE_NODE_TOKEN=K40WwNEP3ipVSRkaKwec3dlwnrh
+FEISHU_WIKI_SOURCE_SPACE_ID=7633724002921368754
+FEISHU_WIKI_SCAN_LIMIT=20
+FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES=1
+FEISHU_BITABLE_APP_TOKEN=base_xxx
+FEISHU_MASTER_TASK_TABLE_ID=tbl_xxx
+# 至少配置以下三项之一用于 bot 私聊卡片投递/映射
+FEISHU_TASK_GROUP_CHAT_ID=oc_xxx
+FEISHU_ASSIGNEE_MAP_JSON={"张三":"ou_xxx"}
+FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID=ou_xxx
+FEISHU_EVENT_VERIFICATION_TOKEN=
+AI_API_KEY=
+AI_TIMEOUT_MS=300000
+```
+
+生产默认目录示例：
 
 ```env
 FEISHU_WIKI_SOURCE_NODE_URL=https://qcn65gkeqmrk.feishu.cn/wiki/K40WwNEP3ipVSRkaKwec3dlwnrh?fromScene=spaceOverview
 FEISHU_WIKI_SOURCE_SPACE_ID=7633724002921368754
 FEISHU_WIKI_SCAN_LIMIT=20
+FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES=1
 ```
+
+手动跑一轮（不常驻，适合发布后验证配置和权限）：
+
+```bash
+npm run worker:feishu-wiki -- --once
+npm run worker:feishu-wiki -- --once --limit 5 --force --reanalyze
+```
+
+手动常驻模式（一个进程，启动后立即跑第一轮，之后按间隔运行；上一轮未结束会跳过重叠轮次）：
+
+```bash
+npm run worker:feishu-wiki -- --resident
+npm run worker:feishu-wiki -- --resident --interval-minutes 1
+```
+
+生产 PM2 推荐运行 HTTP 服务进程，由 `server/index.js` 自动启动 resident worker：
+
+```bash
+pm2 start ecosystem.config.cjs
+pm2 logs ai-meeting-server
+pm2 restart ai-meeting-server
+pm2 stop ai-meeting-server
+```
+
+也可不使用 ecosystem 文件直接启动：
+
+```bash
+pm2 start server/index.js --name ai-meeting-server
+```
+
+旧的 GetNote 命令仍保留给 Get笔记来源使用；不要用 `server/scripts/worker-getnote.ts` 作为 Wiki/docx 生产 resident worker。
 
 ## 飞书单 docx 在线来源管理
 
@@ -544,36 +617,13 @@ npm run worker:getnote
 
 重复点击“确认我的任务入总表”是幂等的：已确认负责人再次回调会直接返回已处理提示，不会再次使用回调输入构造任务数组。当前私有卡片流程优先覆盖飞书会议智能纪要/docx 的草稿路径；直接 GetNote 入表路径仍保持原有行为。
 
-### 生产部署建议
+### GetNote 生产部署建议
 
-使用 PM2 常驻运行：
-
-```bash
-pm2 start npm --name getnote-worker -- run worker:getnote
-```
-
-查看日志：
-
-```bash
-pm2 logs getnote-worker
-```
-
-重启：
-
-```bash
-pm2 restart getnote-worker
-```
-
-停止：
-
-```bash
-pm2 stop getnote-worker
-```
-
-也可以用系统定时任务每 15 分钟执行：
+GetNote 是保留的独立来源，不是 Wiki/docx resident worker。若仍需使用 GetNote，可手动执行：
 
 ```bash
 npm run sync:getnote
+npm run worker:getnote
 ```
 
 ## 注意事项
