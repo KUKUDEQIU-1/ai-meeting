@@ -42,6 +42,12 @@ export function normalizeAssigneeKey(value) {
   return text || '待确认';
 }
 
+export function itemScopeIncludes(itemScope, itemId) {
+  const scope = String(itemScope || '').trim();
+  if (!scope) return true;
+  return scope.split(',').map((item) => item.trim()).filter(Boolean).includes(String(itemId || ''));
+}
+
 export function parseAssigneeMap(value = process.env.FEISHU_ASSIGNEE_MAP_JSON || '') {
   if (!value?.trim()) return new Map();
 
@@ -190,6 +196,12 @@ function selectElement({ tag, options, value }) {
   return element;
 }
 
+function assigneeSelectElement({ tag, options, value }) {
+  const element = selectElement({ tag, options, value });
+  element.columns[0].elements[0].placeholder = { tag: 'plain_text', content: '负责人' };
+  return element;
+}
+
 function datePickerElement({ tag, label, value }) {
   const dateText = String(value || '').trim();
   const element = {
@@ -270,8 +282,11 @@ function callbackButton({ name, text, type, value }) {
   };
 }
 
-function taskActionSet({ draft, assignee, task }) {
+function taskActionSet({ draft, assignee, task, cardKind = 'tasks' }) {
   const itemId = String(task.item_id || '');
+  const actionBase = cardKind === 'tasks'
+    ? { draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+    : { draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId, card_kind: cardKind };
   return {
     tag: 'column_set',
     columns: [
@@ -283,7 +298,7 @@ function taskActionSet({ draft, assignee, task }) {
           name: `mark_new_${itemId}`,
           text: '标记为新任务',
           type: task.task_choice === 'new_task' ? 'primary' : 'default',
-          value: { action: 'mark_task_as_new', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+          value: { ...actionBase, action: 'mark_task_as_new' }
         })]
       },
       {
@@ -294,7 +309,7 @@ function taskActionSet({ draft, assignee, task }) {
           name: `mark_old_${itemId}`,
           text: '标记为旧任务进展',
           type: task.task_choice === 'old_task_progress' ? 'primary' : 'default',
-          value: { action: 'mark_task_as_progress', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+          value: { ...actionBase, action: 'mark_task_as_progress' }
         })]
       },
       {
@@ -305,7 +320,7 @@ function taskActionSet({ draft, assignee, task }) {
           name: `discard_${itemId}`,
           text: '丢弃',
           type: 'danger',
-          value: { action: 'discard_task', draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
+          value: { ...actionBase, action: 'discard_task' }
         })]
       }
     ]
@@ -341,6 +356,23 @@ function handledTaskSummary(task, itemId) {
   return title ? labelElement(`**事项 ${truncateText(itemId, 24)}｜${title}**\n${truncateText(taskNameOf(task), 120)}${detail}`) : null;
 }
 
+export function buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions = [], assigneeOptions = [], terminal = false }) {
+  return buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks,
+    terminal,
+    oldTaskOptions,
+    assigneeOptions,
+    compact: true,
+    cardKind: 'getnote_tasks',
+    sourceLabel: 'GetNote',
+    formName: 'getnote_task_form',
+    pendingTitle: 'GetNote 任务待确认',
+    terminalTitle: 'GetNote 任务已处理'
+  });
+}
+
 function terminalTaskSummaryContent({ draft, assignee, tasks }) {
   const groups = { new_task: [], old_task_progress: [], discarded: [] };
 
@@ -373,7 +405,7 @@ function terminalTaskSummaryContent({ draft, assignee, tasks }) {
   return lines.join('\n');
 }
 
-function compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) {
+function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeOptions = [], cardKind = 'tasks' }) {
   const elements = [
     { tag: 'markdown', content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 60)}\n**负责人：** ${truncateText(assignee.assignee_name, 30)}\n卡片内容较长，已切换为精简确认模式。` },
     { tag: 'hr' }
@@ -385,30 +417,29 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) {
 
     if (task.status && task.status !== 'pending') continue;
 
-    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**\n${truncateText(taskNameOf(task), 80)}` });
-    elements.push(labelElement('**新任务**'));
+    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
-    elements.push(labelElement('**旧任务**'));
+    if (assigneeOptions.length) {
+      elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
+    }
     const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
     if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
-    elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
-    elements.push(taskActionSet({ draft, assignee, task }));
-    elements.push({ tag: 'hr' });
+    elements.push(taskActionSet({ draft, assignee, task, cardKind }));
   }
 
   return elements;
 }
 
-export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false, confirmItemId = '', oldTaskOptions = [] }) {
+export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false, confirmItemId = '', oldTaskOptions = [], assigneeOptions = [], cardKind = 'tasks', sourceLabel = '', formName = 'meeting_task_form', pendingTitle = '', terminalTitle = '' }) {
   if (terminal) {
     return {
       schema: '2.0',
       config: { wide_screen_mode: true, update_multi: true },
       header: {
         template: 'green',
-        title: { tag: 'plain_text', content: '会议任务已确认' }
+        title: { tag: 'plain_text', content: terminalTitle || '会议任务已确认' }
       },
       body: {
         elements: [{
@@ -419,10 +450,10 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     };
   }
 
-  const elements = compact ? compactTaskElements({ draft, assignee, tasks, oldTaskOptions }) : [
+  const elements = compact ? compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeOptions, cardKind }) : [
     {
       tag: 'markdown',
-      content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}`
+      content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}${sourceLabel ? `\n**来源：** ${truncateText(sourceLabel, 40)}` : ''}`
     },
     { tag: 'hr' }
   ];
@@ -446,12 +477,12 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
       config: { wide_screen_mode: true, update_multi: true },
       header: {
         template: draft?.confirmation_error ? 'red' : 'blue',
-        title: { tag: 'plain_text', content: draft?.confirmation_error ? '会议任务确认失败' : cardTitle({ assignee, label: '任务归类待确认' }) }
+        title: { tag: 'plain_text', content: draft?.confirmation_error ? '会议任务确认失败' : (pendingTitle || cardTitle({ assignee, label: '任务归类待确认' })) }
       },
       body: {
         elements: [{
           tag: 'form',
-          name: 'meeting_task_form',
+          name: formName,
           elements
         }]
       }
@@ -474,13 +505,16 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**\n${taskChoiceStatusText(task)}` });
     elements.push(labelElement('**新任务**'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
+    if (assigneeOptions.length) {
+      elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
+    }
     elements.push(labelElement('**旧任务**'));
     const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
     if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
     elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
-    elements.push(taskActionSet({ draft, assignee, task }));
+    elements.push(taskActionSet({ draft, assignee, task, cardKind }));
     elements.push({ tag: 'hr' });
   }
 
@@ -489,12 +523,12 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     config: { wide_screen_mode: true, update_multi: true },
     header: {
       template: draft?.confirmation_error ? 'red' : 'blue',
-      title: { tag: 'plain_text', content: draft?.confirmation_error ? '会议任务确认失败' : cardTitle({ assignee, label: '任务归类待确认' }) }
+      title: { tag: 'plain_text', content: draft?.confirmation_error ? '会议任务确认失败' : (pendingTitle || cardTitle({ assignee, label: '任务归类待确认' })) }
     },
     body: {
       elements: [{
         tag: 'form',
-        name: 'meeting_task_form',
+        name: formName,
         elements
       }]
     }
@@ -708,8 +742,7 @@ export function buildMasterTaskPausedAuditCard({ audit, terminal = false }) {
 function extractAllowedFormValues(formValue, itemId) {
   const safeItemId = String(itemId || '');
   const suffix = safeItemId ? `_${safeItemId}` : '';
-
-  return {
+  const values = {
     task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
     progress_summary: firstString(formValue?.[`progress_summary${suffix}`], formValue?.progress_summary),
     matched_task_name: firstString(
@@ -722,6 +755,13 @@ function extractAllowedFormValues(formValue, itemId) {
     progress_text: firstString(formValue?.[`progress_text${suffix}`], formValue?.progress_text),
     task_note: firstString(formValue?.[`task_note${suffix}`], formValue?.task_note)
   };
+  const scopedAssignee = firstString(formValue?.[`assignee_select${suffix}`]);
+
+  if (scopedAssignee) {
+    values.assignee = scopedAssignee;
+  }
+
+  return values;
 }
 
 function isPlainObject(value) {
