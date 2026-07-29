@@ -15,6 +15,7 @@
     "sync:getnote": "node server/scripts/sync-getnote.ts",
     "daily:getnote": "node server/scripts/daily-getnote.ts",
     "worker:getnote": "node server/scripts/worker-getnote.ts",
+    "worker:feishu-wiki": "node server/scripts/feishu-wiki-worker.js",
     "debug:getnote-sync": "node server/scripts/test-getnote-import.js",
     "debug:feishu-row-height": "node server/scripts/debug-feishu-row-height.ts",
     "fix:meeting-table-fields": "node server/scripts/fix-meeting-table-fields.ts",

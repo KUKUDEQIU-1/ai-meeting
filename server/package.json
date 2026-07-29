@@ -37,12 +37,16 @@
     "daily:feishu-docx-notes": "node scripts/daily-feishu-docx-notes.ts",
     "worker:feishu-docx": "node scripts/worker-feishu-docx.ts",
     "sync:feishu-wiki-docx-notes": "node scripts/sync-feishu-wiki-docx-notes.ts",
+    "worker:feishu-wiki": "node scripts/feishu-wiki-worker.js",
     "test:feishu-wiki-docx-scan": "node scripts/test-feishu-wiki-docx-scan.js",
     "test:feishu-wiki-sync-route": "node scripts/test-feishu-wiki-sync-route.js",
     "list:feishu-group-members": "node scripts/list-feishu-group-members.js",
     "daily:meeting-tasks": "node scripts/daily-meeting-tasks.ts",
     "clear:master-task-table": "node scripts/clear-master-task-table.ts",
-    "list:master-tasks": "node scripts/list-master-tasks.ts"
+    "list:master-tasks": "node scripts/list-master-tasks.ts",
+    "ops:feishu": "node scripts/feishu-operations.js",
+    "test:feishu-operations": "node scripts/test-feishu-operations.js",
+    "test:feishu-wiki-worker": "node scripts/test-feishu-wiki-worker.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
