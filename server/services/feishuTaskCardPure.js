@@ -350,10 +350,10 @@ function handledTaskSummary(task, itemId) {
   const title = taskOutcomeTitle(outcome);
   const matchedName = matchedTaskNameOf(task);
   const detail = outcome === 'old_task_progress' && matchedName
-    ? `\n**旧任务：** ${truncateText(matchedName, 120)}`
+    ? ` / 旧任务：${truncateText(matchedName, 50)}`
     : '';
 
-  return title ? labelElement(`**事项 ${truncateText(itemId, 24)}｜${title}**\n${truncateText(taskNameOf(task), 120)}${detail}`) : null;
+  return title ? labelElement(`**事项 ${truncateText(itemId, 16)}｜${title}：** ${truncateText(taskNameOf(task), 60)}${detail}`) : null;
 }
 
 export function buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions = [], assigneeOptions = [], terminal = false }) {
@@ -432,7 +432,7 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeO
     const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
     if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
-    elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
+    elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: task.progress_summary || task.comment || '' }));
     elements.push(taskActionSet({ draft, assignee, task, cardKind }));
     elements.push({ tag: 'hr' });
   }

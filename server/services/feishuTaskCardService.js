@@ -176,7 +176,7 @@ async function loadActiveMasterTaskOptions(listRecords = listMasterTaskAuditReco
   }
 }
 
-export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, itemId = '' }, deps = {}) {
+export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, itemId = '', compactRefresh = false }, deps = {}) {
   const state = await getDraftAssigneeState(draftId, assigneeKey, cardKind);
   const draft = await getMeetingTaskDraftById(draftId);
 
@@ -198,14 +198,14 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   const scopedItemId = state.split_item_id || (scopedMessage ? itemId : '');
   const effectiveCardKind = state.card_kind || cardKind;
   const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
-  const oldTaskOptions = terminal
+  const oldTaskOptions = terminal || compactRefresh
     ? []
     : effectiveCardKind === 'getnote_tasks'
       ? await loadActiveMasterTaskOptions(listRecords)
       : effectiveCardKind === 'tasks'
         ? await loadOldTaskOptionsForAssignee(assignee.assignee_key, listRecords)
         : [];
-  const assigneeOptions = !terminal && effectiveCardKind === 'getnote_tasks'
+  const assigneeOptions = !terminal && !compactRefresh && effectiveCardKind === 'getnote_tasks'
     ? await buildMasterAssigneeOptions(listRecords)
     : [];
   const card = buildCardForKind({ cardKind: effectiveCardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId, oldTaskOptions, assigneeOptions });
