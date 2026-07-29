@@ -1700,6 +1700,7 @@ async function testGetNoteLastSplitItemUsesMixedFeedbackCard() {
   const messageId = `om_getnote_last_split_${draft.id}`;
   let refreshedCard = null;
   let updateTerminal = null;
+  let updateCompactRefresh = null;
 
   await upsertDraftAssigneeState({
     draftId: draft.id,
@@ -1732,14 +1733,14 @@ async function testGetNoteLastSplitItemUsesMixedFeedbackCard() {
   }), {
     listMasterTaskAuditRecords: async () => [{ assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
     finalizeAssignee: async () => ({ status: 'synced', created_count: 1 }),
-    updateCard: async ({ terminal, itemId }) => {
+    updateCard: async ({ terminal, itemId, compactRefresh }) => {
       const latestDraft = await getMeetingTaskDraftById(draft.id);
       updateTerminal = terminal;
+      updateCompactRefresh = compactRefresh;
       refreshedCard = buildGetNoteTaskReviewCard({
         draft: latestDraft,
         assignee: { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' },
         tasks: latestDraft.draft_tasks.filter((task) => itemScopeIncludes(itemId, task.item_id)),
-        assigneeOptions: [{ text: { tag: 'plain_text', content: '洪伟填' }, value: '洪伟填' }],
         terminal
       });
       return { status: 'updated' };
@@ -1749,6 +1750,7 @@ async function testGetNoteLastSplitItemUsesMixedFeedbackCard() {
 
   assert.equal(response.toast.content, '新任务已处理');
   assert.equal(updateTerminal, false);
+  assert.equal(updateCompactRefresh, true);
   assert.match(text, /已完成项 1/);
   assert.match(text, /已丢弃/);
   assert.match(text, /最后待点项/);
