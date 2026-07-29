@@ -787,6 +787,28 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
   }
 }
 
+export async function importFeishuMeetingNoteFromBotContent(noteId, options = {}) {
+  const noteContent = String(options.noteContent || '');
+
+  if (!noteContent.trim()) {
+    const error = new Error('noteContent is required for bot-only Feishu Wiki/docx import');
+    error.status = 400;
+    throw error;
+  }
+
+  return importFeishuMeetingNote(noteId, {
+    force: options.force,
+    reanalyze: options.reanalyze,
+    note: {
+      note_id: noteId,
+      title: options.title || '飞书知识库文档',
+      create_time: options.createTime || String(Math.floor(Date.now() / 1000)),
+      content: noteContent,
+      summary: options.summary || ''
+    }
+  });
+}
+
 export async function syncRecentFeishuMeetingNotes({ limit, reanalyze = false, transcriptOnly = false, maxLookbackDays } = {}) {
   const scanLimit = Number(limit) || envNumber('FEISHU_MEETING_NOTES_SCAN_LIMIT', 10);
   const minNoteAgeMinutes = envNumber('FEISHU_MEETING_NOTES_MIN_AGE_MINUTES', 5);

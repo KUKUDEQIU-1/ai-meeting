@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { all, get, run } from '../db/database.js';
 import { getFeishuDocxRawContent } from './feishuDocxClient.js';
-import { getFeishuMeetingNoteSyncRecord, importFeishuMeetingNote } from './feishuMeetingNotesImportService.js';
+import { getFeishuMeetingNoteSyncRecord, importFeishuMeetingNoteFromBotContent } from './feishuMeetingNotesImportService.js';
 import { extractWikiNodeToken, getFeishuWikiNode, listFeishuWikiChildNodes } from './feishuWikiClient.js';
 
 function nowIso() {
@@ -11,6 +11,17 @@ function nowIso() {
 function envNumber(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function envEnabled(name, fallback = false) {
+  const value = String(process.env[name] ?? '').trim().toLowerCase();
+  if (!value) return fallback;
+  return value === 'true';
+}
+
+function isPermissionError(error) {
+  const status = Number(error?.status || error?.response?.status || error?.response?.code);
+  return status === 401 || status === 403;
 }
 
 function contentHash(value) {
@@ -30,6 +41,28 @@ function tasksCountFromRecord(record) {
 
 function configuredNodeToken() {
   return extractWikiNodeToken(process.env.FEISHU_WIKI_SOURCE_NODE_TOKEN || process.env.FEISHU_WIKI_SOURCE_NODE_URL || '');
+}
+
+function toEpochMs(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return numeric > 1e12 ? numeric : numeric * 1000;
+}
+
+function startOfTodayMs() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+function selectRecentWikiDocxNodes(nodes, { onlyTodayNew } = {}) {
+  if (!onlyTodayNew) return nodes;
+  const todayStart = startOfTodayMs();
+  return (Array.isArray(nodes) ? nodes : []).filter((node) => {
+    const createdAtMs = toEpochMs(node?.node_create_time);
+    return createdAtMs >= todayStart;
+  });
 }
 
 export async function getFeishuWikiDocxSource(nodeToken) {
@@ -52,6 +85,19 @@ export function selectWikiDocxNodes({ rootNode, childNodes, rootToken, scanLimit
     .filter((node) => node.node_token !== rootToken));
 
   return selected.slice(0, scanLimit);
+}
+
+function dependencySet(overrides = {}) {
+  return {
+    getWikiNode: overrides.getWikiNode || getFeishuWikiNode,
+    listWikiChildNodes: overrides.listWikiChildNodes || listFeishuWikiChildNodes,
+    getDocxRawContent: overrides.getDocxRawContent || getFeishuDocxRawContent,
+    getMeetingNoteSyncRecord: overrides.getMeetingNoteSyncRecord || getFeishuMeetingNoteSyncRecord,
+    importMeetingNote: overrides.importMeetingNote || importFeishuMeetingNoteFromBotContent,
+    getWikiDocxSource: overrides.getWikiDocxSource || getFeishuWikiDocxSource,
+    upsertDiscoveredWikiDocxSource: overrides.upsertDiscoveredWikiDocxSource || upsertDiscoveredWikiDocxSource,
+    updateWikiSourceResult: overrides.updateWikiSourceResult || updateWikiSourceResult
+  };
 }
 
 async function upsertDiscoveredWikiDocxSource(node, context) {
@@ -109,33 +155,35 @@ function summarizeImported(node, doc, result, record) {
   };
 }
 
-export async function syncFeishuWikiDocxNotes({ limit, force = false, reanalyze = false, nodeTokenOrUrl } = {}) {
+export async function syncFeishuWikiDocxNotes({ limit, force = false, reanalyze = false, nodeTokenOrUrl, dependencies = {} } = {}) {
   const rootToken = extractWikiNodeToken(nodeTokenOrUrl || configuredNodeToken());
 
   if (!rootToken) {
     return { success: true, status: 'disabled', imported: [], skipped: [], failed: [], reason: 'wiki_source_not_configured' };
   }
 
+  const deps = dependencySet(dependencies);
   const scanLimit = Number(limit) || envNumber('FEISHU_WIKI_SCAN_LIMIT', 20);
-  const rootNode = await getFeishuWikiNode(rootToken);
+  const onlyTodayNew = envEnabled('FEISHU_WIKI_ONLY_TODAY_NEW', false);
+  const rootNode = await deps.getWikiNode(rootToken);
   const spaceId = process.env.FEISHU_WIKI_SOURCE_SPACE_ID?.trim() || rootNode.space_id;
   const parentNodeToken = rootNode.node_token || rootToken;
-  const nodes = await listFeishuWikiChildNodes({ spaceId, parentNodeToken, pageSize: scanLimit });
-  const docxNodes = selectWikiDocxNodes({ rootNode, childNodes: nodes, rootToken, scanLimit });
+  const nodes = await deps.listWikiChildNodes({ spaceId, parentNodeToken, pageSize: scanLimit });
+  const docxNodes = selectRecentWikiDocxNodes(selectWikiDocxNodes({ rootNode, childNodes: nodes, rootToken, scanLimit }), { onlyTodayNew });
   const imported = [];
   const skipped = [];
   const failed = [];
 
-  console.log(`[Feishu Wiki Sync] child nodes loaded count=${nodes.length} docx_count=${docxNodes.length} parent=${parentNodeToken}`);
+  console.log(`[Feishu Wiki Sync] child nodes loaded count=${nodes.length} docx_count=${docxNodes.length} parent=${parentNodeToken} only_today_new=${onlyTodayNew}`);
 
   for (const node of docxNodes) {
-    await upsertDiscoveredWikiDocxSource(node, { spaceId, parentNodeToken });
+    await deps.upsertDiscoveredWikiDocxSource(node, { spaceId, parentNodeToken });
 
     try {
-      const source = await getFeishuWikiDocxSource(node.node_token);
-      const doc = await getFeishuDocxRawContent(node.obj_token);
+      const source = await deps.getWikiDocxSource(node.node_token);
+      const doc = await deps.getDocxRawContent(node.obj_token);
       const hash = contentHash(doc.content);
-      const record = await getFeishuMeetingNoteSyncRecord(node.obj_token);
+      const record = await deps.getMeetingNoteSyncRecord(node.obj_token);
       const historicalTasksCount = tasksCountFromRecord(record) || Number(source?.last_tasks_count || 0);
 
       if (!force && source?.content_hash && source.content_hash === hash && source.last_sync_status !== 'failed') {
@@ -150,20 +198,17 @@ export async function syncFeishuWikiDocxNotes({ limit, force = false, reanalyze 
         continue;
       }
 
-      const result = await importFeishuMeetingNote(node.obj_token, {
+      const result = await deps.importMeetingNote(node.obj_token, {
         force,
         reanalyze,
-        note: {
-          note_id: node.obj_token,
-          title: node.title || '飞书知识库文档',
-          create_time: node.node_create_time || String(Math.floor(Date.now() / 1000)),
-          content: doc.content,
-          summary: ''
-        }
+        title: node.title || '飞书知识库文档',
+        createTime: node.node_create_time || String(Math.floor(Date.now() / 1000)),
+        noteContent: doc.content,
+        summary: ''
       });
       const row = summarizeImported(node, doc, result, record);
 
-      await updateWikiSourceResult(node.node_token, {
+      await deps.updateWikiSourceResult(node.node_token, {
         status: result.status || 'pending_confirmation',
         tasksCount: row.tasks_count,
         tableUrl: row.table_url,
@@ -178,8 +223,20 @@ export async function syncFeishuWikiDocxNotes({ limit, force = false, reanalyze 
         imported.push(row);
       }
     } catch (error) {
-      await updateWikiSourceResult(node.node_token, { status: 'failed', error: error.message });
-      failed.push({ node_token: node.node_token, document_id: node.obj_token, title: node.title, error: error.message });
+      await deps.updateWikiSourceResult(node.node_token, { status: 'failed', error: error.message });
+      const blocked = isPermissionError(error);
+      failed.push({ node_token: node.node_token, document_id: node.obj_token, title: node.title, error: error.message, status: blocked ? 'blocked' : 'failed' });
+
+      if (blocked) {
+        return {
+          success: false,
+          status: 'blocked',
+          reason: 'bot_permission_denied',
+          imported,
+          skipped,
+          failed
+        };
+      }
     }
   }
 
