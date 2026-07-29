@@ -19,7 +19,7 @@ import { buildMeetingTableNotifyText } from '../services/feishuBitableClient.js'
 import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
-import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
+import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, markDraftAssigneeConfirmed, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
 import { dispatchDraftTaskCards, dispatchGetNoteTaskCard } from '../services/feishuTaskCardService.js';
 import { findDuplicateTaskName, normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
 
@@ -1597,6 +1597,69 @@ async function testGetNoteRegularDiscardDoesNotRequireAssigneeSelection() {
   assert.equal(response.toast.content, '任务已丢弃');
   assert.equal(finalized.length, 0);
   assert.equal(stored.draft_tasks[0].status, 'discarded');
+}
+
+async function testGetNotePendingItemStaysActionableAfterReviewerConfirmedState() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-split-lock-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote split 锁测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'getnote_item_done', task_name: '已处理任务', assignee: '洪伟填', status: 'confirmed' },
+      { item_id: 'getnote_item_pending', task_name: '待处理任务', assignee: '待确认', status: 'pending' }
+    ],
+    tableId: 'table_getnote_split_lock',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const finalized = [];
+  const updates = [];
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    assigneeName: 'Wei Tian',
+    receiveId: 'ou_getnote_reviewer',
+    deliveryStatus: 'sent',
+    cardMessageId: `om_getnote_${draft.id}`
+  });
+  await markDraftAssigneeConfirmed({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    confirmedBy: 'ou_getnote_reviewer',
+    callbackId: 'evt_previous_getnote_item'
+  });
+
+  const response = await handleFeishuCardAction(getNotePayloadForActor({
+    draft,
+    eventId: 'evt_getnote_pending_after_confirmed_state',
+    action: 'mark_task_as_new',
+    operatorOpenId: 'ou_getnote_reviewer',
+    itemId: 'getnote_item_pending',
+    formValue: {
+      task_name_getnote_item_pending: '继续处理待处理任务',
+      assignee_select_getnote_item_pending: '洪伟填'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [{ assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
+    finalizeAssignee: async (params) => {
+      finalized.push(params);
+      return { status: 'synced', created_count: 1 };
+    },
+    updateCard: async (params) => {
+      updates.push(params);
+      return { status: 'updated' };
+    }
+  });
+  const stored = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '新任务已处理');
+  assert.equal(stored.draft_tasks.find((task) => task.item_id === 'getnote_item_pending').status, 'confirmed');
+  assert.deepEqual(finalized[0].itemIds, ['getnote_item_pending']);
+  assert.equal(updates[0].terminal, true);
 }
 
 async function testGetNoteSplitCardDiscardRefreshesClickedSplitScope() {
@@ -3439,6 +3502,7 @@ await testGetNoteDispatchForceResendsExistingSentCard();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
+await testGetNotePendingItemStaysActionableAfterReviewerConfirmedState();
 await testGetNoteSplitCardDiscardRefreshesClickedSplitScope();
 await testTaskChoiceCanConvertDraftTaskToProgress();
 await testOldTaskChoiceUsesStoredMatchedTaskWhenButtonOmitsDefaultInput();

@@ -373,7 +373,7 @@ export async function resetDraftAssigneeConfirmationToPending({ draftId, assigne
   await run(
     `UPDATE meeting_task_draft_assignees
      SET confirmation_status = 'pending', confirmation_error = '', last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
-      WHERE draft_id = ? AND assignee_key = ? AND card_kind = ? AND confirmation_status = 'processing'`,
+      WHERE draft_id = ? AND assignee_key = ? AND card_kind = ? AND confirmation_status IN ('processing', 'confirmed')`,
     [callbackId || null, nowIso(), draftId, assigneeKey, cardKind]
   );
   return getDraftAssigneeState(draftId, assigneeKey, cardKind);

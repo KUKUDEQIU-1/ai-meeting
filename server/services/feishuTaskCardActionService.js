@@ -225,6 +225,11 @@ function dependencySet(overrides = {}) {
   };
 }
 
+function isGetNoteItemAction(parsed) {
+  return parsed.card_kind === 'getnote_tasks'
+    && ['edit_task', 'discard_task', 'mark_task_as_new', 'mark_task_as_progress'].includes(parsed.action);
+}
+
 async function loadAuthorizedState(parsed) {
   if (!Number.isFinite(parsed.draft_id) || parsed.draft_id <= 0 || !parsed.assignee_key) {
     reject('飞书卡片回调缺少 draft_id 或 assignee_key', 400);
@@ -251,13 +256,25 @@ function assertOwnedItem(item, assigneeKey, message) {
 }
 
 async function editTask(parsed, state, dependencies) {
-  if (state.confirmation_status === 'processing' || state.confirmation_status === 'confirmed') {
+  const draft = await getMeetingTaskDraftById(parsed.draft_id);
+  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
+
+  if (state.card_kind === 'getnote_tasks' && (!currentTask || currentTask.status !== 'pending')) {
+    return feishuCallbackToast('已处理，无需重复操作');
+  }
+
+  if (state.card_kind === 'getnote_tasks') {
+    await resetDraftAssigneeConfirmationToPending({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      cardKind: state.card_kind,
+      callbackId: parsed.callback_id
+    });
+  } else if (state.confirmation_status === 'processing' || state.confirmation_status === 'confirmed') {
     return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能修改' : '已确认，不能再修改');
   }
 
   const values = validateEditableValues(parsed.form_values);
-  const draft = await getMeetingTaskDraftById(parsed.draft_id);
-  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
   const selectedAssignee = parsed.card_kind === 'getnote_tasks'
     ? String(parsed.form_values.assignee || currentTask?.assignee || '').trim()
     : '';
@@ -279,6 +296,22 @@ async function editTask(parsed, state, dependencies) {
 }
 
 async function markTaskChoice(parsed, state, dependencies, taskChoice) {
+  if (state.card_kind === 'getnote_tasks') {
+    const draft = await getMeetingTaskDraftById(parsed.draft_id);
+    const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
+
+    if (!currentTask || currentTask.status !== 'pending') {
+      return feishuCallbackToast('已处理，无需重复操作');
+    }
+
+    await resetDraftAssigneeConfirmationToPending({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      cardKind: state.card_kind,
+      callbackId: parsed.callback_id
+    });
+  }
+
   const claim = await claimDraftAssigneeConfirmation({
     draftId: parsed.draft_id,
     assigneeKey: state.assignee_key,
@@ -409,12 +442,24 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
 }
 
 async function discardTask(parsed, state, dependencies) {
-  if (state.confirmation_status === 'processing' || state.confirmation_status === 'confirmed') {
+  const draft = await getMeetingTaskDraftById(parsed.draft_id);
+  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
+
+  if (state.card_kind === 'getnote_tasks' && (!currentTask || currentTask.status !== 'pending')) {
+    return feishuCallbackToast('已处理，无需重复操作');
+  }
+
+  if (state.card_kind === 'getnote_tasks') {
+    await resetDraftAssigneeConfirmationToPending({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      cardKind: state.card_kind,
+      callbackId: parsed.callback_id
+    });
+  } else if (state.confirmation_status === 'processing' || state.confirmation_status === 'confirmed') {
     return feishuCallbackToast(state.confirmation_status === 'processing' ? '确认处理中，暂不能丢弃' : '已确认，不能再丢弃');
   }
 
-  const draft = await getMeetingTaskDraftById(parsed.draft_id);
-  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
   const selectedAssignee = parsed.card_kind === 'getnote_tasks'
     ? String(parsed.form_values.assignee || currentTask?.assignee || '').trim()
     : '';
@@ -684,7 +729,7 @@ export async function prepareFeishuCardAction(payload) {
   if ((parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress') && state.confirmation_status === 'processing') {
     return { parsed, state, response: feishuCallbackToast(parsed.action === 'discard_task' ? '确认处理中，暂不能丢弃' : '确认处理中，暂不能修改'), shouldProcess: false };
   }
-  if ((parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress') && state.confirmation_status === 'confirmed') {
+  if (!isGetNoteItemAction(parsed) && (parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress') && state.confirmation_status === 'confirmed') {
     return { parsed, state, response: feishuCallbackToast(parsed.action === 'discard_task' ? '已确认，不能再丢弃' : '已确认，不能再修改'), shouldProcess: false };
   }
   if (parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress' || parsed.action === 'confirm_assignee_tasks' || parsed.action === 'confirm_assignee_progress') {
