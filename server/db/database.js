@@ -57,6 +57,7 @@ function migrateDatabase() {
     ['table_schema_version', 'TEXT'],
     ['content_source', 'TEXT'],
     ['content_length', 'INTEGER'],
+    ['content_hash', 'TEXT'],
     ['used_transcript', 'INTEGER'],
     ['summary', 'TEXT'],
     ['analysis_json', 'TEXT'],

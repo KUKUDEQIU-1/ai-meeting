@@ -216,6 +216,54 @@ export async function updateMeetingTaskDraftProgressUpdates(id, progressUpdates)
   return getMeetingTaskDraftById(id);
 }
 
+export async function updateMeetingTaskDraftContent(id, {
+  meetingTitle,
+  meetingSource,
+  meetingTime,
+  summary,
+  draftTasks,
+  progressUpdates,
+  discardedItems,
+  contentSource,
+  contentLength,
+  rawContent,
+  tableId,
+  tableName,
+  tableUrl,
+  resolutionJson
+}) {
+  const existing = await get('SELECT * FROM meeting_task_drafts WHERE id = ?', [id]);
+  if (!existing) return null;
+
+  const normalizedTasks = normalizeDraftTasks(draftTasks, id);
+  const normalizedProgressUpdates = normalizeProgressUpdates(progressUpdates, id);
+  await run(
+    `UPDATE meeting_task_drafts
+     SET meeting_title = ?, meeting_source = ?, meeting_time = ?, summary = ?, draft_json = ?, progress_updates_json = ?, discarded_items_json = ?, resolution_json = ?, content_source = ?, content_length = ?, raw_content = ?, table_id = ?, table_name = ?, table_url = ?, confirmation_status = 'pending_confirmation', updated_at = ?
+     WHERE id = ?`,
+    [
+      meetingTitle || '',
+      meetingSource || '',
+      meetingTime || '',
+      summary || '',
+      JSON.stringify(normalizedTasks),
+      JSON.stringify(normalizedProgressUpdates),
+      JSON.stringify(discardedItems || []),
+      JSON.stringify(resolutionJson || {}),
+      contentSource || '',
+      contentLength || 0,
+      rawContent || '',
+      tableId || '',
+      tableName || '',
+      tableUrl || '',
+      nowIso(),
+      id
+    ]
+  );
+
+  return getMeetingTaskDraftById(id);
+}
+
 export async function updateMeetingTaskDraftItem(id, itemId, updater) {
   const draft = await getMeetingTaskDraftById(id);
   if (!draft) return null;
@@ -360,6 +408,10 @@ export async function getDraftAssigneeStateByMessageId(messageId) {
     [messageId]
   );
   return split || null;
+}
+
+export async function getLatestDraftAssigneeStateByKind(cardKind) {
+  return get('SELECT * FROM meeting_task_draft_assignees WHERE card_kind = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [cardKind]);
 }
 
 export async function listDraftAssigneeStates(draftId) {
