@@ -204,9 +204,12 @@ function itemActionTerminal(state, hasRemainingScopedTasks) {
 async function selectedGetNoteAssignee(parsed, currentTask, dependencies) {
   if (parsed.card_kind !== 'getnote_tasks') return '';
 
-  const assignee = String(parsed.form_values.assignee || currentTask?.assignee || '').trim();
+  const submittedAssignee = String(parsed.form_values.assignee || '').trim();
+  const assignee = submittedAssignee || String(currentTask?.assignee || '').trim();
   if (!assignee || assignee === '待确认') reject('未选择负责人', 400);
-  await assertAssigneeExists(assignee, dependencies);
+  if (submittedAssignee) {
+    await assertAssigneeExists(assignee, dependencies);
+  }
   return assignee;
 }
 
