@@ -120,6 +120,30 @@ function feishuPatchFailureClass(feishuResponse) {
   return Number(feishuResponse.code) === 200671 ? 'feishu_card_patch_failed' : 'terminal_card_patch_failed';
 }
 
+function logTerminalCardPatchFailure({ error, action, auditLog, parsed }) {
+  const feishuResponse = error?.feishuResponse || {};
+
+  console.error('[Master Task Audit] terminal card patch failed', JSON.stringify({
+    action,
+    phase: 'terminal_card_patch',
+    failure_class: feishuPatchFailureClass(feishuResponse),
+    status: error?.status ?? null,
+    code: feishuResponse.code ?? null,
+    audit_log_id: auditLog.id,
+    audit_record_id: auditLog.record_id,
+    audit_date: auditLog.audit_date,
+    audit_type: auditLog.audit_type,
+    callback_id: parsed.callback_id,
+    operator_open_id: parsed.operator_open_id,
+    message_id: parsed.message_id,
+    card_message_id: auditLog.card_message_id || '',
+    error_message: error instanceof Error ? error.message : String(error),
+    feishu_response_code: feishuResponse.code ?? null,
+    feishu_response_msg: feishuResponse.msg ?? null,
+    feishu_response_log_id: feishuResponse.log_id ?? null
+  }, null, 2));
+}
+
 async function loadAuditState(parsed) {
   const auditLogId = Number(auditValue(parsed.raw_value, 'audit_log_id', 'auditLogId') || 0);
   let auditLog = Number.isFinite(auditLogId) && auditLogId > 0
@@ -200,26 +224,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
     try {
       await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
     } catch (error) {
-      const feishuResponse = error?.feishuResponse || {};
-      console.error('[Master Task Audit] terminal card patch failed', JSON.stringify({
-        action: prepared.parsed.action,
-        phase: 'terminal_card_patch',
-        failure_class: feishuPatchFailureClass(feishuResponse),
-        status: error?.status ?? null,
-        code: feishuResponse.code ?? null,
-        audit_log_id: prepared.auditLog.id,
-        audit_record_id: prepared.auditLog.record_id,
-        audit_date: prepared.auditLog.audit_date,
-        audit_type: prepared.auditLog.audit_type,
-        callback_id: prepared.parsed.callback_id,
-        operator_open_id: prepared.parsed.operator_open_id,
-        message_id: prepared.parsed.message_id,
-        card_message_id: prepared.auditLog.card_message_id || '',
-        error_message: error instanceof Error ? error.message : String(error),
-        feishu_response_code: feishuResponse.code ?? null,
-        feishu_response_msg: feishuResponse.msg ?? null,
-        feishu_response_log_id: feishuResponse.log_id ?? null
-      }, null, 2));
+      logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
     }
     return feishuCallbackToast('已记录为无更新');
   }
@@ -237,7 +242,11 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         submittedText: progressText,
         callbackId: prepared.parsed.callback_id
       });
-      await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      try {
+        await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      } catch (error) {
+        logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+      }
       return feishuCallbackToast('任务进展已更新');
     }
 
@@ -261,7 +270,11 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         submittedValues: canonicalSubmittedValues,
         callbackId: prepared.parsed.callback_id
       });
-      await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      try {
+        await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      } catch (error) {
+        logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+      }
     } catch (error) {
       await markMasterTaskAuditFailed({
         recordId: prepared.auditLog.record_id,

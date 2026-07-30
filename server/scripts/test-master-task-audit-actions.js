@@ -121,6 +121,35 @@ async function testConfirmUpdateWritesProgressText() {
   assert.equal(stored.submitted_text, '今天已补充新的巡检进展');
 }
 
+async function testConfirmUpdateKeepsSuccessWhenTerminalCardPatchFails() {
+  const auditLog = await createAuditLog();
+  const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', { progress_text: '今天已补充巡检进展但卡片已失效' }));
+  let updateCardCalls = 0;
+
+  const patchError = new Error('terminal card patch failed');
+  patchError.feishuResponse = { code: 200671 };
+
+  const response = await processPreparedFeishuCardAction(prepared, {
+    updateProgress: async () => ({ status: 'updated' }),
+    updateCard: async (updatePayload) => {
+      updateCardCalls += 1;
+      assert.deepEqual(updatePayload, { auditLogId: auditLog.id, terminal: true });
+      throw patchError;
+    }
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.equal(response.toast.content, '任务进展已更新');
+  assert.equal(updateCardCalls, 1);
+  assert.equal(stored.action_taken, 'confirmed_updated');
+  assert.equal(stored.submitted_text, '今天已补充巡检进展但卡片已失效');
+  assert.equal(stored.callback_id, prepared.parsed.callback_id);
+  assert.equal(stored.error_message || '', '');
+
+  const replayPrepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', { progress_text: '重复点击不应再次写入' }));
+  assert.equal(replayPrepared.shouldProcess, false);
+}
+
 async function testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues() {
   const auditLog = await createAuditLog();
   const submittedValues = {
@@ -465,6 +494,7 @@ await initDatabase();
 await testNoUpdateDoesNotWriteProgress();
 await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
+await testConfirmUpdateKeepsSuccessWhenTerminalCardPatchFails();
 await testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues();
 await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();
 await testConfirmUpdateRejectsCompletedStatusWithoutValidCompletionDateBeforeWriting();
