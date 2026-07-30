@@ -228,6 +228,15 @@ function datePickerElement({ tag, label, value }) {
   return element;
 }
 
+function oldTaskOptionsForItem({ itemId, oldTaskOptions, oldTaskOptionsByItemId }) {
+  if (oldTaskOptionsByItemId && Object.hasOwn(oldTaskOptionsByItemId, itemId)) {
+    const itemOptions = oldTaskOptionsByItemId[itemId];
+    return Array.isArray(itemOptions) ? itemOptions : [];
+  }
+
+  return Array.isArray(oldTaskOptions) ? oldTaskOptions : [];
+}
+
 function unmatchedOldTaskElement(value, options) {
   const taskName = String(value || '').trim();
   if (!taskName || (options || []).some((option) => option.value === taskName)) return null;
@@ -356,13 +365,14 @@ function handledTaskSummary(task, itemId) {
   return title ? labelElement(`**事项 ${truncateText(itemId, 16)}｜${title}：** ${truncateText(taskNameOf(task), 60)}${detail}`) : null;
 }
 
-export function buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions = [], assigneeOptions = [], terminal = false }) {
+export function buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions = [], oldTaskOptionsByItemId = null, assigneeOptions = [], terminal = false }) {
   return buildAssigneeTaskCard({
     draft,
     assignee,
     tasks,
     terminal,
     oldTaskOptions,
+    oldTaskOptionsByItemId,
     assigneeOptions,
     compact: true,
     cardKind: 'getnote_tasks',
@@ -405,7 +415,7 @@ function terminalTaskSummaryContent({ draft, assignee, tasks }) {
   return lines.join('\n');
 }
 
-function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeOptions = [], cardKind = 'tasks' }) {
+function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOptionsByItemId = null, assigneeOptions = [], cardKind = 'tasks' }) {
   const elements = [
     { tag: 'markdown', content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 60)}\n**负责人：** ${truncateText(assignee.assignee_name, 30)}\n卡片内容较长，已切换为精简确认模式。` },
     { tag: 'hr' }
@@ -429,9 +439,10 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeO
     if (assigneeOptions.length) {
       elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
     }
-    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
+    const itemOldTaskOptions = oldTaskOptionsForItem({ itemId, oldTaskOptions, oldTaskOptionsByItemId });
+    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, itemOldTaskOptions);
     if (unmatchedOldTask) elements.push(unmatchedOldTask);
-    elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
+    elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: itemOldTaskOptions, value: matchedTaskName }));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: task.progress_summary || task.comment || '' }));
     elements.push(taskActionSet({ draft, assignee, task, cardKind }));
     elements.push({ tag: 'hr' });
@@ -440,7 +451,7 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeO
   return elements;
 }
 
-export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false, confirmItemId = '', oldTaskOptions = [], assigneeOptions = [], cardKind = 'tasks', sourceLabel = '', formName = 'meeting_task_form', pendingTitle = '', terminalTitle = '' }) {
+export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false, confirmItemId = '', oldTaskOptions = [], oldTaskOptionsByItemId = null, assigneeOptions = [], cardKind = 'tasks', sourceLabel = '', formName = 'meeting_task_form', pendingTitle = '', terminalTitle = '' }) {
   if (terminal) {
     return {
       schema: '2.0',
@@ -458,7 +469,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     };
   }
 
-  const elements = compact ? compactTaskElements({ draft, assignee, tasks, oldTaskOptions, assigneeOptions, cardKind }) : [
+  const elements = compact ? compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions, cardKind }) : [
     {
       tag: 'markdown',
       content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}${sourceLabel ? `\n**来源：** ${truncateText(sourceLabel, 40)}` : ''}`
@@ -517,9 +528,10 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
       elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
     }
     elements.push(labelElement('**旧任务**'));
-    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, oldTaskOptions);
+    const itemOldTaskOptions = oldTaskOptionsForItem({ itemId, oldTaskOptions, oldTaskOptionsByItemId });
+    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, itemOldTaskOptions);
     if (unmatchedOldTask) elements.push(unmatchedOldTask);
-    elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: oldTaskOptions, value: matchedTaskName }));
+    elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: itemOldTaskOptions, value: matchedTaskName }));
     elements.push(labelElement('**备注**'));
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
     elements.push(taskActionSet({ draft, assignee, task, cardKind }));

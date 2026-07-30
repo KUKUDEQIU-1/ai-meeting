@@ -86,8 +86,12 @@ function recordIncludesAssignee(record, normalizedAssigneeKey) {
   const assigneeName = String(record.assigneeName || '').trim();
   const nameParts = assigneeName.split(/\s+/).map(normalizeAssigneeKey).filter(Boolean);
 
+  if (nameParts.includes(normalizedAssigneeKey)) {
+    return true;
+  }
+
   if (nameParts.length > 1) {
-    return nameParts.includes(normalizedAssigneeKey);
+    return false;
   }
 
   const recordKey = normalizeAssigneeKey(record.assigneeKey || assigneeName);
@@ -122,10 +126,66 @@ async function loadOldTaskOptionsForAssignee(assigneeKey, listRecords = listMast
   }
 }
 
-function buildCardForKind({ cardKind, draft, assignee, terminal, itemId, oldTaskOptions = [], assigneeOptions = [] }) {
+function activeMasterTaskOptionsForAssignee(records, assigneeKey) {
+  const normalizedAssigneeKey = normalizeAssigneeKey(assigneeKey);
+  if (!normalizedAssigneeKey || normalizedAssigneeKey === '待确认') return [];
+
+  const seen = new Set();
+  const options = [];
+
+  for (const record of Array.isArray(records) ? records : []) {
+    const taskName = String(record.taskName || '').trim();
+    const status = String(record.status || '').replace(/\s+/g, '').trim();
+    if (status !== '进行中' || !recordIncludesAssignee(record, normalizedAssigneeKey) || !taskName || seen.has(taskName)) {
+      continue;
+    }
+
+    seen.add(taskName);
+    options.push({ text: { tag: 'plain_text', content: taskName }, value: taskName });
+    if (options.length >= GETNOTE_MAX_OLD_TASK_OPTIONS) break;
+  }
+
+  return options;
+}
+
+function buildGetNoteOldTaskOptionsByItemId(tasks, records) {
+  const optionsByAssignee = new Map();
+  const optionsByItemId = {};
+
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const itemId = String(task?.item_id || '');
+    if (!itemId) continue;
+
+    const assigneeKey = normalizeAssigneeKey(assigneeNameOf(task));
+    if (assigneeKey === '待确认') {
+      optionsByItemId[itemId] = [];
+      continue;
+    }
+
+    if (!optionsByAssignee.has(assigneeKey)) {
+      optionsByAssignee.set(assigneeKey, activeMasterTaskOptionsForAssignee(records, assigneeKey));
+    }
+
+    optionsByItemId[itemId] = optionsByAssignee.get(assigneeKey);
+  }
+
+  return optionsByItemId;
+}
+
+async function loadGetNoteOldTaskOptionsByItemId(tasks, listRecords = listMasterTaskAuditRecords) {
+  try {
+    const records = await listRecords();
+    return buildGetNoteOldTaskOptionsByItemId(tasks, records);
+  } catch (error) {
+    console.warn(`[Draft Notify] master task lookup failed; GetNote old-task dropdown has no options error=${error.message}`);
+    return buildGetNoteOldTaskOptionsByItemId(tasks, []);
+  }
+}
+
+function buildCardForKind({ cardKind, draft, assignee, terminal, itemId, oldTaskOptions = [], oldTaskOptionsByItemId = null, assigneeOptions = [] }) {
   if (cardKind === 'getnote_tasks') {
     const tasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(itemId, task.item_id));
-    return buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions, assigneeOptions, terminal });
+    return buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions, terminal });
   }
 
   if (cardKind === 'progress') {
@@ -198,17 +258,19 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   const scopedItemId = state.split_item_id || (scopedMessage ? itemId : '');
   const effectiveCardKind = state.card_kind || cardKind;
   const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
-  const oldTaskOptions = terminal || compactRefresh
+  const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));
+  const oldTaskOptionsByItemId = !terminal && effectiveCardKind === 'getnote_tasks'
+    ? await loadGetNoteOldTaskOptionsByItemId(scopedTasks, listRecords)
+    : null;
+  const oldTaskOptions = terminal || compactRefresh || effectiveCardKind === 'getnote_tasks'
     ? []
-    : effectiveCardKind === 'getnote_tasks'
-      ? await loadActiveMasterTaskOptions(listRecords)
-      : effectiveCardKind === 'tasks'
-        ? await loadOldTaskOptionsForAssignee(assignee.assignee_key, listRecords)
-        : [];
+    : effectiveCardKind === 'tasks'
+      ? await loadOldTaskOptionsForAssignee(assignee.assignee_key, listRecords)
+      : [];
   const assigneeOptions = !terminal && !compactRefresh && effectiveCardKind === 'getnote_tasks'
     ? await buildMasterAssigneeOptions(listRecords)
     : [];
-  const card = buildCardForKind({ cardKind: effectiveCardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId, oldTaskOptions, assigneeOptions });
+  const card = buildCardForKind({ cardKind: effectiveCardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
   return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
 }
 
@@ -234,18 +296,19 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
 
   await upsertDraftAssigneeState({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, assigneeName: assignee.assignee_name, receiveIdType: 'open_id', receiveId, deliveryStatus: 'pending' });
 
-  try {
-    const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
-    const oldTaskOptions = await loadActiveMasterTaskOptions(listRecords);
-    const assigneeOptions = await buildMasterAssigneeOptions(listRecords);
-    const pendingTasks = (draft.draft_tasks || []).filter((task) => task.status !== 'confirmed' && task.status !== 'discarded');
-    const chunks = [];
+	try {
+	  const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
+	  const records = await listRecords();
+	  const assigneeOptions = await buildMasterAssigneeOptions(listRecords);
+	  const pendingTasks = (draft.draft_tasks || []).filter((task) => task.status !== 'confirmed' && task.status !== 'discarded');
+	  const oldTaskOptionsByItemId = buildGetNoteOldTaskOptionsByItemId(pendingTasks, records);
+	  const chunks = [];
     for (let index = 0; index < pendingTasks.length; index += GETNOTE_TASKS_PER_CARD) {
       chunks.push(pendingTasks.slice(index, index + GETNOTE_TASKS_PER_CARD));
     }
-    const results = [];
-    for (const tasks of chunks.length ? chunks : [[]]) {
-      const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions, assigneeOptions });
+	  const results = [];
+	  for (const tasks of chunks.length ? chunks : [[]]) {
+	    const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptionsByItemId, assigneeOptions });
       const messageId = await postMessage({ receiveId, card });
       await upsertDraftCardMessage({
         draftId: draft.id,

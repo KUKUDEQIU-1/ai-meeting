@@ -21,7 +21,7 @@ import { normalizeTaskExtractionResult } from '../services/aiService.js';
 import { filterActionableTasks } from '../services/meetingService.js';
 import { buildProgressUpdateFields, progressIsReadyForTaskInstanceUpdate, updateTaskInstancesFromProgress } from '../services/taskHistoryService.js';
 import { createMeetingTaskDraft, getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, markDraftAssigneeConfirmed, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
-import { dispatchDraftTaskCards, dispatchGetNoteTaskCard } from '../services/feishuTaskCardService.js';
+import { dispatchDraftTaskCards, dispatchGetNoteTaskCard, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 import { findDuplicateTaskName, normalizeVerbObjectTaskName } from '../utils/taskQuality.js';
 
 function testMappingAndGrouping() {
@@ -226,6 +226,10 @@ function formControl(card, name) {
   }
 
   return undefined;
+}
+
+function optionValues(control) {
+  return (control?.options || []).map((option) => option.value);
 }
 
 function testOldTaskDropdownReplacesManualFallback() {
@@ -1251,13 +1255,13 @@ async function testEditAndDiscardPreserveStoredFields() {
   assert.equal(discardedDraft.draft_tasks[0].comment, '原备注');
 }
 
-async function createGetNoteActionDraft(sourceId) {
+async function createGetNoteActionDraft(sourceId, assignee = '待确认') {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
     sourceId,
     meetingTitle: 'GetNote 动作测试',
     meetingSource: 'Get笔记',
-    draftTasks: [{ item_id: 'getnote_item_1', task_name: '原 GetNote 任务', assignee: '待确认' }],
+    draftTasks: [{ item_id: 'getnote_item_1', task_name: '原 GetNote 任务', assignee, owner: assignee }],
     tableId: 'table_getnote_action',
     tableName: '事务列表',
     tableUrl: 'https://example.com/master'
@@ -1433,22 +1437,45 @@ async function testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions() {
     meetingTitle: 'GetNote 选项测试',
     meetingSource: 'Get笔记',
     draftTasks: [
-      { item_id: 'getnote_option_1', task_name: 'GetNote 新任务 1', assignee: '待确认' },
-      { item_id: 'getnote_option_2', task_name: 'GetNote 新任务 2', assignee: '待确认' },
-      { item_id: 'getnote_option_3', task_name: 'GetNote 新任务 3', assignee: '待确认' },
-      { item_id: 'getnote_option_4', task_name: 'GetNote 新任务 4', assignee: '待确认' }
+      { item_id: 'getnote_option_1', task_name: 'GetNote 新任务 1', assignee: '洪伟填' },
+      { item_id: 'getnote_option_2', task_name: 'GetNote 新任务 2', assignee: '洪伟填' },
+      { item_id: 'getnote_option_3', task_name: 'GetNote 新任务 3', assignee: '洪伟填' },
+      { item_id: 'getnote_option_4', task_name: 'GetNote 新任务 4', assignee: '洪伟填' }
     ],
     tableId: 'table_getnote_options',
     tableName: '事务列表',
     tableUrl: 'https://example.com/master'
   });
   const sentCards = [];
+  const makeActiveTasks = (assigneeName) => Array.from({ length: 12 }, (_, index) => ({
+    taskName: `${assigneeName} 进行中任务 ${index + 1}`,
+    status: '进行中',
+    assigneeName,
+    assigneeKey: assigneeName
+  }));
 
   const result = await dispatchGetNoteTaskCard(draft, {
     receiveId: 'ou_getnote_reviewer',
     listMasterTaskAuditRecords: async () => [
-      { taskName: '进行中旧任务', status: '进行中', assigneeName: '洪伟填 李嘉华', assigneeKey: 'hong_li' },
-      { taskName: '已完成旧任务', status: '已完成', assigneeName: '王五', assigneeKey: 'wang' }
+      ...Array.from({ length: 12 }, (_, index) => ([
+        {
+          taskName: `洪伟填 进行中任务 ${index + 1}`,
+          status: '进行中',
+          assigneeName: '洪伟填',
+          assigneeKey: 'hong'
+        },
+        {
+          taskName: `李嘉华 进行中任务 ${index + 1}`,
+          status: '进行中',
+          assigneeName: '李嘉华',
+          assigneeKey: 'li'
+        }
+      ])).flat(),
+      { taskName: '洪伟填 进行中任务 5', status: '进行中', assigneeName: '洪伟填', assigneeKey: 'hong' },
+      { taskName: '李嘉华 进行中任务 5', status: '进行中', assigneeName: '李嘉华', assigneeKey: 'li' },
+      { taskName: '洪伟填 已完成旧任务', status: '已完成', assigneeName: '洪伟填', assigneeKey: 'hong' },
+      { taskName: '李嘉华 已完成旧任务', status: '已完成', assigneeName: '李嘉华', assigneeKey: 'li' },
+      { taskName: '王五 进行中旧任务', status: '进行中', assigneeName: '王五', assigneeKey: 'wang' }
     ],
     postMessage: async ({ card }) => {
       sentCards.push(card);
@@ -1460,9 +1487,59 @@ async function testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions() {
 
   assert.equal(result.sent_count, 2);
   assert.equal(sentCards.length, 2);
-  assert.deepEqual(oldTaskSelect.options.map((option) => option.value), ['进行中旧任务']);
+  assert.equal(oldTaskSelect.options.length, 10);
+  assert.ok(optionValues(oldTaskSelect).every((value) => value.startsWith('洪伟填')));
   assert.deepEqual(assigneeSelect.options.map((option) => option.value), ['洪伟填', '李嘉华', '王五']);
   assert.match(JSON.stringify(sentCards[1]), /getnote_option_4/);
+}
+
+async function testGetNoteDispatchScopesOldTaskOptionsPerAssignee() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-dispatch-scope-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 旧任务分组测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'getnote_scope_1', task_name: 'GetNote 新任务 1', assignee: '洪伟填' },
+      { item_id: 'getnote_scope_2', task_name: 'GetNote 新任务 2', assignee: '李嘉华' }
+    ],
+    tableId: 'table_getnote_scope',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentCards = [];
+  const activeTasks = (assigneeName, start) => Array.from({ length: 12 }, (_, index) => ({
+    taskName: `${assigneeName} 进行中任务 ${start + index}`,
+    status: '进行中',
+    assigneeName,
+    assigneeKey: assigneeName
+  }));
+  const records = [
+    ...activeTasks('洪伟填', 1),
+    { taskName: '洪伟填 已完成任务', status: '已完成', assigneeName: '洪伟填', assigneeKey: '洪伟填' },
+    ...activeTasks('李嘉华', 1),
+    { taskName: '李嘉华 已完成任务', status: '已完成', assigneeName: '李嘉华', assigneeKey: '李嘉华' },
+    { taskName: '王五 进行中任务 1', status: '进行中', assigneeName: '王五', assigneeKey: '王五' }
+  ];
+
+  await dispatchGetNoteTaskCard(draft, {
+    receiveId: 'ou_getnote_reviewer',
+    listMasterTaskAuditRecords: async () => records,
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      return `om_getnote_scope_${draft.id}_${sentCards.length}`;
+    }
+  });
+
+  const firstOldTaskSelect = formControl(sentCards[0], 'matched_task_name_select_getnote_scope_1');
+  const secondOldTaskSelect = formControl(sentCards[0], 'matched_task_name_select_getnote_scope_2');
+
+  assert.equal(firstOldTaskSelect.options.length, 10);
+  assert.equal(secondOldTaskSelect.options.length, 10);
+  assert.ok(optionValues(firstOldTaskSelect).every((value) => value.startsWith('洪伟填')));
+  assert.ok(optionValues(secondOldTaskSelect).every((value) => value.startsWith('李嘉华')));
+  assert.doesNotMatch(JSON.stringify(firstOldTaskSelect.options), /李嘉华/);
+  assert.doesNotMatch(JSON.stringify(secondOldTaskSelect.options), /洪伟填/);
 }
 
 async function testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit() {
@@ -1471,17 +1548,27 @@ async function testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit() {
     sourceId: `getnote-option-cap-${Date.now()}-${Math.random()}`,
     meetingTitle: 'GetNote 选项上限测试',
     meetingSource: 'Get笔记',
-    draftTasks: [{ item_id: 'getnote_cap_1', task_name: 'GetNote 新任务', assignee: '待确认' }],
+    draftTasks: [{ item_id: 'getnote_cap_1', task_name: 'GetNote 新任务', assignee: '负责人1' }],
     tableId: 'table_getnote_option_cap',
     tableName: '事务列表',
     tableUrl: 'https://example.com/master'
   });
-  const records = Array.from({ length: 30 }, (_, index) => ({
-    taskName: `进行中旧任务 ${index + 1}`,
-    status: '进行中',
-    assigneeName: `负责人${index + 1}`,
-    assigneeKey: `负责人${index + 1}`
-  }));
+  const records = [
+    ...Array.from({ length: 12 }, (_, index) => ({
+      taskName: `负责人1 进行中旧任务 ${index + 1}`,
+      status: '进行中',
+      assigneeName: '负责人1',
+      assigneeKey: '负责人1'
+    })),
+    ...Array.from({ length: 30 }, (_, index) => ({
+      taskName: `负责人${index + 1} 其他进行中旧任务`,
+      status: '进行中',
+      assigneeName: `负责人${index + 1}`,
+      assigneeKey: `负责人${index + 1}`
+    })),
+    { taskName: '负责人1 进行中旧任务 1', status: '进行中', assigneeName: '负责人1', assigneeKey: '负责人1' },
+    { taskName: '负责人1 已完成旧任务', status: '已完成', assigneeName: '负责人1', assigneeKey: '负责人1' }
+  ];
   const sentCards = [];
 
   await dispatchGetNoteTaskCard(draft, {
@@ -1497,8 +1584,107 @@ async function testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit() {
 
   assert.equal(oldTaskSelect.options.length, 10);
   assert.equal(assigneeSelect.options.length, 20);
-  assert.equal(oldTaskSelect.options[0].value, '进行中旧任务 1');
+  assert.equal(oldTaskSelect.options[0].value, '负责人1 进行中旧任务 1');
   assert.equal(assigneeSelect.options[0].value, '负责人1');
+}
+
+async function testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-compact-refresh-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote compact 刷新测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'getnote_refresh_1', task_name: 'GetNote 新任务 1', assignee: '洪伟填' },
+      { item_id: 'getnote_refresh_2', task_name: 'GetNote 新任务 2', assignee: '李嘉华' }
+    ],
+    tableId: 'table_getnote_refresh',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const records = [
+    { taskName: '李嘉华 进行中任务 A', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' },
+    { taskName: '李嘉华 进行中任务 B', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' },
+    { taskName: '洪伟填 进行中任务 A', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' },
+    { taskName: '洪伟填 进行中任务 B', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' }
+  ];
+  const updateCalls = [];
+  const patchedBodies = [];
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  globalThis.fetch = async (url, init) => {
+    const href = String(url || '');
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ code: 0, tenant_access_token: 'tenant_token' })
+      };
+    }
+
+    patchedBodies.push(JSON.parse(init.body));
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ code: 0 })
+    };
+  };
+
+  try {
+    await upsertDraftAssigneeState({
+      draftId: draft.id,
+      assigneeKey: 'getnote_reviewer',
+      cardKind: 'getnote_tasks',
+      assigneeName: 'Wei Tian',
+      receiveId: 'ou_getnote_reviewer',
+      deliveryStatus: 'sent',
+      cardMessageId: `om_getnote_${draft.id}`
+    });
+
+    const response = await handleFeishuCardAction(getNotePayloadForActor({
+      draft,
+      eventId: 'evt_getnote_compact_refresh',
+      action: 'mark_task_as_progress',
+      operatorOpenId: 'ou_getnote_reviewer',
+      itemId: 'getnote_refresh_1',
+      formValue: {
+        task_name_getnote_refresh_1: '继续处理 GetNote 新任务 1',
+        progress_summary_getnote_refresh_1: '补充旧任务进展',
+        matched_task_name_select_getnote_refresh_1: '李嘉华 进行中任务 A',
+        assignee_select_getnote_refresh_1: '李嘉华'
+      }
+    }), {
+      listMasterTaskAuditRecords: async () => records,
+      masterTaskNameExists: async (taskName) => taskName === '李嘉华 进行中任务 A',
+      finalizeProgress: async (params) => ({ status: 'synced', updated_count: params.itemIds.length }),
+      updateCard: async (params) => {
+        updateCalls.push(params);
+        return updateFeishuTaskCard(params, {
+          listMasterTaskAuditRecords: async () => records
+        });
+      }
+    });
+
+    const rebuiltCard = JSON.parse(patchedBodies[0].content);
+    const remainingOldTaskSelect = formControl(rebuiltCard, 'matched_task_name_select_getnote_refresh_2');
+
+    assert.equal(response.toast.content, '旧任务进展已处理');
+    assert.equal(updateCalls[0].compactRefresh, true);
+    assert.equal(updateCalls[0].cardKind, 'getnote_tasks');
+    assert.equal(remainingOldTaskSelect.options.length > 0, true);
+    assert.deepEqual(optionValues(remainingOldTaskSelect), ['李嘉华 进行中任务 A', '李嘉华 进行中任务 B']);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
 }
 
 async function testGetNoteDispatchForceResendsExistingSentCard() {
@@ -1595,6 +1781,73 @@ async function testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask() {
   assert.equal(stored.draft_tasks[0].matched_task_name, '历史任务 A');
   assert.equal(stored.draft_tasks[0].status, 'discarded');
   assert.equal(finalized[0].assigneeKey, '李嘉华');
+}
+
+async function testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt() {
+  const draft = await createGetNoteActionDraft(`getnote-stored-assignee-${Date.now()}`, '李嘉华');
+  const finalized = [];
+
+  const response = await handleFeishuCardAction(getNotePayload({
+    draft,
+    eventId: 'evt_getnote_stored_assignee',
+    action: 'mark_task_as_progress',
+    formValue: {
+      task_name_getnote_item_1: '补充旧任务进展',
+      progress_summary_getnote_item_1: '已完成 GetNote 回归',
+      matched_task_name_select_getnote_item_1: '历史任务 A'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [{ taskName: '历史任务 A', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
+    masterTaskNameExists: async (taskName) => taskName === '历史任务 A',
+    finalizeProgress: async (params) => {
+      finalized.push(params);
+      return { status: 'synced', updated_count: 1 };
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const stored = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '旧任务进展已处理');
+  assert.equal(stored.draft_tasks[0].assignee, '李嘉华');
+  assert.equal(stored.draft_tasks[0].owner, '李嘉华');
+  assert.equal(stored.draft_tasks[0].matched_task_name, '历史任务 A');
+  assert.equal(stored.draft_tasks[0].status, 'discarded');
+  assert.equal(finalized[0].assigneeKey, '李嘉华');
+  assert.deepEqual(finalized[0].itemIds, ['getnote_item_1_progress']);
+}
+
+async function testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee() {
+  const draft = await createGetNoteActionDraft(`getnote-unknown-assignee-${Date.now()}`, '李嘉华');
+  const finalized = [];
+  let rejected;
+
+  try {
+    await handleFeishuCardAction(getNotePayload({
+      draft,
+      eventId: 'evt_getnote_unknown_assignee',
+      action: 'mark_task_as_progress',
+      formValue: {
+        task_name_getnote_item_1: '补充旧任务进展',
+        progress_summary_getnote_item_1: '已完成 GetNote 回归',
+        matched_task_name_select_getnote_item_1: '历史任务 A',
+        assignee_select_getnote_item_1: '恶意负责人'
+      }
+    }), {
+      listMasterTaskAuditRecords: async () => [{ taskName: '历史任务 A', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' }],
+      masterTaskNameExists: async () => true,
+      finalizeProgress: async (params) => {
+        finalized.push(params);
+        return { status: 'synced', updated_count: 1 };
+      },
+      updateCard: async () => ({ status: 'updated' })
+    });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.equal(rejected?.status, 400);
+  assert.equal(rejected?.message, '不能选择总表中不存在的负责人');
+  assert.equal(finalized.length, 0);
 }
 
 async function testGetNoteRegularDiscardDoesNotRequireAssigneeSelection() {
@@ -3594,10 +3847,14 @@ await testGetNoteCallbackAuthorizesEffectiveRecipientOnly();
 await testGetNoteSubmitFinalizesOnlyOneTaskAndIsReplaySafe();
 await testGetNoteDiscardWritesNothingAndIsReplaySafe();
 await testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions();
+await testGetNoteDispatchScopesOldTaskOptionsPerAssignee();
 await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
+await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions();
 await testGetNoteDispatchForceResendsExistingSentCard();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
+await testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt();
+await testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
 await testGetNotePendingItemStaysActionableAfterReviewerConfirmedState();
 await testGetNoteLastSplitItemUsesMixedFeedbackCard();
