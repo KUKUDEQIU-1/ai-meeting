@@ -222,13 +222,26 @@ function ownerKeyForAction(state, assignee) {
 }
 
 function dependencySet(overrides = {}) {
+  const listRecords = memoizeMasterTaskAuditRecords(overrides.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
   return {
     finalizeAssignee: overrides.finalizeAssignee || finalizeMeetingTaskDraftForAssignee,
     finalizeGetNoteTask: overrides.finalizeGetNoteTask || finalizeMeetingTaskDraft,
     finalizeProgress: overrides.finalizeProgress || finalizeMeetingTaskDraftProgressForAssignee,
-    updateCard: overrides.updateCard || updateFeishuTaskCard,
+    updateCard: overrides.updateCard || ((params) => updateFeishuTaskCard(params, { listMasterTaskAuditRecords: listRecords })),
     masterTaskNameExists: overrides.masterTaskNameExists || masterTaskNameExists,
-    listMasterTaskAuditRecords: overrides.listMasterTaskAuditRecords || listMasterTaskAuditRecords
+    listMasterTaskAuditRecords: listRecords
+  };
+}
+
+function memoizeMasterTaskAuditRecords(loadRecords) {
+  let recordsPromise = null;
+
+  return async () => {
+    if (!recordsPromise) {
+      recordsPromise = Promise.resolve().then(loadRecords);
+    }
+
+    return recordsPromise;
   };
 }
 

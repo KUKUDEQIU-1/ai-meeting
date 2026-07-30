@@ -263,7 +263,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   };
   const scopedItemId = exactMessage?.item_id || state.split_item_id || (scopedMessage ? itemId : '');
   const effectiveCardKind = state.card_kind || cardKind;
-  const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
+  const listRecords = memoizeMasterTaskAuditRecords(deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
   const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));
   const oldTaskOptionsByItemId = !terminal && effectiveCardKind === 'getnote_tasks'
     ? await loadGetNoteOldTaskOptionsByItemId(scopedTasks, listRecords)
@@ -278,6 +278,18 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     : [];
   const card = buildCardForKind({ cardKind: effectiveCardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
   return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
+}
+
+function memoizeMasterTaskAuditRecords(loadRecords) {
+  let recordsPromise = null;
+
+  return async () => {
+    if (!recordsPromise) {
+      recordsPromise = Promise.resolve().then(loadRecords);
+    }
+
+    return recordsPromise;
+  };
 }
 
 function getNoteReviewerOpenId() {

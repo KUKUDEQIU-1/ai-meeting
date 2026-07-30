@@ -2234,8 +2234,12 @@ async function testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssig
     { taskName: '潘韵芝 进行中任务 B', status: '进行中', assigneeName: '潘韵芝', assigneeKey: '潘韵芝' },
     { taskName: '潘韵芝 已完成任务', status: '已完成', assigneeName: '潘韵芝', assigneeKey: '潘韵芝' }
   ];
-  const updates = [];
   const patchedBodies = [];
+  let masterRecordLoadCount = 0;
+  const loadMasterRecords = async () => {
+    masterRecordLoadCount += 1;
+    return records;
+  };
   const previousFetch = globalThis.fetch;
   const previousAppId = process.env.FEISHU_APP_ID;
   const previousAppSecret = process.env.FEISHU_APP_SECRET;
@@ -2293,13 +2297,7 @@ async function testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssig
         assignee_select_split_refresh_3: '潘韵芝'
       }
     }), {
-      listMasterTaskAuditRecords: async () => records,
-      updateCard: async (params) => {
-        updates.push(params);
-        return updateFeishuTaskCard(params, {
-          listMasterTaskAuditRecords: async () => records
-        });
-      }
+      listMasterTaskAuditRecords: loadMasterRecords
     });
   } finally {
     globalThis.fetch = previousFetch;
@@ -2317,13 +2315,13 @@ async function testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssig
   assert.equal(task.assignee, '潘韵芝');
   assert.equal(task.owner, '潘韵芝');
   assert.equal(task.matched_task_name, '');
-  assert.equal(updates[0].messageId, messageId);
-  assert.equal(updates[0].itemId, 'split_refresh_1,split_refresh_2,split_refresh_3');
+  assert.equal(patchedBodies.length, 1);
   assert.match(cardText, /拆卡任务 1/);
   assert.match(cardText, /拆卡任务 2/);
   assert.match(cardText, /拆卡任务 3/);
   assert.deepEqual(optionValues(oldTaskSelect), ['潘韵芝 进行中任务 A', '潘韵芝 进行中任务 B']);
   assert.equal(optionValues(oldTaskSelect).includes('李嘉华 进行中任务 A'), false);
+  assert.equal(masterRecordLoadCount, 1);
 }
 
 async function testGetNoteSplitRefreshOldTasksSurvivesOverwrittenMessageMapping() {
