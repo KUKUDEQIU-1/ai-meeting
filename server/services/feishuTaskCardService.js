@@ -10,6 +10,26 @@ const GETNOTE_TASKS_PER_CARD = 3;
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
 
+function elapsedMs(startedAt) {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
+}
+
+function maskIdentifier(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.length <= 6) return `${text.slice(0, 1)}****${text.slice(-1)}`;
+  return `${text.slice(0, 4)}****${text.slice(-3)}`;
+}
+
+function diagnosticsLoggerFor(logger) {
+  if (logger && typeof logger.warn === 'function') return logger;
+  return { warn: () => {} };
+}
+
+function emitDeliveryDiagnostics(logger, record) {
+  diagnosticsLoggerFor(logger).warn(record);
+}
+
 function configuredTaskCardTestReceiveOpenId() {
   return process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID?.trim() || '';
 }
@@ -309,6 +329,7 @@ function assertExplicitGetNoteDispatchMode(mode) {
 }
 
 export async function dispatchGetNoteTaskCard(draft, deps = {}) {
+  const startedAt = performance.now();
   assertExplicitGetNoteDispatchMode(deps.dispatchMode);
 
   const receiveId = deps.receiveId || getNoteReviewerOpenId();
@@ -317,30 +338,42 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   }
 
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
+  const diagnosticsLogger = deps.diagnosticsLogger || null;
   const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'GetNote Reviewer', receive_id_type: 'open_id', receive_id: receiveId, tasks: draft.draft_tasks || [] };
   const cardKind = 'getnote_tasks';
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
   const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
   const hasSentSplitMessages = existingMessages.some((message) => message.delivery_status === 'sent' && message.card_message_id);
   if (!deps.force && existingState?.delivery_status === 'sent' && (existingState.card_message_id || hasSentSplitMessages)) {
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_send',
+      status: 'skipped',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      message_id: maskIdentifier(existingState.card_message_id || existingMessages.find((message) => message.card_message_id)?.card_message_id || ''),
+      prepare_ms: elapsedMs(startedAt),
+      process_ms: elapsedMs(startedAt)
+    });
     return { status: 'success', sent_count: 0, skipped_count: 1, failed_count: 0, results: [{ status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id }] };
   }
 
   await upsertDraftAssigneeState({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, assigneeName: assignee.assignee_name, receiveIdType: 'open_id', receiveId, deliveryStatus: 'pending' });
 
-	try {
-	  const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
-	  const records = await listRecords();
-	  const assigneeOptions = await buildMasterAssigneeOptions(listRecords);
-	  const pendingTasks = (draft.draft_tasks || []).filter((task) => task.status !== 'confirmed' && task.status !== 'discarded');
-	  const oldTaskOptionsByItemId = buildGetNoteOldTaskOptionsByItemId(pendingTasks, records);
-	  const chunks = [];
+  try {
+    const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
+    const records = await listRecords();
+    const assigneeOptions = await buildMasterAssigneeOptions(listRecords);
+    const pendingTasks = (draft.draft_tasks || []).filter((task) => task.status !== 'confirmed' && task.status !== 'discarded');
+    const oldTaskOptionsByItemId = buildGetNoteOldTaskOptionsByItemId(pendingTasks, records);
+    const chunks = [];
     for (let index = 0; index < pendingTasks.length; index += GETNOTE_TASKS_PER_CARD) {
       chunks.push(pendingTasks.slice(index, index + GETNOTE_TASKS_PER_CARD));
     }
-	  const results = [];
-	  for (const tasks of chunks.length ? chunks : [[]]) {
-	    const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
+    const results = [];
+    for (const tasks of chunks.length ? chunks : [[]]) {
+      const prepareStartedAt = performance.now();
+      const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
+      const prepareMs = elapsedMs(prepareStartedAt);
       const messageId = await postMessage({ receiveId, card });
       await upsertDraftCardMessage({
         draftId: draft.id,
@@ -349,12 +382,31 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
         itemId: tasks.map((task) => task.item_id || '').filter(Boolean).join(','),
         cardMessageId: messageId
       });
+      emitDeliveryDiagnostics(diagnosticsLogger, {
+        phase: 'delivery_send',
+        status: 'sent',
+        card_kind: cardKind,
+        draft_id: draft.id,
+        message_id: maskIdentifier(messageId),
+        prepare_ms: prepareMs,
+        process_ms: elapsedMs(startedAt)
+      });
       results.push({ status: 'sent', message_id: messageId, item_ids: tasks.map((task) => task.item_id || '') });
     }
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent' });
     return { status: 'success', sent_count: results.length, skipped_count: 0, failed_count: 0, results };
   } catch (error) {
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_send',
+      error_phase: 'delivery_send',
+      error_class: 'delivery_failed',
+      status: 'failed',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      prepare_ms: elapsedMs(startedAt),
+      process_ms: elapsedMs(startedAt)
+    });
     return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ status: 'failed', error: error.message }] };
   }
 }
@@ -374,10 +426,20 @@ async function persistUnmappedAssignees(draftId, failures, cardKind) {
   }
 }
 
-async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInteractiveFeishuMessage, oldTaskOptions = []) {
+async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInteractiveFeishuMessage, oldTaskOptions = [], diagnosticsLogger = null) {
+  const startedAt = performance.now();
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
 
   if (existingState?.delivery_status === 'sent' && existingState.card_message_id) {
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_send',
+      status: 'skipped',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      message_id: maskIdentifier(existingState.card_message_id),
+      prepare_ms: elapsedMs(startedAt),
+      process_ms: elapsedMs(startedAt)
+    });
     return { assignee_key: assignee.assignee_key, status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id };
   }
 
@@ -392,15 +454,36 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
   });
 
   try {
+    const prepareStartedAt = performance.now();
     const card = cardKind === 'progress'
       ? buildAssigneeProgressCard({ draft, assignee, progressUpdates: assignee.tasks })
       : buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks, oldTaskOptions });
+    const prepareMs = elapsedMs(prepareStartedAt);
     const messageId = await postMessage({ receiveId: assignee.receive_id, card });
 
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_send',
+      status: 'sent',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      message_id: maskIdentifier(messageId),
+      prepare_ms: prepareMs,
+      process_ms: elapsedMs(startedAt)
+    });
     return { assignee_key: assignee.assignee_key, status: 'sent', message_id: messageId };
   } catch (error) {
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_send',
+      error_phase: 'delivery_send',
+      error_class: 'delivery_failed',
+      status: 'failed',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      prepare_ms: elapsedMs(startedAt),
+      process_ms: elapsedMs(startedAt)
+    });
     return { assignee_key: assignee.assignee_key, status: 'failed', error: error.message };
   }
 }
@@ -425,6 +508,7 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
 
   const listGroupMembers = deps.listGroupMembers || listConfiguredFeishuGroupMembers;
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
+  const diagnosticsLogger = deps.diagnosticsLogger || null;
   const states = await listDraftAssigneeStates(draft.id);
   const selectedStates = selectedFailedStates(states, assigneeKeys, cardKind);
   const memberResult = await listGroupMembers();
@@ -464,7 +548,7 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
     const oldTaskOptions = cardKind === 'tasks'
       ? await loadOldTaskOptionsForAssignee(assigneeKey, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords)
       : [];
-    results.push({ card_kind: state.card_kind, ...(await sendAssigneeCard(draft, assignee, cardKind, postMessage, oldTaskOptions)) });
+    results.push({ card_kind: state.card_kind, ...(await sendAssigneeCard(draft, assignee, cardKind, postMessage, oldTaskOptions, diagnosticsLogger)) });
   }
 
   for (const state of states) {
@@ -490,6 +574,7 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
   let memberSource = 'configured_map';
   const listGroupMembers = deps.listGroupMembers || listConfiguredFeishuGroupMembers;
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
+  const diagnosticsLogger = deps.diagnosticsLogger || null;
   const oldTaskOptionsByAssignee = new Map();
 
   try {
@@ -512,10 +597,10 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
   for (const assignee of resolveTaskCardRecipients(taskGrouped.deliverable)) {
     const options = await loadOldTaskOptionsForAssignee(assignee.assignee_key, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
     oldTaskOptionsByAssignee.set(assignee.assignee_key, options);
-    results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage, options));
+    results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage, options, diagnosticsLogger));
   }
   for (const assignee of resolveTaskCardRecipients(progressGrouped.deliverable)) {
-    results.push(await sendAssigneeCard(draft, assignee, 'progress', postMessage));
+    results.push(await sendAssigneeCard(draft, assignee, 'progress', postMessage, [], diagnosticsLogger));
   }
 
   const sentCount = results.filter((item) => item.status === 'sent').length;

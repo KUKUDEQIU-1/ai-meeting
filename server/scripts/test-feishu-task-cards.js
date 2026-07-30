@@ -1921,6 +1921,67 @@ async function testGetNoteDispatchUsesDedicatedTestRecipientOverride() {
   }
 }
 
+async function testDraftCardDeliveryDiagnosticsMaskIdentifiers() {
+  const normalDraft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `delivery-diagnostics-${Date.now()}-${Math.random()}`,
+    meetingTitle: '投递诊断测试',
+    meetingSource: '会议纪要',
+    draftTasks: [{ item_id: 'delivery_diag_1', task_name: '投递诊断任务', assignee: '张三' }],
+    tableId: 'table_delivery_diag',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const diagnostics = [];
+  const logger = { warn: (record) => diagnostics.push(record) };
+
+  const normalResult = await dispatchDraftTaskCards(normalDraft, {
+    assigneeMap: new Map([['张三', { assignee_key: '张三', assignee_name: '张三', receive_id_type: 'open_id', receive_id: 'ou_raw_recipient' }]]),
+    listGroupMembers: async () => ({ status: 'skipped' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async () => `om_raw_normal_message_${normalDraft.id}`,
+    diagnosticsLogger: logger
+  });
+
+  const getNoteDraft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-delivery-diagnostics-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 投递诊断测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{ item_id: 'getnote_delivery_diag_1', task_name: 'GetNote 投递诊断任务', assignee: '待确认' }],
+    tableId: 'table_getnote_delivery_diag',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const getNoteResult = await dispatchGetNoteTaskCard(getNoteDraft, {
+    dispatchMode: 'local',
+    receiveId: 'ou_getnote_raw_recipient',
+    force: true,
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async () => `om_raw_getnote_message_${getNoteDraft.id}`,
+    diagnosticsLogger: logger
+  });
+
+  const serialized = JSON.stringify(diagnostics);
+  const normalTrace = diagnostics.find((record) => record.card_kind === 'tasks' && record.draft_id === normalDraft.id);
+  const getNoteTrace = diagnostics.find((record) => record.card_kind === 'getnote_tasks' && record.draft_id === getNoteDraft.id);
+
+  assert.equal(normalResult.sent_count, 1);
+  assert.equal(getNoteResult.sent_count, 1, JSON.stringify(getNoteResult));
+  assert.equal(normalTrace.status, 'sent');
+  assert.equal(getNoteTrace.status, 'sent');
+  assert.match(normalTrace.message_id, /\*\*\*\*/);
+  assert.match(getNoteTrace.message_id, /\*\*\*\*/);
+  assert.equal(serialized.includes('ou_raw_recipient'), false);
+  assert.equal(serialized.includes('ou_getnote_raw_recipient'), false);
+  assert.equal(serialized.includes(`om_raw_normal_message_${normalDraft.id}`), false);
+  assert.equal(serialized.includes(`om_raw_getnote_message_${getNoteDraft.id}`), false);
+  assert.equal(Number.isFinite(normalTrace.prepare_ms), true);
+  assert.equal(Number.isFinite(normalTrace.process_ms), true);
+  assert.equal(Number.isFinite(getNoteTrace.prepare_ms), true);
+  assert.equal(Number.isFinite(getNoteTrace.process_ms), true);
+}
+
 async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -4441,6 +4502,7 @@ await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
 await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions();
 await testGetNoteDispatchForceResendsExistingSentCard();
 await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
+await testDraftCardDeliveryDiagnosticsMaskIdentifiers();
 await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
