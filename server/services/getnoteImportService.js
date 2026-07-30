@@ -35,6 +35,20 @@ function getNotifyTarget() {
   };
 }
 
+function getCardDispatchMode() {
+  return process.env.GETNOTE_CARD_DISPATCH_MODE?.trim().toLowerCase() || '';
+}
+
+function assertGetNoteCardDispatchEnabled(mode) {
+  if (mode === 'production' || mode === 'local') {
+    return;
+  }
+
+  const error = new Error('GETNOTE_CARD_DISPATCH_MODE must be production or local before sending GetNote cards');
+  error.status = 403;
+  throw error;
+}
+
 async function notifyUserSafe(params) {
   if (params?.notifyUser) {
     return params.notifyUser(params);
@@ -472,7 +486,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     if (aiResult?.tasks) {
       console.log(`[GetNote Sync] reuse cached analysis note_id=${normalizedNoteId} tasks_count=${aiResult.tasks.length}`);
     } else {
-      aiResult = await analyzeMeetingText(rawText, 'Get笔记', {
+      aiResult = await (options.analyzeMeetingText || analyzeMeetingText)(rawText, 'Get笔记', {
         content_source: contentMeta.source,
         content_length: contentMeta.length,
         source_type: 'getnote',
@@ -486,7 +500,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       const removedTasksBeforeHistory = aiResult.removed_tasks?.length || 0;
       console.log(`[GetNote Sync] AI analyzed note_id=${normalizedNoteId} summary_length=${aiResult.summary.length} raw_tasks_count=${rawTasksBeforeHistory} candidate_tasks_count=${candidateTasksBeforeHistory} removed_tasks_count=${removedTasksBeforeHistory}`);
 
-      const historyResult = await suppressHistoricalTasks(aiResult.tasks, {
+      const historyResult = await (options.suppressHistoricalTasks || suppressHistoricalTasks)(aiResult.tasks, {
         note_id: normalizedNoteId,
         meeting_title: meetingTitle
       });
@@ -571,7 +585,9 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     const draft = existingDraft
       ? await updateMeetingTaskDraftContent(existingDraft.id, draftPayload)
       : await createMeetingTaskDraft({ sourceType: 'getnote', sourceId: normalizedNoteId, segments: [], discardedSegments: [], existingMatches: [], uncertainTasks: [], ...draftPayload });
-    const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), force: options.force });
+    const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
+    assertGetNoteCardDispatchEnabled(cardDispatchMode);
+    const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: options.force });
 
     if (feishuResult.status !== 'success') {
       const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片发送失败');

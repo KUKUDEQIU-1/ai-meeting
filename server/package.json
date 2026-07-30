@@ -41,6 +41,8 @@
     "worker:feishu-wiki": "node scripts/feishu-wiki-worker.js",
     "test:feishu-wiki-docx-scan": "node scripts/test-feishu-wiki-docx-scan.js",
     "test:feishu-wiki-sync-route": "node scripts/test-feishu-wiki-sync-route.js",
+    "test:getnote-maintenance-route": "node scripts/test-getnote-maintenance-route.js",
+    "test:getnote-dispatch-mode": "node scripts/test-getnote-dispatch-mode.js",
     "list:feishu-group-members": "node scripts/list-feishu-group-members.js",
     "daily:meeting-tasks": "node scripts/daily-meeting-tasks.ts",
     "clear:master-task-table": "node scripts/clear-master-task-table.ts",

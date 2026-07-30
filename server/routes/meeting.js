@@ -10,18 +10,9 @@ import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
 import { resendFailedDraftTaskCards, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
+import { requireMaintenanceToken } from '../middleware/maintenanceAuth.js';
 
 const router = express.Router();
-
-function configuredMaintenanceToken() {
-  return String(process.env.FEISHU_DOCX_SOURCE_API_TOKEN || '').trim();
-}
-
-function bearerToken(req) {
-  const header = String(req.get('authorization') || '').trim();
-
-  return header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';
-}
 
 function requestBool(value) {
   return value === true || value === 'true' || value === '1';
@@ -34,15 +25,51 @@ function getNoteImportOptions(body) {
   };
 }
 
-function requireMaintenanceToken(req, res, next) {
-  const token = configuredMaintenanceToken();
+export function getMaintenanceGetNotePayload(body = {}) {
+  return {
+    noteId: String(body.note_id || '').trim(),
+    options: getNoteImportOptions(body)
+  };
+}
 
-  if (token && bearerToken(req) === token) {
-    next();
-    return;
-  }
+function getGetNoteSyncResponse(result) {
+  return {
+    success: true,
+    imported: result.status === 'success'
+      ? [{ note_id: result.note_id, title: result.title, status: result.status }]
+      .map((item) => ({
+        ...item,
+        table_id: result.table_id,
+        table_name: result.table_name,
+        table_url: result.table_url,
+        tasks_count: result.tasks_count,
+        status: result.status
+      }))
+      : [],
+    skipped: result.status === 'skipped'
+      ? [{
+          note_id: result.note_id,
+          title: result.title,
+          reason: result.reason || 'already_synced',
+          table_url: result.table_url || null
+        }]
+      : [],
+    failed: []
+  };
+}
 
-  res.status(401).json({ success: false, message: 'Unauthorized' });
+function getGetNoteSyncErrorResponse(error, noteId) {
+  return {
+    success: false,
+    imported: [],
+    skipped: [],
+    failed: [{
+      note_id: error.note_id || noteId,
+      title: error.meeting_title,
+      table_url: error.table_url,
+      error: error.message
+    }]
+  };
 }
 
 router.use('/feishu-docx-note-sources', feishuDocxNoteSourcesRouter);
@@ -424,7 +451,7 @@ router.post('/sync-feishu/test', async (req, res, next) => {
   }
 });
 
-router.post('/import-getnote', async (req, res, next) => {
+router.post('/import-getnote', requireMaintenanceToken, async (req, res, next) => {
   try {
     const noteId = req.body?.note_id?.trim();
 
@@ -476,7 +503,7 @@ router.post('/import-getnote', async (req, res, next) => {
   }
 });
 
-router.post('/sync-getnote', async (req, res, next) => {
+router.post('/sync-getnote', requireMaintenanceToken, async (req, res, next) => {
   try {
     const noteId = req.body?.note_id?.trim();
 
@@ -486,43 +513,11 @@ router.post('/sync-getnote', async (req, res, next) => {
       try {
         result = await importGetNoteMeeting(noteId, getNoteImportOptions(req.body));
       } catch (error) {
-        res.status(error.status || 502).json({
-          success: false,
-          imported: [],
-          skipped: [],
-          failed: [{
-            note_id: error.note_id || noteId,
-            title: error.meeting_title,
-            table_url: error.table_url,
-            error: error.message
-          }]
-        });
+        res.status(error.status || 502).json(getGetNoteSyncErrorResponse(error, noteId));
         return;
       }
 
-      res.json({
-        success: true,
-        imported: result.status === 'success'
-          ? [{ note_id: result.note_id, title: result.title, status: result.status }]
-          .map((item) => ({
-            ...item,
-            table_id: result.table_id,
-            table_name: result.table_name,
-            table_url: result.table_url,
-            tasks_count: result.tasks_count,
-            status: result.status
-          }))
-          : [],
-        skipped: result.status === 'skipped'
-          ? [{
-              note_id: result.note_id,
-              title: result.title,
-              reason: result.reason || 'already_synced',
-              table_url: result.table_url || null
-            }]
-          : [],
-        failed: []
-      });
+      res.json(getGetNoteSyncResponse(result));
       return;
     }
 
@@ -532,6 +527,30 @@ router.post('/sync-getnote', async (req, res, next) => {
     const result = await syncRecentGetNotes({ limit, tag, ignoreTag });
 
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/maintenance/sync-getnote', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const { noteId, options } = getMaintenanceGetNotePayload(req.body || {});
+
+    if (!noteId) {
+      res.status(400).json({ message: 'note_id is required' });
+      return;
+    }
+
+    let result;
+
+    try {
+      result = await importGetNoteMeeting(noteId, options);
+    } catch (error) {
+      res.status(error.status || 502).json(getGetNoteSyncErrorResponse(error, noteId));
+      return;
+    }
+
+    res.json(getGetNoteSyncResponse(result));
   } catch (error) {
     next(error);
   }

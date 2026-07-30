@@ -1585,6 +1585,7 @@ async function testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions() {
   }));
 
   const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
     receiveId: 'ou_getnote_reviewer',
     listMasterTaskAuditRecords: async () => [
       ...Array.from({ length: 12 }, (_, index) => ([
@@ -1653,6 +1654,7 @@ async function testGetNoteDispatchScopesOldTaskOptionsPerAssignee() {
   ];
 
   await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
     receiveId: 'ou_getnote_reviewer',
     listMasterTaskAuditRecords: async () => records,
     postMessage: async ({ card }) => {
@@ -1702,6 +1704,7 @@ async function testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit() {
   const sentCards = [];
 
   await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
     receiveId: 'ou_getnote_reviewer',
     listMasterTaskAuditRecords: async () => records,
     postMessage: async ({ card }) => {
@@ -1830,6 +1833,7 @@ async function testGetNoteDispatchForceResendsExistingSentCard() {
   });
   const sentCards = [];
   const deps = {
+    dispatchMode: 'local',
     receiveId: 'ou_getnote_reviewer',
     listMasterTaskAuditRecords: async () => [],
     postMessage: async ({ card }) => {
@@ -1866,6 +1870,7 @@ async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
   const sentCards = [];
 
   const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
     receiveId: 'ou_getnote_reviewer',
     force: true,
     listMasterTaskAuditRecords: async () => [],

@@ -284,7 +284,19 @@ function getNoteReviewerOpenId() {
   return process.env.GETNOTE_TASK_CARD_RECEIVE_OPEN_ID?.trim() || '';
 }
 
+function assertExplicitGetNoteDispatchMode(mode) {
+  const normalizedMode = String(mode || '').trim().toLowerCase();
+
+  if (normalizedMode === 'production' || normalizedMode === 'local') {
+    return;
+  }
+
+  throw new Error('GETNOTE_CARD_DISPATCH_MODE must be production or local before sending GetNote cards');
+}
+
 export async function dispatchGetNoteTaskCard(draft, deps = {}) {
+  assertExplicitGetNoteDispatchMode(deps.dispatchMode);
+
   const receiveId = deps.receiveId || getNoteReviewerOpenId();
   if (!receiveId) {
     throw new Error('GETNOTE_TASK_CARD_RECEIVE_OPEN_ID 未配置');
