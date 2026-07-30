@@ -1853,6 +1853,74 @@ async function testGetNoteDispatchForceResendsExistingSentCard() {
   assert.equal(sentCards.length, 2);
 }
 
+async function testGetNoteDispatchUsesDedicatedTestRecipientOverride() {
+  const previousProductionRecipient = process.env.GETNOTE_TASK_CARD_RECEIVE_OPEN_ID;
+  const previousTestRecipient = process.env.GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID;
+  const previousAssigneeTestRecipient = process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID;
+
+  try {
+    process.env.GETNOTE_TASK_CARD_RECEIVE_OPEN_ID = 'ou_getnote_production';
+    process.env.GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID = 'ou_getnote_tester';
+    process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID = 'ou_normal_card_tester';
+
+    const overrideDraft = await createMeetingTaskDraft({
+      sourceType: 'getnote',
+      sourceId: `getnote-test-recipient-${Date.now()}-${Math.random()}`,
+      meetingTitle: 'GetNote 测试收件人覆盖',
+      meetingSource: 'Get笔记',
+      draftTasks: [{ item_id: 'getnote_test_recipient_1', task_name: 'GetNote 测试收件人任务', assignee: '待确认' }],
+      tableId: 'table_getnote_test_recipient',
+      tableName: '事务列表',
+      tableUrl: 'https://example.com/master'
+    });
+    const overrideMessages = [];
+    const overrideResult = await dispatchGetNoteTaskCard(overrideDraft, {
+      dispatchMode: 'local',
+      listMasterTaskAuditRecords: async () => [],
+      postMessage: async ({ receiveId }) => {
+        overrideMessages.push(receiveId);
+        return `om_getnote_test_recipient_${overrideDraft.id}`;
+      }
+    });
+    const overrideState = await getDraftAssigneeState(overrideDraft.id, 'getnote_reviewer', 'getnote_tasks');
+
+    assert.equal(overrideResult.sent_count, 1);
+    assert.deepEqual(overrideMessages, ['ou_getnote_tester']);
+    assert.equal(overrideState.receive_id, 'ou_getnote_tester');
+
+    process.env.GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID = '   ';
+
+    const fallbackDraft = await createMeetingTaskDraft({
+      sourceType: 'getnote',
+      sourceId: `getnote-production-recipient-${Date.now()}-${Math.random()}`,
+      meetingTitle: 'GetNote 正式收件人回退',
+      meetingSource: 'Get笔记',
+      draftTasks: [{ item_id: 'getnote_production_recipient_1', task_name: 'GetNote 正式收件人任务', assignee: '待确认' }],
+      tableId: 'table_getnote_production_recipient',
+      tableName: '事务列表',
+      tableUrl: 'https://example.com/master'
+    });
+    const fallbackMessages = [];
+    const fallbackResult = await dispatchGetNoteTaskCard(fallbackDraft, {
+      dispatchMode: 'local',
+      listMasterTaskAuditRecords: async () => [],
+      postMessage: async ({ receiveId }) => {
+        fallbackMessages.push(receiveId);
+        return `om_getnote_production_recipient_${fallbackDraft.id}`;
+      }
+    });
+    const fallbackState = await getDraftAssigneeState(fallbackDraft.id, 'getnote_reviewer', 'getnote_tasks');
+
+    assert.equal(fallbackResult.sent_count, 1);
+    assert.deepEqual(fallbackMessages, ['ou_getnote_production']);
+    assert.equal(fallbackState.receive_id, 'ou_getnote_production');
+  } finally {
+    process.env.GETNOTE_TASK_CARD_RECEIVE_OPEN_ID = previousProductionRecipient;
+    process.env.GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID = previousTestRecipient;
+    process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID = previousAssigneeTestRecipient;
+  }
+}
+
 async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -4374,6 +4442,7 @@ await testGetNoteDispatchScopesOldTaskOptionsPerAssignee();
 await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
 await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions();
 await testGetNoteDispatchForceResendsExistingSentCard();
+await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
 await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();

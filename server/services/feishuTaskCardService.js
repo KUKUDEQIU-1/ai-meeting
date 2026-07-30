@@ -281,7 +281,9 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
 }
 
 function getNoteReviewerOpenId() {
-  return process.env.GETNOTE_TASK_CARD_RECEIVE_OPEN_ID?.trim() || '';
+  return process.env.GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID?.trim()
+    || process.env.GETNOTE_TASK_CARD_RECEIVE_OPEN_ID?.trim()
+    || '';
 }
 
 function assertExplicitGetNoteDispatchMode(mode) {
