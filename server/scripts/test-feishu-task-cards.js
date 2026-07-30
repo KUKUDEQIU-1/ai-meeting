@@ -11,7 +11,7 @@ import {
   parseAssigneeMap,
   validateCallbackActor
 } from '../services/feishuTaskCardPure.js';
-import { handleFeishuCardAction } from '../services/feishuTaskCardActionService.js';
+import { handleFeishuCardAction, prepareFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
 import { createTaskRecord, formatTaskForMasterTable, updateMasterTaskProgress } from '../services/feishuBitableClient.js';
@@ -1347,6 +1347,18 @@ function getNotePayloadForActor({ draft, eventId, action, operatorOpenId, formVa
   };
 }
 
+function getNoteRefreshPayloadForActor({ draft, eventId, operatorOpenId, itemId = 'getnote_item_1', messageId = '', formValue = {} }) {
+  return getNotePayloadForActor({
+    draft,
+    eventId,
+    action: 'refresh_old_tasks',
+    operatorOpenId,
+    itemId,
+    messageId,
+    formValue
+  });
+}
+
 async function testGetNoteCallbackAuthorizesEffectiveRecipientOnly() {
   const draft = await createGetNoteActionDraft(`getnote-effective-recipient-${Date.now()}`);
   const accepted = await handleFeishuCardAction(getNotePayloadForActor({
@@ -1444,6 +1456,75 @@ async function testGetNoteSubmitFinalizesOnlyOneTaskAndIsReplaySafe() {
   assert.equal(finalized[0].confirmedTasks[0].assignee, '洪伟填');
   assert.equal(stored.draft_tasks[0].status, 'confirmed');
   assert.equal(updateCalls.length, 1);
+}
+
+async function testGetNoteRefreshOldTasksReturnsImmediateRefreshToast() {
+  const draft = await createGetNoteActionDraft(`getnote-refresh-toast-${Date.now()}`);
+
+  const prepared = await prepareFeishuCardAction(getNoteRefreshPayloadForActor({
+    draft,
+    eventId: 'evt_getnote_refresh_toast',
+    operatorOpenId: 'ou_getnote_reviewer',
+    formValue: {
+      assignee_select_getnote_item_1: '洪伟填'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [{ taskName: '洪伟填 进行中任务 A', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
+    updateCard: async () => ({ status: 'updated' })
+  });
+
+  assert.equal(prepared.response.toast.content, '正在刷新旧任务，请稍候');
+}
+
+async function testGetNoteRefreshOldTasksPersistsLatestAssigneeAcrossSequentialCallbacks() {
+  const draft = await createGetNoteActionDraft(`getnote-refresh-sequential-${Date.now()}`);
+  const updateCalls = [];
+
+  const first = await handleFeishuCardAction(getNoteRefreshPayloadForActor({
+    draft,
+    eventId: 'evt_getnote_refresh_sequential_1',
+    operatorOpenId: 'ou_getnote_reviewer',
+    formValue: {
+      assignee_select_getnote_item_1: '洪伟填'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [
+      { taskName: '洪伟填 进行中任务 A', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' },
+      { taskName: '李嘉华 进行中任务 A', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' }
+    ],
+    updateCard: async (params) => {
+      updateCalls.push(params);
+      return { status: 'updated' };
+    }
+  });
+
+  const second = await handleFeishuCardAction(getNoteRefreshPayloadForActor({
+    draft,
+    eventId: 'evt_getnote_refresh_sequential_2',
+    operatorOpenId: 'ou_getnote_reviewer',
+    formValue: {
+      assignee_select_getnote_item_1: '李嘉华'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [
+      { taskName: '洪伟填 进行中任务 A', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' },
+      { taskName: '李嘉华 进行中任务 A', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' }
+    ],
+    updateCard: async (params) => {
+      updateCalls.push(params);
+      return { status: 'updated' };
+    }
+  });
+
+  const stored = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(first.toast.content, '旧任务选项已刷新');
+  assert.equal(second.toast.content, '旧任务选项已刷新');
+  assert.equal(updateCalls.length, 2);
+  assert.equal(updateCalls[0].assigneeKey, 'getnote_reviewer');
+  assert.equal(updateCalls[1].assigneeKey, 'getnote_reviewer');
+  assert.equal(stored.draft_tasks[0].assignee, '李嘉华');
+  assert.equal(stored.draft_tasks[0].owner, '李嘉华');
 }
 
 async function testGetNoteDiscardWritesNothingAndIsReplaySafe() {
@@ -4169,6 +4250,8 @@ await testEditAndDiscardPreserveStoredFields();
 await testGetNoteSubmitRequiresAssigneeSelection();
 await testGetNoteCallbackAuthorizesEffectiveRecipientOnly();
 await testGetNoteSubmitFinalizesOnlyOneTaskAndIsReplaySafe();
+await testGetNoteRefreshOldTasksReturnsImmediateRefreshToast();
+await testGetNoteRefreshOldTasksPersistsLatestAssigneeAcrossSequentialCallbacks();
 await testGetNoteDiscardWritesNothingAndIsReplaySafe();
 await testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions();
 await testGetNoteDispatchScopesOldTaskOptionsPerAssignee();

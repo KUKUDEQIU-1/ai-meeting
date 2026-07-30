@@ -555,8 +555,33 @@ async function refreshGetNoteOldTaskOptions(parsed, state, dependencies) {
     updated_at: new Date().toISOString()
   }));
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: scopedRefreshItemId(parsed, state) || parsed.item_id || '' });
-  return feishuCallbackToast('旧任务选项已刷新');
+  const scopedItemId = scopedRefreshItemId(parsed, state) || parsed.item_id || '';
+  const refreshLog = {
+    event: 'refresh_old_tasks_card_patch',
+    draft_id: parsed.draft_id,
+    item_id: parsed.item_id || '',
+    scope_item_id: scopedItemId,
+    assignee: selectedAssignee,
+    message_id: parsed.message_id || '',
+    task_count: Array.isArray(draft?.draft_tasks) ? draft.draft_tasks.length : undefined,
+    pending_task_count: Array.isArray(draft?.draft_tasks) ? draft.draft_tasks.filter((task) => task.status === 'pending').length : undefined
+  };
+
+  try {
+    const result = await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: scopedItemId });
+    console.log('[Feishu Card Action] refresh card patch success', JSON.stringify({
+      ...refreshLog,
+      update_status: result?.status || 'updated'
+    }));
+    return feishuCallbackToast('旧任务选项已刷新');
+  } catch (error) {
+    console.warn('[Feishu Card Action] refresh card patch failed', JSON.stringify({
+      ...refreshLog,
+      error_code: error?.feishuResponse?.code ?? '',
+      error_message: error?.feishuResponse?.msg || error?.message || String(error)
+    }));
+    throw error;
+  }
 }
 
 async function discardGetNoteTask(parsed, state, dependencies) {
@@ -759,7 +784,7 @@ export async function prepareFeishuCardAction(payload) {
     return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
   }
   if (parsed.card_kind === 'getnote_tasks' && parsed.action === 'refresh_old_tasks') {
-    return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
+    return { parsed, state, response: feishuCallbackToast('正在刷新旧任务，请稍候'), shouldProcess: true };
   }
   if ((parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress') && state.confirmation_status === 'processing') {
     return { parsed, state, response: feishuCallbackToast(parsed.action === 'discard_task' ? '确认处理中，暂不能丢弃' : '确认处理中，暂不能修改'), shouldProcess: false };
