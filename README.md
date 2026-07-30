@@ -434,6 +434,7 @@ FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 FEISHU_EVENT_VERIFICATION_TOKEN=
 FEISHU_NOTIFY_RECEIVE_ID_TYPE=email
 FEISHU_NOTIFY_RECEIVE_ID=
+OPS_MAINTENANCE_TOKEN=
 GETNOTE_REQUIRE_TAG=false
 GETNOTE_SYNC_TAG=
 GETNOTE_SCAN_LIMIT=20
@@ -441,6 +442,8 @@ GETNOTE_MIN_NOTE_AGE_MINUTES=5
 GETNOTE_MAX_LOOKBACK_DAYS=7
 GETNOTE_WORKER_INTERVAL_MINUTES=15
 GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
+GETNOTE_SYNC_REMOTE_URL=
+GETNOTE_CARD_DISPATCH_MODE=disabled
 GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
 ```
 
@@ -458,10 +461,13 @@ GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
 - `FEISHU_EVENT_VERIFICATION_TOKEN=`：飞书事件订阅/卡片回调 verification token。配置后 `/api/feishu/card-action` 会拒绝 token 不匹配的回调。
 - `FEISHU_NOTIFY_RECEIVE_ID_TYPE=email`：飞书私发通知的接收 ID 类型，默认 `email`。
 - `FEISHU_NOTIFY_RECEIVE_ID=`：飞书私发通知接收人。配置后，worker 启动首次扫描若 `imported=0` 会私发“未读取到会议内容”。
+- `OPS_MAINTENANCE_TOKEN=`：维护接口 Bearer Token；为空时回退使用 `FEISHU_DOCX_SOURCE_API_TOKEN`，两者都为空则 GetNote 维护触发接口拒绝访问。
 - `FEISHU_WIKI_SOURCE_NODE_URL=`：常驻 worker 自动扫描的飞书 Wiki 目录节点。生产默认应指向“会议原文”：`https://qcn65gkeqmrk.feishu.cn/wiki/K40WwNEP3ipVSRkaKwec3dlwnrh?fromScene=spaceOverview`。
 - `FEISHU_WIKI_SOURCE_SPACE_ID=7633724002921368754`：上述 Wiki 节点所在知识库空间 ID。
 - `FEISHU_WIKI_SCAN_LIMIT=20`：每轮最多读取的 Wiki 子节点数量。
 - `FEISHU_DOCX_SOURCE_API_TOKEN=`：在线维护飞书 docx 来源列表的可选 API Token。为空时 `GET/POST /api/meeting/feishu-docx-note-sources` 不需要鉴权；配置后必须使用 `Authorization: Bearer <token>`。
+- `GETNOTE_SYNC_REMOTE_URL=`：本地 `npm run sync:getnote` 的生产触发地址。配置后脚本调用生产 `/api/meeting/maintenance/sync-getnote`。
+- `GETNOTE_CARD_DISPATCH_MODE=disabled`：GetNote 卡片发送保护。生产设为 `production`；确需本地直发测试时显式设为 `local`；默认在发送前失败。
 - `AI_TIMEOUT_MS=300000`：AI 单次请求超时时间，默认 300 秒；强制重新分析较长会议原文时不要低于该值。
 
 ## 飞书会议原文目录自动扫描
@@ -579,10 +585,10 @@ curl "https://huiyiai.yourtest.top/api/meeting/feishu-docx-note-sources" \
 ### 正式使用方式一：手动同步
 
 ```bash
-npm run sync:getnote
+npm run sync:getnote -- --note_id=<note_id>
 ```
 
-适合每天会议结束后手动跑一次，或部署到服务器后通过系统定时任务跑。
+适合手动触发单篇 GetNote。配置 `GETNOTE_SYNC_REMOTE_URL=https://huiyiai.yourtest.top` 且设置维护 Token 后，该命令会让生产服务处理并发送卡片；未配置远程地址时，只有 `GETNOTE_CARD_DISPATCH_MODE=local` 才允许本地直发卡片。
 
 同步逻辑：
 
