@@ -139,6 +139,117 @@ async function testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish() {
   assert.equal(snapshot.docx_scan_enabled, undefined);
 }
 
+async function testWorkerDoesNotRunGetNoteScanUnlessEnabled() {
+  const events = [];
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false'
+    },
+    scans: {
+      wiki: async () => {
+        events.push('wiki');
+        return { imported: [], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' };
+      },
+      getnote: async () => {
+        events.push('getnote:unexpected');
+        return { imported: [], skipped: [], failed: [] };
+      }
+    },
+    scheduler: () => ({ cancel() {} })
+  });
+
+  await worker.runCycle();
+  const snapshot = worker.snapshot();
+
+  assert.deepEqual(events, ['wiki']);
+  assert.equal(snapshot.getnote_scan_enabled, false);
+  assert.equal(snapshot.getnote_scan_source, null);
+  assert.equal(snapshot.getnote_last_cycle, null);
+  assert.equal(snapshot.last_cycle.getnote, null);
+}
+
+async function testWorkerRunsGetNoteScanAfterWikiWhenEnabled() {
+  const events = [];
+  let getnoteOptions = null;
+  let scheduledDelay = null;
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false',
+      FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES: '5',
+      GETNOTE_RESIDENT_WORKER_ENABLED: 'true',
+      GETNOTE_SCAN_LIMIT: '7',
+      GETNOTE_SYNC_TAG: '晨会',
+      GETNOTE_REQUIRE_TAG: 'false'
+    },
+    scans: {
+      wiki: async () => {
+        events.push('wiki:start');
+        events.push('wiki:end');
+        return { imported: [{ document_id: 'doc1' }], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' };
+      },
+      getnote: async (options) => {
+        events.push('getnote:start');
+        getnoteOptions = options;
+        events.push('getnote:end');
+        return { imported: [{ note_id: 'note1' }], skipped: [{ note_id: 'note2' }], failed: [], scan_source: 'getnote_recent_notes' };
+      }
+    },
+    scheduler: (_task, delayMs) => {
+      scheduledDelay = delayMs;
+      return { cancel() {} };
+    }
+  });
+
+  await worker.runCycle();
+  const snapshot = worker.snapshot();
+
+  assert.deepEqual(events, ['wiki:start', 'wiki:end', 'getnote:start', 'getnote:end']);
+  assert.deepEqual(getnoteOptions, { limit: 7, tag: '晨会', ignoreTag: true, reanalyze: false, force: false });
+  assert.equal(scheduledDelay, 5 * 60 * 1000);
+  assert.equal(snapshot.last_cycle.status, 'success');
+  assert.equal(snapshot.last_cycle.wiki.imported_count, 1);
+  assert.equal(snapshot.last_cycle.getnote.imported_count, 1);
+  assert.equal(snapshot.last_cycle.getnote.skipped_count, 1);
+  assert.equal(snapshot.getnote_scan_enabled, true);
+  assert.equal(snapshot.getnote_scan_source, 'getnote_recent_notes');
+  assert.equal(snapshot.getnote_last_cycle.imported_count, 1);
+}
+
+async function testWorkerReportsGetNoteFailureWithoutBlockingNextCycle() {
+  let scheduledDelay = null;
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false',
+      GETNOTE_RESIDENT_WORKER_ENABLED: 'true'
+    },
+    scans: {
+      wiki: async () => ({ imported: [], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' }),
+      getnote: async () => {
+        throw new Error('getnote unavailable');
+      }
+    },
+    scheduler: (_task, delayMs) => {
+      scheduledDelay = delayMs;
+      return { cancel() {} };
+    },
+    logger: { error() {} }
+  });
+
+  await worker.runCycle();
+  const snapshot = worker.snapshot();
+
+  assert.equal(snapshot.status, 'idle');
+  assert.equal(snapshot.last_cycle.status, 'partial_failed');
+  assert.equal(snapshot.last_cycle.wiki.status, 'success');
+  assert.equal(snapshot.last_cycle.getnote.status, 'failed');
+  assert.equal(snapshot.last_cycle.getnote.failed_count, 1);
+  assert.equal(snapshot.getnote_last_cycle.error, 'getnote unavailable');
+  assert.equal(scheduledDelay, 60 * 1000);
+}
+
 async function testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay() {
   let auditCalls = 0;
   let currentTime = new Date('2026-07-24T09:50:00.000Z');
@@ -215,6 +326,9 @@ await testCoordinatorReturnsBusyWithoutOverlap();
 await testCoordinatorRejectsEquivalentScanWithoutSecondInvocation();
 await testWorkerDisabledAndSafetyGateDoNotScan();
 await testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish();
+await testWorkerDoesNotRunGetNoteScanUnlessEnabled();
+await testWorkerRunsGetNoteScanAfterWikiWhenEnabled();
+await testWorkerReportsGetNoteFailureWithoutBlockingNextCycle();
 await testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay();
 await testWorkerSkipsAuditOnBeijingWeekend();
 

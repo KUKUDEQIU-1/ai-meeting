@@ -4,7 +4,9 @@ import { sendMasterTaskAuditCard } from './masterTaskAuditCardService.js';
 import { getMasterTaskAuditLog, markMasterTaskAuditFailed, upsertMasterTaskAuditLog } from './masterTaskAuditLogService.js';
 import { auditMasterTaskTable } from './masterTaskAuditService.js';
 import { syncFeishuWikiDocxNotes } from './feishuWikiDocxImportService.js';
+import { syncRecentGetNotes } from './getnoteImportService.js';
 
+// allow: SIZE_OK — central resident scheduler state machine with injected test seams.
 const DEFAULT_INTERVAL_MINUTES = 1;
 const RETRY_DELAY_MS = 60 * 1000;
 const AUDIT_TIME_ZONE = 'Asia/Shanghai';
@@ -72,20 +74,20 @@ function defaultScheduler(task, delayMs) {
   return { cancel: () => clearTimeout(timer) };
 }
 
-function summarizeResult(result) {
+function summarizeResult(result, fallbackSource = 'feishu_wiki_docx_library') {
   return {
     status: result?.status || (result?.success === false ? 'failed' : 'success'),
-    scan_source: result?.scan_source || 'feishu_wiki_docx_library',
+    scan_source: result?.scan_source || fallbackSource,
     imported_count: Array.isArray(result?.imported) ? result.imported.length : 0,
     skipped_count: Array.isArray(result?.skipped) ? result.skipped.length : 0,
     failed_count: Array.isArray(result?.failed) ? result.failed.length : 0
   };
 }
 
-function summarizeFailure(error) {
+function summarizeFailure(error, fallbackSource = 'feishu_wiki_docx_library') {
   return {
     status: isPermissionError(error) ? 'blocked' : 'failed',
-    scan_source: 'feishu_wiki_docx_library',
+    scan_source: fallbackSource,
     imported_count: 0,
     skipped_count: 0,
     failed_count: 1,
@@ -119,10 +121,15 @@ export function createFeishuResidentWorker({
   const requireTestRecipient = envEnabled(env, 'FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT', true);
   const hasTestRecipient = Boolean(String(env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim());
   const intervalMinutes = envPositiveNumber(env, 'FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES', DEFAULT_INTERVAL_MINUTES);
+  const getnoteEnabled = envEnabled(env, 'GETNOTE_RESIDENT_WORKER_ENABLED', false);
+  const getnoteLimit = envPositiveNumber(env, 'GETNOTE_SCAN_LIMIT', 20);
+  const getnoteTag = String(env.GETNOTE_SYNC_TAG || '').trim();
+  const getnoteIgnoreTag = !envEnabled(env, 'GETNOTE_REQUIRE_TAG', false);
   const auditEnabled = envEnabled(env, 'FEISHU_MASTER_TASK_AUDIT_ENABLED', false);
   const auditHour = envPositiveNumber(env, 'FEISHU_MASTER_TASK_AUDIT_HOUR', 18);
   const auditMinute = Number.isFinite(Number(env.FEISHU_MASTER_TASK_AUDIT_MINUTE)) ? Number(env.FEISHU_MASTER_TASK_AUDIT_MINUTE) : 0;
   const wikiScan = scans.wiki || ((options) => syncFeishuWikiDocxNotes(options));
+  const getnoteScan = scans.getnote || ((options) => syncRecentGetNotes(options));
   const runAudit = audit.run || (() => auditMasterTaskTable({
     listRecords: listMasterTaskAuditRecords,
     getAuditLog: getMasterTaskAuditLog,
@@ -135,6 +142,7 @@ export function createFeishuResidentWorker({
   let timer = null;
   let status = enabled ? 'idle' : 'disabled';
   let lastCycle = null;
+  let getnoteLastCycle = null;
   let lastAuditDate = '';
 
   function clearTimer() {
@@ -153,6 +161,9 @@ export function createFeishuResidentWorker({
       test_recipient_configured: hasTestRecipient,
         interval_minutes: intervalMinutes,
         scan_source: 'feishu_wiki_docx_library',
+        getnote_scan_enabled: getnoteEnabled,
+        getnote_scan_source: getnoteEnabled ? 'getnote_recent_notes' : null,
+        getnote_last_cycle: getnoteLastCycle,
         audit_enabled: auditEnabled,
         audit_last_run_date: lastAuditDate || null,
         last_cycle: lastCycle,
@@ -168,13 +179,14 @@ export function createFeishuResidentWorker({
     }, delayMs);
   }
 
-async function runScan(type, scan) {
+  async function runScan(type, scan, options = {}) {
+    const fallbackSource = options.scanSource || 'feishu_wiki_docx_library';
     try {
-      const result = await coordinator.runScan(type, scan);
-      return summarizeResult(result);
+      const result = await coordinator.runScan(type, scan, options.metadata);
+      return summarizeResult(result, fallbackSource);
     } catch (error) {
       logger.error(`[Feishu Resident Worker] ${type} scan failed:`, error.message);
-      return summarizeFailure(error);
+      return summarizeFailure(error, fallbackSource);
     }
   }
 
@@ -186,7 +198,27 @@ async function runScan(type, scan) {
     const startedAt = nowIso();
 
     try {
-      const wiki = await runScan('wiki', () => wikiScan({}));
+      const wiki = await runScan('wiki', () => wikiScan({}), {
+        scanSource: 'feishu_wiki_docx_library'
+      });
+      const getnote = getnoteEnabled
+        ? await runScan('getnote', () => getnoteScan({
+            limit: getnoteLimit,
+            tag: getnoteTag,
+            ignoreTag: getnoteIgnoreTag,
+            reanalyze: false,
+            force: false
+          }), {
+            scanSource: 'getnote_recent_notes',
+            metadata: {
+              route: '/api/meeting/maintenance/sync-getnote',
+              capability: 'getnote_resident_scan',
+              equivalenceKey: 'getnote-resident-active-scan',
+              mode: 'recent_getnote_resident'
+            }
+          })
+        : null;
+      getnoteLastCycle = getnote;
       let auditResult = null;
       const currentTime = now();
       const currentAuditDate = localDateKey(currentTime);
@@ -212,13 +244,14 @@ async function runScan(type, scan) {
       }
 
       const blocked = wiki.status === 'blocked';
-      const failed = wiki.status === 'failed';
+      const failed = wiki.status === 'failed' || getnote?.status === 'failed';
       lastCycle = {
         started_at: startedAt,
         finished_at: nowIso(),
         status: blocked ? 'blocked' : failed || auditResult?.status === 'failed' ? 'partial_failed' : 'success',
         scan_source: wiki.scan_source,
         wiki,
+        getnote,
         audit: auditResult
       };
       status = blocked ? 'blocked' : 'idle';
