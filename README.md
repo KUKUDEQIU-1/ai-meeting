@@ -440,6 +440,7 @@ GETNOTE_SYNC_TAG=
 GETNOTE_SCAN_LIMIT=20
 GETNOTE_MIN_NOTE_AGE_MINUTES=5
 GETNOTE_MAX_LOOKBACK_DAYS=7
+GETNOTE_RESIDENT_WORKER_ENABLED=false
 GETNOTE_WORKER_INTERVAL_MINUTES=15
 GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 GETNOTE_SYNC_REMOTE_URL=
@@ -452,6 +453,7 @@ GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
 - `GETNOTE_SCAN_LIMIT=20`：每次扫描最近 20 条笔记。
 - `GETNOTE_MIN_NOTE_AGE_MINUTES=5`：笔记创建后至少等待 5 分钟再处理，避免转写未完成。
 - `GETNOTE_MAX_LOOKBACK_DAYS=7`：最多处理最近 7 天内的笔记。
+- `GETNOTE_RESIDENT_WORKER_ENABLED=false`：默认不接入 HTTP 服务内置 resident worker。生产设为 `true` 后，Get笔记会随 `server/index.js` 的 resident worker 按 `FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES` 周期自动扫描，无需手动调用维护接口。
 - `GETNOTE_PROCESSING_TIMEOUT_MINUTES=30`：`processing` 状态超过 30 分钟允许重试。
 - `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=`：Get笔记任务分配卡片接收人的飞书 `open_id`，生产应配置为伟填。Get笔记不会按任务负责人分发卡片，也不会直接写入正式总表；每篇笔记只给该接收人发送一张待处理卡片。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID_TYPE=chat_id`：群通知接收 ID 类型。仅用于非草稿确认类群通知；飞书会议纪要/docx 草稿确认不再使用群确认链接。
@@ -541,7 +543,7 @@ pm2 stop ai-meeting-server
 pm2 start server/index.js --name ai-meeting-server
 ```
 
-旧的 GetNote 命令仍保留给 Get笔记来源使用；不要用 `server/scripts/worker-getnote.ts` 作为 Wiki/docx 生产 resident worker。
+GetNote 也可以接入同一个 resident worker：设置 `GETNOTE_RESIDENT_WORKER_ENABLED=true` 后，服务每轮先扫描 Wiki/docx，再扫描符合 GetNote 标题/标签/时间窗口规则的新笔记。GetNote 扫描复用 `GETNOTE_SCAN_LIMIT`、`GETNOTE_REQUIRE_TAG`、`GETNOTE_SYNC_TAG`、`GETNOTE_MIN_NOTE_AGE_MINUTES` 和 `GETNOTE_MAX_LOOKBACK_DAYS`；卡片发送仍要求 `GETNOTE_CARD_DISPATCH_MODE=production` 和 `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID`。旧的 GetNote 命令仍保留给手动验证或独立来源使用；不要用 `server/scripts/worker-getnote.ts` 作为 Wiki/docx 生产 resident worker。
 
 ## 飞书单 docx 在线来源管理
 
@@ -598,13 +600,27 @@ npm run sync:getnote -- --note_id=<note_id>
 - 单条失败不会中断全部同步。
 - 转写未完成时返回 `transcript_not_ready`，下一轮会继续尝试。
 
-### 正式使用方式二：后台自动轮询
+### 正式使用方式二：随 HTTP 服务自动轮询
+
+推荐生产使用内置 resident worker，不需要另起 GetNote 进程：
+
+```env
+FEISHU_RESIDENT_WORKER_ENABLED=true
+GETNOTE_RESIDENT_WORKER_ENABLED=true
+FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES=1
+GETNOTE_CARD_DISPATCH_MODE=production
+GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=ou_xxx
+```
+
+启动 `server/index.js` 后，每轮 resident worker 会先扫描飞书 Wiki/docx，再扫描 Get笔记最近列表；上一轮未结束时不会并发启动下一轮。健康检查 `/api/health` 的 `resident_worker.getnote_scan_enabled`、`getnote_scan_source`、`getnote_last_cycle` 会显示 GetNote 自动扫描状态。
+
+### 正式使用方式三：独立后台自动轮询
 
 ```bash
 npm run worker:getnote
 ```
 
-适合工具常驻运行。启动后立即同步一次，之后每 `GETNOTE_WORKER_INTERVAL_MINUTES` 分钟自动扫描一次。若上一轮还没结束，下一轮会自动跳过，避免并发重复执行。
+适合不运行 HTTP 服务 resident worker 的独立工具常驻场景。启动后立即同步一次，之后每 `GETNOTE_WORKER_INTERVAL_MINUTES` 分钟自动扫描一次。若上一轮还没结束，下一轮会自动跳过，避免并发重复执行。
 
 补充行为：
 
