@@ -232,6 +232,68 @@ async function testGetNoteMainlineMergesSupportAndRequiresAssigneeConfirmation()
   assert.deepEqual(result.tasks[0].source_turn_ids, ['turn_1', 'turn_2']);
 }
 
+async function testSemanticMergeKeepsSubActionsAsTaskContext() {
+  const result = await analyzeWith([
+    task({
+      task_name: '优化AI会议助手',
+      title: '优化AI会议助手',
+      task_brief: '优化 AI 会议助手整体体验。',
+      task_description: '优化 AI 会议助手整体体验。',
+      task_context: '围绕 AI 会议助手做整体优化。',
+      evidence_quote: '我今天优化 AI 会议助手',
+      candidate_id: 'candidate_1',
+      source_turn_ids: ['turn_1']
+    }),
+    task({
+      task_name: '优化AI会议助手任务总结逻辑',
+      title: '优化AI会议助手任务总结逻辑',
+      task_brief: '优化 AI 会议助手任务总结逻辑。',
+      task_description: '调整任务总结逻辑，避免把同一主线拆成多个任务。',
+      task_context: '任务总结逻辑需要把分支事项合并到主任务备注。',
+      evidence_quote: '优化 AI 会议助手任务总结逻辑',
+      candidate_id: 'candidate_2',
+      source_turn_ids: ['turn_2']
+    }),
+    task({
+      task_name: '修复AI会议助手卡片展示Bug',
+      title: '修复AI会议助手卡片展示Bug',
+      task_brief: '修复 AI 会议助手卡片展示 bug。',
+      task_description: '修复任务卡片展示和刷新异常。',
+      task_context: '任务卡片展示 bug 是 AI 会议助手优化主线的分支事项。',
+      evidence_quote: '修复卡片展示 bug',
+      candidate_id: 'candidate_3',
+      source_turn_ids: ['turn_3']
+    })
+  ], {
+    decisions: [
+      { candidate_id: 'candidate_1', action: 'keep', reason: '主任务' },
+      { candidate_id: 'candidate_2', action: 'keep', reason: '主任务分支' },
+      { candidate_id: 'candidate_3', action: 'keep', reason: '主任务分支' }
+    ]
+  }, {
+    dedupeMeetingTasksSemantically: async ({ tasks }) => {
+      const remainingIds = tasks.map((item) => item.candidate_id);
+      return {
+        merge_groups: [{
+          canonical_candidate_id: 'candidate_1',
+          duplicate_candidate_ids: remainingIds.filter((id) => id !== 'candidate_1'),
+          reason: 'same_project_sub_actions'
+        }]
+      };
+    }
+  });
+  const mergedTask = result.tasks[0];
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(mergedTask.candidate_id, 'candidate_1');
+  assert.equal(mergedTask.task_name, '优化AI会议助手');
+  assert.match(mergedTask.task_context, /优化\s*AI\s*会议助手任务总结逻辑/);
+  assert.match(mergedTask.task_context, /修复\s*AI\s*会议助手卡片展示\s*bug/i);
+  assert.deepEqual(mergedTask.source_turn_ids, ['turn_1', 'turn_2', 'turn_3']);
+  assert.equal(result.removed_tasks.some((item) => item.reason === 'similar_action_object'), true);
+  assert.equal(result.removed_tasks.some((item) => item.reason === 'semantic_merge:same_project_sub_actions' && item.merged_into === 'candidate_1'), true);
+}
+
 function testTaskExtractionNormalizationPreservesSemanticFields() {
   const result = normalizeTaskExtractionResult({
     today_tasks: [{
@@ -341,6 +403,7 @@ await testKeepsDistinctSameAssigneeTasksWithoutCap();
 await testFiltersContextOnlyCandidateBeforeScoring();
 await testKeepsMultipleConcreteTasksForOneSpeakerWhileDroppingExplanation();
 await testGetNoteMainlineMergesSupportAndRequiresAssigneeConfirmation();
+await testSemanticMergeKeepsSubActionsAsTaskContext();
 testTaskExtractionNormalizationPreservesSemanticFields();
 await testValidatorFailureFallsOpen();
 await testMalformedValidatorResponseFallsOpen();

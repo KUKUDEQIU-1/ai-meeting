@@ -470,11 +470,12 @@ export async function deduplicateMeetingTasksSemantically({ aiInput, tasks }) {
 
 规则：
 1. 只处理输入里的 candidate_id，不要新增、改名或合并任务内容。
-2. 只有同一执行人、同一交付物、同一时间约束且只是措辞不同的候选才可归为一组。
-3. 若负责人、截止时间、状态等已知字段冲突，必须保持为空组。
-4. canonical_candidate_id 填要保留的候选 ID；duplicate_candidate_ids 填被合并候选 ID 数组。
-5. 不确定时返回空数组。
-6. 必须返回合法 JSON，不要返回 Markdown。
+2. 同一执行人、同一交付物、同一时间约束且只是措辞不同的候选可归为一组。
+3. 同一项目/模块的一条主任务与若干分支动作也可归为一组，例如“优化AI会议助手”作为主任务，“优化任务总结逻辑”“修复卡片展示bug”作为分支动作；canonical_candidate_id 填更宽泛的主任务，分支动作填 duplicate_candidate_ids。
+4. 若负责人、截止时间、状态等已知字段冲突，必须保持为空组。
+5. canonical_candidate_id 填要保留的候选 ID；duplicate_candidate_ids 填被合并候选 ID 数组。
+6. 不确定时返回空数组。
+7. 必须返回合法 JSON，不要返回 Markdown。
 
 返回格式：
 {

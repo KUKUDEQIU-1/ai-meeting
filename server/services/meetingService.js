@@ -364,7 +364,7 @@ export function dedupeSimilarTasks(tasks = []) {
 
     const winner = betterTask(existing, task);
     const loser = winner === existing ? task : existing;
-    bySignature.set(signature, winner);
+    bySignature.set(signature, mergeTaskDetails(winner, loser));
     merged.push({ task: getTaskName(loser), into: getTaskName(winner), reason: 'similar_action_object' });
     console.log(`[Task Dedupe] merged task=${getTaskName(loser)} into=${getTaskName(winner)} reason=similar_action_object`);
   }
@@ -372,6 +372,36 @@ export function dedupeSimilarTasks(tasks = []) {
   return {
     tasks: Array.from(bySignature.values()),
     merged
+  };
+}
+
+function mergeDetailEntries(...items) {
+  return [...new Set(items
+    .map((item) => String(item || '').trim())
+    .filter(Boolean))];
+}
+
+function mergedTaskRemark(canonical, duplicate) {
+  return mergeDetailEntries(
+    canonical.task_context,
+    canonical.progress_summary,
+    duplicate.task_context,
+    duplicate.progress_summary,
+    duplicate.task_description,
+    duplicate.task_brief,
+    getTaskName(duplicate)
+  ).join('；');
+}
+
+function mergeTaskDetails(canonical, duplicate, sourceOrder = [canonical, duplicate]) {
+  const sourceTurnIds = [...new Set(sourceOrder.flatMap((task) => task?.source_turn_ids || []))];
+  const remark = mergedTaskRemark(canonical, duplicate);
+
+  return {
+    ...canonical,
+    task_context: remark || canonical.task_context || '',
+    progress_summary: remark || canonical.progress_summary || '',
+    source_turn_ids: sourceTurnIds
   };
 }
 
@@ -670,20 +700,16 @@ function mergeSemanticTask(canonical, duplicate) {
     .map((item) => String(item || '').trim())
     .filter(Boolean);
   const evidenceQuote = [...new Set(evidenceQuotes)].join('；');
-  const sourceTurnIds = [...new Set([...(canonical.source_turn_ids || []), ...(duplicate.source_turn_ids || [])])];
+  const winner = betterTask(canonical, duplicate) === canonical
+    ? canonical
+    : { ...duplicate, candidate_id: canonical.candidate_id };
+  const merged = mergeTaskDetails(winner, winner === canonical ? duplicate : canonical, [canonical, duplicate]);
 
-  return betterTask(canonical, duplicate) === canonical
-    ? {
-        ...canonical,
-        evidence_quote: evidenceQuote || canonical.evidence_quote,
-        source_turn_ids: sourceTurnIds
-      }
-    : {
-        ...duplicate,
-        candidate_id: canonical.candidate_id,
-        evidence_quote: evidenceQuote || duplicate.evidence_quote,
-        source_turn_ids: sourceTurnIds
-      };
+  return {
+    ...merged,
+    candidate_id: canonical.candidate_id,
+    evidence_quote: evidenceQuote || merged.evidence_quote
+  };
 }
 
 async function applySemanticDedupe(aiInput, tasks, dedupeTasks) {
