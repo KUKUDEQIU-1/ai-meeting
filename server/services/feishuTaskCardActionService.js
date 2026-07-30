@@ -234,7 +234,7 @@ function dependencySet(overrides = {}) {
 
 function isGetNoteItemAction(parsed) {
   return parsed.card_kind === 'getnote_tasks'
-    && ['edit_task', 'discard_task', 'mark_task_as_new', 'mark_task_as_progress'].includes(parsed.action);
+    && ['edit_task', 'discard_task', 'mark_task_as_new', 'mark_task_as_progress', 'refresh_old_tasks'].includes(parsed.action);
 }
 
 async function loadAuthorizedState(parsed) {
@@ -535,6 +535,30 @@ async function submitGetNoteTask(parsed, state, dependencies) {
   return feishuCallbackToast('任务已提交');
 }
 
+async function refreshGetNoteOldTaskOptions(parsed, state, dependencies) {
+  const draft = await getMeetingTaskDraftById(parsed.draft_id);
+  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
+
+  if (!currentTask || currentTask.status !== 'pending') return feishuCallbackToast('已处理，无需重复操作');
+
+  const submittedAssignee = String(parsed.form_values.assignee || '').trim();
+  const selectedAssignee = submittedAssignee || String(currentTask.assignee || '').trim();
+  if (!selectedAssignee || selectedAssignee === '待确认') reject('未选择负责人', 400);
+  if (submittedAssignee) await assertAssigneeExists(selectedAssignee, dependencies);
+
+  await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
+    ...task,
+    assignee: selectedAssignee,
+    owner: selectedAssignee,
+    matched_task_name: selectedAssignee === String(task.assignee || '').trim() ? task.matched_task_name : '',
+    updated_by: parsed.operator_open_id,
+    updated_at: new Date().toISOString()
+  }));
+  await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
+  return feishuCallbackToast('旧任务选项已刷新');
+}
+
 async function discardGetNoteTask(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
@@ -734,6 +758,9 @@ export async function prepareFeishuCardAction(payload) {
   if (parsed.card_kind === 'getnote_tasks' && (parsed.action === 'getnote_submit_task' || parsed.action === 'getnote_discard_task')) {
     return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
   }
+  if (parsed.card_kind === 'getnote_tasks' && parsed.action === 'refresh_old_tasks') {
+    return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
+  }
   if ((parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress') && state.confirmation_status === 'processing') {
     return { parsed, state, response: feishuCallbackToast(parsed.action === 'discard_task' ? '确认处理中，暂不能丢弃' : '确认处理中，暂不能修改'), shouldProcess: false };
   }
@@ -762,6 +789,7 @@ export async function processPreparedFeishuCardAction(prepared, overrides = {}) 
   if (prepared.parsed.action === 'mark_task_as_progress') return markTaskChoice(prepared.parsed, prepared.state, dependencies, 'old_task_progress');
   if (prepared.parsed.action === 'discard_task') return discardTask(prepared.parsed, prepared.state, dependencies);
   if (prepared.parsed.action === 'getnote_submit_task') return submitGetNoteTask(prepared.parsed, prepared.state, dependencies);
+  if (prepared.parsed.action === 'refresh_old_tasks') return refreshGetNoteOldTaskOptions(prepared.parsed, prepared.state, dependencies);
   if (prepared.parsed.action === 'getnote_discard_task') return discardGetNoteTask(prepared.parsed, prepared.state, dependencies);
   if (prepared.parsed.action === 'confirm_assignee_tasks') return confirmAssigneeTasks(prepared.parsed, prepared.state, dependencies);
   if (prepared.parsed.action === 'confirm_assignee_progress') return confirmAssigneeProgress(prepared.parsed, prepared.state, dependencies);

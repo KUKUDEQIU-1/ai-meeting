@@ -702,6 +702,36 @@ function testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect
   assert.doesNotMatch(text, /getnote_submit_task/);
 }
 
+function testGetNoteReviewCardAddsRefreshOldTasksButtonOnlyForGetNote() {
+  const draft = { id: 43, meeting_title: 'GetNote 刷新旧任务测试' };
+  const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' };
+  const getNoteCard = buildGetNoteTaskReviewCard({
+    draft,
+    assignee,
+    tasks: [{ item_id: 'getnote_refresh_button', task_name: '切换负责人后刷新旧任务', assignee: '待确认' }]
+  });
+  const taskCard = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{ item_id: 'task_refresh_button', task_name: '普通卡片不刷新旧任务', assignee: 'Wei Tian' }]
+  });
+  const refreshButton = formControl(getNoteCard, 'refresh_old_tasks_getnote_refresh_button');
+
+  assert.equal(refreshButton.text.content, '刷新旧任务');
+  assert.equal(refreshButton.form_action_type, 'submit');
+  assert.deepEqual(refreshButton.behaviors, [{
+    type: 'callback',
+    value: {
+      draft_id: 43,
+      assignee_key: 'getnote_reviewer',
+      item_id: 'getnote_refresh_button',
+      card_kind: 'getnote_tasks',
+      action: 'refresh_old_tasks'
+    }
+  }]);
+  assert.deepEqual(buttonNames(taskCard).filter((name) => name.startsWith('refresh_old_tasks_')), []);
+}
+
 function testGetNoteCompactCardShowsHandledItemAndPendingSibling() {
   const card = buildGetNoteTaskReviewCard({
     draft: { id: 42, meeting_title: 'GetNote 反馈测试' },
@@ -818,6 +848,25 @@ function testCallbackParsingAcceptsGetNoteAssigneeSelectOnlyForScopedItem() {
   assert.equal(parsed.card_kind, 'getnote_tasks');
   assert.equal(parsed.form_values.task_name, '提交修复卡片响应Bug');
   assert.equal(parsed.form_values.assignee, '洪伟填');
+}
+
+function testCallbackParsingExtractsScopedAssigneeForRefreshOldTasksOnly() {
+  const parsed = parseFeishuCardActionPayload({
+    event: {
+      action: {
+        value: { action: 'refresh_old_tasks', draft_id: 10, assignee_key: 'getnote_reviewer', item_id: 'getnote_a', card_kind: 'getnote_tasks' },
+        form_value: {
+          assignee_select_getnote_a: '李嘉华',
+          assignee_select_getnote_b: '洪伟填',
+          assignee: '恶意全局负责人'
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.card_kind, 'getnote_tasks');
+  assert.equal(parsed.action, 'refresh_old_tasks');
+  assert.equal(parsed.form_values.assignee, '李嘉华');
 }
 
 function testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly() {
@@ -1847,6 +1896,163 @@ async function testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee() {
 
   assert.equal(rejected?.status, 400);
   assert.equal(rejected?.message, '不能选择总表中不存在的负责人');
+  assert.equal(finalized.length, 0);
+}
+
+async function testGetNoteRefreshOldTasksPersistsAssigneeAndRebuildsOptions() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-refresh-old-tasks-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 刷新旧任务动作测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{
+      item_id: 'getnote_refresh_action',
+      task_name: '原 GetNote 任务',
+      assignee: '张三',
+      owner: '张三',
+      matched_task_name: '张三 历史任务 A',
+      status: 'pending'
+    }],
+    tableId: 'table_getnote_refresh_action',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const records = [
+    { taskName: '李嘉华 进行中任务 A', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' },
+    { taskName: '李嘉华 进行中任务 B', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' },
+    { taskName: '张三 进行中任务 A', status: '进行中', assigneeName: '张三', assigneeKey: '张三' }
+  ];
+  const updates = [];
+  const finalized = [];
+  const patchedBodies = [];
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  globalThis.fetch = async (url, init) => {
+    const href = String(url || '');
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ code: 0, tenant_access_token: 'tenant_token' })
+      };
+    }
+
+    patchedBodies.push(JSON.parse(init.body));
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ code: 0 })
+    };
+  };
+
+  let response;
+  try {
+    await upsertDraftAssigneeState({
+      draftId: draft.id,
+      assigneeKey: 'getnote_reviewer',
+      cardKind: 'getnote_tasks',
+      assigneeName: 'Wei Tian',
+      receiveId: 'ou_getnote_reviewer',
+      deliveryStatus: 'sent',
+      cardMessageId: `om_getnote_${draft.id}`
+    });
+
+    response = await handleFeishuCardAction(getNotePayloadForActor({
+      draft,
+      eventId: 'evt_getnote_refresh_old_tasks',
+      action: 'refresh_old_tasks',
+      operatorOpenId: 'ou_getnote_reviewer',
+      itemId: 'getnote_refresh_action',
+      formValue: {
+        assignee_select_getnote_refresh_action: '李嘉华'
+      }
+    }), {
+      listMasterTaskAuditRecords: async () => records,
+      finalizeGetNoteTask: async (params) => {
+        finalized.push(params);
+        return { status: 'synced' };
+      },
+      finalizeAssignee: async (params) => {
+        finalized.push(params);
+        return { status: 'synced' };
+      },
+      finalizeProgress: async (params) => {
+        finalized.push(params);
+        return { status: 'synced' };
+      },
+      updateCard: async (params) => {
+        updates.push(params);
+        return updateFeishuTaskCard(params, {
+          listMasterTaskAuditRecords: async () => records
+        });
+      }
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
+  const stored = await getMeetingTaskDraftById(draft.id);
+  const task = stored.draft_tasks[0];
+  const rebuiltCard = JSON.parse(patchedBodies[0].content);
+  const oldTaskSelect = formControl(rebuiltCard, 'matched_task_name_select_getnote_refresh_action');
+
+  assert.equal(response.toast.content, '旧任务选项已刷新');
+  assert.equal(task.assignee, '李嘉华');
+  assert.equal(task.owner, '李嘉华');
+  assert.equal(task.matched_task_name, '');
+  assert.equal(task.status, 'pending');
+  assert.equal(task.action_result || '', '');
+  assert.equal(task.task_choice || '', '');
+  assert.equal(finalized.length, 0);
+  assert.equal(updates[0].messageId, `om_getnote_${draft.id}`);
+  assert.equal(updates[0].draftId, draft.id);
+  assert.equal(updates[0].assigneeKey, 'getnote_reviewer');
+  assert.equal(updates[0].cardKind, 'getnote_tasks');
+  assert.equal(updates[0].itemId, 'getnote_refresh_action');
+  assert.equal('compactRefresh' in updates[0], false);
+  assert.deepEqual(optionValues(oldTaskSelect), ['李嘉华 进行中任务 A', '李嘉华 进行中任务 B']);
+}
+
+async function testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee() {
+  const draft = await createGetNoteActionDraft(`getnote-refresh-unknown-assignee-${Date.now()}`, '张三');
+  const updates = [];
+  const finalized = [];
+  let rejected;
+
+  try {
+    await handleFeishuCardAction(getNotePayload({
+      draft,
+      eventId: 'evt_getnote_refresh_unknown_assignee',
+      action: 'refresh_old_tasks',
+      formValue: {
+        assignee_select_getnote_item_1: '恶意负责人'
+      }
+    }), {
+      listMasterTaskAuditRecords: async () => [{ taskName: '张三 进行中任务 A', status: '进行中', assigneeName: '张三', assigneeKey: '张三' }],
+      finalizeGetNoteTask: async (params) => {
+        finalized.push(params);
+        return { status: 'synced' };
+      },
+      updateCard: async (params) => {
+        updates.push(params);
+        return { status: 'updated' };
+      }
+    });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.equal(rejected?.status, 400);
+  assert.equal(rejected?.message, '不能选择总表中不存在的负责人');
+  assert.equal(updates.length, 0);
   assert.equal(finalized.length, 0);
 }
 
@@ -3805,10 +4011,12 @@ testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
 testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect();
+testGetNoteReviewCardAddsRefreshOldTasksButtonOnlyForGetNote();
 testGetNoteCompactCardShowsHandledItemAndPendingSibling();
 testCallbackParsingAndSafety();
 testCallbackParsingPrefersOldTaskDropdownValue();
 testCallbackParsingAcceptsGetNoteAssigneeSelectOnlyForScopedItem();
+testCallbackParsingExtractsScopedAssigneeForRefreshOldTasksOnly();
 testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
@@ -3855,6 +4063,8 @@ await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt();
 await testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee();
+await testGetNoteRefreshOldTasksPersistsAssigneeAndRebuildsOptions();
+await testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
 await testGetNotePendingItemStaysActionableAfterReviewerConfirmedState();
 await testGetNoteLastSplitItemUsesMixedFeedbackCard();

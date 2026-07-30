@@ -296,43 +296,59 @@ function taskActionSet({ draft, assignee, task, cardKind = 'tasks' }) {
   const actionBase = cardKind === 'tasks'
     ? { draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId }
     : { draft_id: draft.id, assignee_key: assignee.assignee_key, item_id: itemId, card_kind: cardKind };
+  const columns = [
+    {
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [callbackButton({
+        name: `mark_new_${itemId}`,
+        text: '标记为新任务',
+        type: task.task_choice === 'new_task' ? 'primary' : 'default',
+        value: { ...actionBase, action: 'mark_task_as_new' }
+      })]
+    },
+    {
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [callbackButton({
+        name: `mark_old_${itemId}`,
+        text: '标记为旧任务进展',
+        type: task.task_choice === 'old_task_progress' ? 'primary' : 'default',
+        value: { ...actionBase, action: 'mark_task_as_progress' }
+      })]
+    },
+    {
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [callbackButton({
+        name: `discard_${itemId}`,
+        text: '丢弃',
+        type: 'danger',
+        value: { ...actionBase, action: 'discard_task' }
+      })]
+    }
+  ];
+
+  if (cardKind === 'getnote_tasks') {
+    columns.push({
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [callbackButton({
+        name: `refresh_old_tasks_${itemId}`,
+        text: '刷新旧任务',
+        type: 'default',
+        value: { ...actionBase, action: 'refresh_old_tasks' }
+      })]
+    });
+  }
+
   return {
     tag: 'column_set',
-    columns: [
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        elements: [callbackButton({
-          name: `mark_new_${itemId}`,
-          text: '标记为新任务',
-          type: task.task_choice === 'new_task' ? 'primary' : 'default',
-          value: { ...actionBase, action: 'mark_task_as_new' }
-        })]
-      },
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        elements: [callbackButton({
-          name: `mark_old_${itemId}`,
-          text: '标记为旧任务进展',
-          type: task.task_choice === 'old_task_progress' ? 'primary' : 'default',
-          value: { ...actionBase, action: 'mark_task_as_progress' }
-        })]
-      },
-      {
-        tag: 'column',
-        width: 'weighted',
-        weight: 1,
-        elements: [callbackButton({
-          name: `discard_${itemId}`,
-          text: '丢弃',
-          type: 'danger',
-          value: { ...actionBase, action: 'discard_task' }
-        })]
-      }
-    ]
+    columns
   };
 }
 
