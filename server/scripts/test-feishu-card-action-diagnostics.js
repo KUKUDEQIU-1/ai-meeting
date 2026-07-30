@@ -89,6 +89,8 @@ function assertNoSensitiveInput(record) {
   assert.equal(serialized.includes(EXPECTED_TOKEN), false);
   assert.equal(serialized.includes(LEAKED_TOKEN), false);
   assert.equal(serialized.includes(RAW_FORM_SECRET), false);
+  assert.equal(serialized.includes('ou_actor'), false);
+  assert.equal(serialized.includes('om_diag_1'), false);
   assert.equal(Object.hasOwn(record, 'token'), false);
   assert.equal(Object.hasOwn(record, 'raw_form_values'), false);
   assert.equal(Object.hasOwn(record, 'raw_form_text'), false);
@@ -98,14 +100,21 @@ function assertDiagnosticRecord(records, expected) {
   assert.equal(records.length, 1);
   const record = records[0];
   assert.equal(record.phase, expected.phase);
+  assert.equal(record.error_phase, expected.phase);
   assert.equal(record.failure_class, expected.failure_class);
+  assert.equal(record.error_class, expected.failure_class);
   assert.equal(record.status ?? record.code, expected.status ?? expected.code);
   assert.equal(record.action, 'master_task_confirm_update');
+  assert.equal(record.callback_action, 'master_task_confirm_update');
   assert.equal(record.callback_id, 'evt_diag_1');
-  assert.equal(record.operator_open_id, 'ou_actor');
-  assert.equal(record.message_id, 'om_diag_1');
+  assert.match(record.operator_open_id, /\*\*\*\*/);
+  assert.notEqual(record.operator_open_id, 'ou_actor');
+  assert.match(record.message_id, /\*\*\*\*/);
+  assert.notEqual(record.message_id, 'om_diag_1');
+  assert.equal(record.card_kind, 'tasks');
   assert.equal(record.audit_log_id, 42);
   assert.equal(record.audit_record_id, 'rec_diag_1');
+  assert.equal(Number.isFinite(record.prepare_ms), true);
   assertNoSensitiveInput(record);
 }
 
@@ -165,6 +174,7 @@ async function testAsyncProcessingFailureDiagnostic() {
   assert.equal(dispatched.length, 1);
   await assert.rejects(dispatched[0], /diagnostic status 500/);
   assertDiagnosticRecord(logger.records, { phase: 'process_async', failure_class: 'processing_failed', status: 500 });
+  assert.equal(Number.isFinite(logger.records[0].process_ms), true);
 }
 
 async function testDownstreamCardPatchDiagnostic() {
@@ -186,6 +196,7 @@ async function testDownstreamCardPatchDiagnostic() {
 
   await assert.rejects(dispatched[0], /card patch failed/);
   assertDiagnosticRecord(logger.records, { phase: 'downstream_card_patch', failure_class: 'feishu_card_patch_failed', code: 200671 });
+  assert.equal(Number.isFinite(logger.records[0].process_ms), true);
 }
 
 await testInvalidTokenDiagnostic();

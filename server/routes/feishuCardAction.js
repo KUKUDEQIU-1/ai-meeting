@@ -14,15 +14,29 @@ function isUrlVerification(payload) {
   return payload?.type === 'url_verification' || payload?.header?.event_type === 'url_verification';
 }
 
+function maskIdentifier(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.length <= 6) return `${text.slice(0, 1)}****${text.slice(-1)}`;
+  return `${text.slice(0, 4)}****${text.slice(-3)}`;
+}
+
+function elapsedMs(startedAt) {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
+}
+
 function safeCardActionMetadata(payload) {
   const actionValue = payload?.event?.action?.value || payload?.action?.value || {};
+  const callbackAction = actionValue?.action || payload?.event?.action?.name || payload?.action?.name || '';
 
   return {
     callback_id: payload?.header?.event_id || payload?.uuid || payload?.event_id || payload?.event?.event_id || '',
-    action: payload?.event?.action?.name || payload?.action?.name || '',
+    action: callbackAction,
+    callback_action: callbackAction,
     card_kind: actionValue?.card_kind || actionValue?.cardKind || 'tasks',
-    message_id: payload?.event?.context?.open_message_id || payload?.event?.context?.message_id || payload?.message_id || '',
-    operator_open_id: payload?.event?.operator?.open_id || payload?.event?.operator?.operator_id?.open_id || payload?.event?.operator_id?.open_id || payload?.operator?.open_id || payload?.open_id || '',
+    draft_id: Number(actionValue?.draft_id || actionValue?.draftId) || undefined,
+    message_id: maskIdentifier(payload?.event?.context?.open_message_id || payload?.event?.context?.message_id || payload?.message_id || ''),
+    operator_open_id: maskIdentifier(payload?.event?.operator?.open_id || payload?.event?.operator?.operator_id?.open_id || payload?.event?.operator_id?.open_id || payload?.operator?.open_id || payload?.open_id || ''),
     audit_log_id: actionValue?.audit_log_id,
     audit_record_id: actionValue?.audit_record_id,
     token_present: Boolean(payload?.header?.token || payload?.token),
@@ -49,7 +63,11 @@ function diagnosticsLoggerFor(logger) {
 function emitDiagnostics(logger, record) {
   const diagnostics = diagnosticsLoggerFor(logger);
 
-  diagnostics.warn(record);
+  diagnostics.warn({
+    error_phase: record.phase,
+    error_class: record.failure_class,
+    ...record
+  });
 }
 
 function prepareFailureClass(error) {
@@ -88,14 +106,16 @@ export function createFeishuCardActionHandler({
   });
 
   return async function feishuCardActionHandler(req, res, next) {
-  try {
+    const startedAt = performance.now();
+    try {
     const payload = req.body || {};
     const metadata = safeCardActionMetadata(payload);
     console.log('[Feishu Card Action] inbound', JSON.stringify({
       event_type: payload?.header?.event_type || payload?.type || '',
       token_present: metadata.token_present,
-      action_name: metadata.action,
-      open_message_id: metadata.message_id
+      callback_action: metadata.callback_action,
+      card_kind: metadata.card_kind,
+      message_id: metadata.message_id
     }));
 
     if (!verifyToken(payload)) {
@@ -103,6 +123,7 @@ export function createFeishuCardActionHandler({
         phase: 'token_verification',
         failure_class: 'invalid_token',
         status: 401,
+        prepare_ms: elapsedMs(startedAt),
         ...metadata
       });
       res.status(401).json({ message: 'invalid feishu verification token' });
@@ -115,10 +136,23 @@ export function createFeishuCardActionHandler({
     }
 
     const prepared = await prepareCardAction(payload);
+    const prepareMs = elapsedMs(startedAt);
     const response = prepared.response || {};
+    const preparedMetadata = prepared.parsed
+      ? {
+          ...metadata,
+          callback_action: prepared.parsed.action || metadata.callback_action,
+          action: prepared.parsed.action || metadata.action,
+          card_kind: prepared.parsed.card_kind || metadata.card_kind,
+          draft_id: Number(prepared.parsed.draft_id) || metadata.draft_id,
+          message_id: maskIdentifier(prepared.parsed.message_id || '') || metadata.message_id,
+          operator_open_id: maskIdentifier(prepared.parsed.operator_open_id || '') || metadata.operator_open_id
+        }
+      : metadata;
 
     if (prepared.shouldProcess) {
       dispatchAction(response, async () => {
+        const processStartedAt = performance.now();
         try {
           await processPreparedCardAction(prepared);
         } catch (error) {
@@ -127,7 +161,9 @@ export function createFeishuCardActionHandler({
             failure_class: processFailureClass(error),
             status: error?.status,
             code: error?.feishuResponse?.code,
-            ...metadata
+            prepare_ms: prepareMs,
+            process_ms: elapsedMs(processStartedAt),
+            ...preparedMetadata
           });
           throw error;
         }
@@ -135,15 +171,16 @@ export function createFeishuCardActionHandler({
     }
 
     res.json(response);
-  } catch (error) {
+    } catch (error) {
     emitDiagnostics(diagnosticsLogger, {
       phase: 'prepare',
       failure_class: prepareFailureClass(error),
       status: error?.status,
+      prepare_ms: elapsedMs(startedAt),
       ...safeCardActionMetadata(req.body || {})
     });
-    next(error);
-  }
+      next(error);
+    }
   };
 }
 
