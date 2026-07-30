@@ -99,6 +99,9 @@ async function testHealthExposesCanonicalCapabilitiesWithoutSecrets() {
     assert.equal(body.capabilities.idempotent_delivery.route, '/api/feishu/card-action');
     assert.equal(body.capabilities.failed_card_resend.route, '/api/meeting/resend-failed-draft-task-cards');
     assert.equal(body.capabilities.member_lookup.status, body.capabilities.member_lookup.configured ? 'ready' : 'unconfigured');
+    assert.equal(body.resident_worker.getnote_scan_enabled, false);
+    assert.equal(body.resident_worker.getnote_scan_source, null);
+    assert.equal(body.resident_worker.getnote_last_cycle, null);
     assertNoSecretShape(body);
   } finally {
     await stopServer(child);
