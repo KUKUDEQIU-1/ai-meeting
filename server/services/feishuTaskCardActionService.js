@@ -242,9 +242,13 @@ async function loadAuthorizedState(parsed) {
     reject('飞书卡片回调缺少 draft_id 或 assignee_key', 400);
   }
 
-  const state = parsed.message_id
+  let state = parsed.message_id
     ? await getDraftAssigneeStateByMessageId(parsed.message_id)
     : await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
+
+  if (!state && parsed.message_id && isGetNoteItemAction(parsed) && parsed.item_id) {
+    state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
+  }
 
   if (!state || Number(state.draft_id) !== parsed.draft_id || state.assignee_key !== parsed.assignee_key) {
     reject('飞书卡片回调未匹配到负责人状态', 404);

@@ -2258,6 +2258,82 @@ async function testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssig
   assert.equal(optionValues(oldTaskSelect).includes('李嘉华 进行中任务 A'), false);
 }
 
+async function testGetNoteSplitRefreshOldTasksSurvivesOverwrittenMessageMapping() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-split-refresh-stale-message-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 拆卡旧消息刷新动作测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'stale_split_1', task_name: '拆卡任务 1', assignee: '洪伟填', owner: '洪伟填', status: 'pending' },
+      { item_id: 'stale_split_2', task_name: '拆卡任务 2', assignee: '王五', owner: '王五', status: 'pending' }
+    ],
+    tableId: 'table_getnote_split_stale_message',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const oldMessageId = `om_getnote_split_stale_old_${draft.id}`;
+  const newMessageId = `om_getnote_split_stale_new_${draft.id}`;
+  const itemScope = 'stale_split_1,stale_split_2';
+  const records = [
+    { taskName: '王五 进行中任务 A', status: '进行中', assigneeName: '王五', assigneeKey: '王五' },
+    { taskName: '简学勤 进行中任务 A', status: '进行中', assigneeName: '简学勤', assigneeKey: '简学勤' }
+  ];
+  const updates = [];
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    assigneeName: 'Wei Tian',
+    receiveId: 'ou_getnote_reviewer',
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    itemId: itemScope,
+    cardMessageId: oldMessageId,
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: 'getnote_reviewer',
+    cardKind: 'getnote_tasks',
+    itemId: itemScope,
+    cardMessageId: newMessageId,
+    deliveryStatus: 'sent'
+  });
+
+  const response = await handleFeishuCardAction(getNotePayloadForActor({
+    draft,
+    eventId: 'evt_getnote_split_refresh_stale_message',
+    action: 'refresh_old_tasks',
+    operatorOpenId: 'ou_getnote_reviewer',
+    itemId: 'stale_split_2',
+    messageId: oldMessageId,
+    formValue: {
+      assignee_select_stale_split_2: '简学勤'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => records,
+    updateCard: async (params) => {
+      updates.push(params);
+      return { status: 'updated' };
+    }
+  });
+  const stored = await getMeetingTaskDraftById(draft.id);
+  const task = stored.draft_tasks.find((item) => item.item_id === 'stale_split_2');
+
+  assert.equal(response.toast.content, '旧任务选项已刷新');
+  assert.equal(task.assignee, '简学勤');
+  assert.equal(task.owner, '简学勤');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].messageId, oldMessageId);
+  assert.equal(updates[0].itemId, 'stale_split_2');
+}
+
 async function testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee() {
   const draft = await createGetNoteActionDraft(`getnote-refresh-unknown-assignee-${Date.now()}`, '张三');
   const updates = [];
@@ -4305,6 +4381,7 @@ await testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt();
 await testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee();
 await testGetNoteRefreshOldTasksPersistsAssigneeAndRebuildsOptions();
 await testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssigneeOptions();
+await testGetNoteSplitRefreshOldTasksSurvivesOverwrittenMessageMapping();
 await testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
 await testGetNotePendingItemStaysActionableAfterReviewerConfirmedState();
