@@ -314,7 +314,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     }
 	  const results = [];
 	  for (const tasks of chunks.length ? chunks : [[]]) {
-	    const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptionsByItemId, assigneeOptions });
+	    const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
       const messageId = await postMessage({ receiveId, card });
       await upsertDraftCardMessage({
         draftId: draft.id,

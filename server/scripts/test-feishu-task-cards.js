@@ -1849,6 +1849,41 @@ async function testGetNoteDispatchForceResendsExistingSentCard() {
   assert.equal(sentCards.length, 2);
 }
 
+async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-force-terminal-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 空待办终态测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'getnote_terminal_1', task_name: '已完成任务 1', assignee: '洪伟填', status: 'confirmed' },
+      { item_id: 'getnote_terminal_2', task_name: '已丢弃任务 2', assignee: '李嘉华', status: 'discarded' }
+    ],
+    tableId: 'table_getnote_force_terminal',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentCards = [];
+
+  const result = await dispatchGetNoteTaskCard(draft, {
+    receiveId: 'ou_getnote_reviewer',
+    force: true,
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      return `om_getnote_force_terminal_${draft.id}_${sentCards.length}`;
+    }
+  });
+
+  const cardText = JSON.stringify(sentCards[0]);
+
+  assert.equal(result.sent_count, 1);
+  assert.equal(sentCards.length, 1);
+  assert.match(cardText, /GetNote 任务已处理/);
+  assert.equal(formControl(sentCards[0], 'getnote_task_form'), undefined);
+  assert.doesNotMatch(cardText, /"tag":"form"/);
+}
+
 async function testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership() {
   const draft = await createGetNoteActionDraft(`getnote-regular-mark-new-${Date.now()}`);
   const finalized = [];
@@ -4258,6 +4293,7 @@ await testGetNoteDispatchScopesOldTaskOptionsPerAssignee();
 await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
 await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions();
 await testGetNoteDispatchForceResendsExistingSentCard();
+await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt();
