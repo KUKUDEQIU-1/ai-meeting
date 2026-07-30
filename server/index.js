@@ -48,6 +48,65 @@ function routeCapability(route, configured) {
   };
 }
 
+function envText(name) {
+  return String(process.env[name] || '').trim();
+}
+
+function readiness(reasons) {
+  return {
+    ready: reasons.length === 0,
+    status: reasons.length === 0 ? 'ready' : 'blocked',
+    reasons
+  };
+}
+
+function hasFeishuAppCredentials() {
+  return Boolean(envText('FEISHU_APP_ID') && envText('FEISHU_APP_SECRET'));
+}
+
+function hasBitableAppToken() {
+  return Boolean(envText('FEISHU_MASTER_TASK_APP_TOKEN') || envText('FEISHU_BITABLE_APP_TOKEN'));
+}
+
+function hasMasterTaskTableId() {
+  return Boolean(envText('FEISHU_MASTER_TASK_TABLE_ID') || envText('FEISHU_BITABLE_TABLE_ID') || envText('FEISHU_MASTER_TASK_TABLE_URL'));
+}
+
+function normalTaskCardReadiness() {
+  const reasons = [];
+
+  if (!hasFeishuAppCredentials()) reasons.push('feishu_app_credentials_missing');
+  if (!hasBitableAppToken()) reasons.push('bitable_app_missing');
+  if (!hasMasterTaskTableId()) reasons.push('master_task_table_missing');
+  if (!envText('FEISHU_TASK_GROUP_CHAT_ID') && !envText('FEISHU_ASSIGNEE_MAP_JSON') && !envText('FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID')) {
+    reasons.push('normal_card_recipient_source_missing');
+  }
+
+  return readiness(reasons);
+}
+
+function getNoteCardReadiness() {
+  const reasons = [];
+  const dispatchMode = envText('GETNOTE_CARD_DISPATCH_MODE').toLowerCase();
+
+  if (!hasFeishuAppCredentials()) reasons.push('feishu_app_credentials_missing');
+  if (!hasBitableAppToken()) reasons.push('bitable_app_missing');
+  if (!hasMasterTaskTableId()) reasons.push('master_task_table_missing');
+  if (dispatchMode !== 'production' && dispatchMode !== 'local') reasons.push('getnote_dispatch_mode_invalid');
+  if (!envText('GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID') && !envText('GETNOTE_TASK_CARD_RECEIVE_OPEN_ID')) {
+    reasons.push('getnote_reviewer_missing');
+  }
+
+  return readiness(reasons);
+}
+
+function cardReadiness() {
+  return {
+    normal_task_card_ready: normalTaskCardReadiness(),
+    getnote_card_ready: getNoteCardReadiness()
+  };
+}
+
 function healthCapabilities() {
   return {
     wiki_docx_scan: routeCapability(canonicalWikiSyncRoute, Boolean(String(process.env.FEISHU_WIKI_SOURCE_NODE_URL || '').trim())),
@@ -96,6 +155,7 @@ app.get('/api/health', async (req, res, next) => {
         capability: 'wiki_docx_scan'
       },
       capabilities: healthCapabilities(),
+      card_readiness: cardReadiness(),
       resident_worker: feishuResidentWorker.snapshot(),
       scan_coordinator: feishuScanCoordinator.snapshot()
     });

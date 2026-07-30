@@ -66,6 +66,18 @@ async function testHealthExposesCanonicalCapabilitiesWithoutSecrets() {
       FEISHU_RESIDENT_WORKER_ENABLED: 'false',
       FEISHU_DOCX_SOURCE_API_TOKEN: 'health-test-secret-token',
       FEISHU_APP_SECRET: 'health-test-app-secret',
+      FEISHU_APP_ID: '',
+      FEISHU_BITABLE_APP_TOKEN: '',
+      FEISHU_MASTER_TASK_APP_TOKEN: '',
+      FEISHU_MASTER_TASK_TABLE_ID: '',
+      FEISHU_BITABLE_TABLE_ID: '',
+      FEISHU_MASTER_TASK_TABLE_URL: '',
+      FEISHU_TASK_GROUP_CHAT_ID: '',
+      FEISHU_ASSIGNEE_MAP_JSON: '',
+      FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID: '',
+      GETNOTE_CARD_DISPATCH_MODE: 'disabled',
+      GETNOTE_TASK_CARD_RECEIVE_OPEN_ID: '',
+      GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID: '',
       AI_API_KEY: 'health-test-ai-key'
     },
     stdio: 'ignore'
@@ -99,9 +111,58 @@ async function testHealthExposesCanonicalCapabilitiesWithoutSecrets() {
     assert.equal(body.capabilities.idempotent_delivery.route, '/api/feishu/card-action');
     assert.equal(body.capabilities.failed_card_resend.route, '/api/meeting/resend-failed-draft-task-cards');
     assert.equal(body.capabilities.member_lookup.status, body.capabilities.member_lookup.configured ? 'ready' : 'unconfigured');
+    assert.equal(body.card_readiness.normal_task_card_ready.ready, false);
+    assert.equal(body.card_readiness.normal_task_card_ready.status, 'blocked');
+    assert.equal(Array.isArray(body.card_readiness.normal_task_card_ready.reasons), true);
+    assert.equal(body.card_readiness.getnote_card_ready.ready, false);
+    assert.equal(body.card_readiness.getnote_card_ready.status, 'blocked');
+    assert.equal(body.card_readiness.getnote_card_ready.reasons.includes('getnote_dispatch_mode_invalid'), true);
     assert.equal(body.resident_worker.getnote_scan_enabled, false);
     assert.equal(body.resident_worker.getnote_scan_source, null);
     assert.equal(body.resident_worker.getnote_last_cycle, null);
+    assertNoSecretShape(body);
+  } finally {
+    await stopServer(child);
+  }
+}
+
+async function testHealthReportsReadyCardConfigurationWithoutExternalProbe() {
+  const port = 4303;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, ['index.js'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      FEISHU_RESIDENT_WORKER_ENABLED: 'false',
+      FEISHU_APP_ID: 'cli_health_app',
+      FEISHU_APP_SECRET: 'health-app-credential',
+      FEISHU_BITABLE_APP_TOKEN: 'base_health_app',
+      FEISHU_MASTER_TASK_TABLE_ID: 'tbl_health_master',
+      FEISHU_TASK_GROUP_CHAT_ID: 'oc_health_group',
+      GETNOTE_CARD_DISPATCH_MODE: 'production',
+      GETNOTE_TASK_CARD_RECEIVE_OPEN_ID: 'ou_getnote_reviewer'
+    },
+    stdio: 'ignore'
+  });
+
+  try {
+    await waitForServer(baseUrl, child);
+
+    const response = await fetch(`${baseUrl}/api/health`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.card_readiness.normal_task_card_ready, {
+      ready: true,
+      status: 'ready',
+      reasons: []
+    });
+    assert.deepEqual(body.card_readiness.getnote_card_ready, {
+      ready: true,
+      status: 'ready',
+      reasons: []
+    });
     assertNoSecretShape(body);
   } finally {
     await stopServer(child);
@@ -137,6 +198,7 @@ async function testRootAdvertisesOperatorCanonicalRoute() {
 }
 
 await testHealthExposesCanonicalCapabilitiesWithoutSecrets();
+await testHealthReportsReadyCardConfigurationWithoutExternalProbe();
 await testRootAdvertisesOperatorCanonicalRoute();
 
 console.log('health observability tests passed');
