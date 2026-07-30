@@ -2021,6 +2021,122 @@ async function testGetNoteRefreshOldTasksPersistsAssigneeAndRebuildsOptions() {
   assert.deepEqual(optionValues(oldTaskSelect), ['李嘉华 进行中任务 A', '李嘉华 进行中任务 B']);
 }
 
+async function testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssigneeOptions() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-split-refresh-old-tasks-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 拆卡刷新旧任务动作测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'split_refresh_1', task_name: '拆卡任务 1', assignee: '洪伟填', owner: '洪伟填', status: 'pending' },
+      { item_id: 'split_refresh_2', task_name: '拆卡任务 2', assignee: '王五', owner: '王五', status: 'pending' },
+      { item_id: 'split_refresh_3', task_name: '拆卡任务 3', assignee: '李嘉华', owner: '李嘉华', matched_task_name: '李嘉华 旧选项', status: 'pending' }
+    ],
+    tableId: 'table_getnote_split_refresh_action',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const messageId = `om_getnote_split_refresh_${draft.id}`;
+  const records = [
+    { taskName: '洪伟填 进行中任务 A', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' },
+    { taskName: '王五 进行中任务 A', status: '进行中', assigneeName: '王五', assigneeKey: '王五' },
+    { taskName: '李嘉华 进行中任务 A', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' },
+    { taskName: '潘韵芝 进行中任务 A', status: '进行中', assigneeName: '潘韵芝', assigneeKey: '潘韵芝' },
+    { taskName: '潘韵芝 进行中任务 B', status: '进行中', assigneeName: '潘韵芝', assigneeKey: '潘韵芝' },
+    { taskName: '潘韵芝 已完成任务', status: '已完成', assigneeName: '潘韵芝', assigneeKey: '潘韵芝' }
+  ];
+  const updates = [];
+  const patchedBodies = [];
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  globalThis.fetch = async (url, init) => {
+    const href = String(url || '');
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ code: 0, tenant_access_token: 'tenant_token' })
+      };
+    }
+
+    patchedBodies.push(JSON.parse(init.body));
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ code: 0 })
+    };
+  };
+
+  let response;
+  try {
+    await upsertDraftAssigneeState({
+      draftId: draft.id,
+      assigneeKey: 'getnote_reviewer',
+      cardKind: 'getnote_tasks',
+      assigneeName: 'Wei Tian',
+      receiveId: 'ou_getnote_reviewer',
+      deliveryStatus: 'sent'
+    });
+    await upsertDraftCardMessage({
+      draftId: draft.id,
+      assigneeKey: 'getnote_reviewer',
+      cardKind: 'getnote_tasks',
+      itemId: 'split_refresh_1,split_refresh_2,split_refresh_3',
+      cardMessageId: messageId,
+      deliveryStatus: 'sent'
+    });
+
+    response = await handleFeishuCardAction(getNotePayloadForActor({
+      draft,
+      eventId: 'evt_getnote_split_refresh_old_tasks',
+      action: 'refresh_old_tasks',
+      operatorOpenId: 'ou_getnote_reviewer',
+      itemId: 'split_refresh_3',
+      messageId,
+      formValue: {
+        assignee_select_split_refresh_3: '潘韵芝'
+      }
+    }), {
+      listMasterTaskAuditRecords: async () => records,
+      updateCard: async (params) => {
+        updates.push(params);
+        return updateFeishuTaskCard(params, {
+          listMasterTaskAuditRecords: async () => records
+        });
+      }
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
+
+  const stored = await getMeetingTaskDraftById(draft.id);
+  const task = stored.draft_tasks.find((item) => item.item_id === 'split_refresh_3');
+  const rebuiltCard = JSON.parse(patchedBodies[0].content);
+  const cardText = JSON.stringify(rebuiltCard);
+  const oldTaskSelect = formControl(rebuiltCard, 'matched_task_name_select_split_refresh_3');
+
+  assert.equal(response.toast.content, '旧任务选项已刷新');
+  assert.equal(task.assignee, '潘韵芝');
+  assert.equal(task.owner, '潘韵芝');
+  assert.equal(task.matched_task_name, '');
+  assert.equal(updates[0].messageId, messageId);
+  assert.equal(updates[0].itemId, 'split_refresh_1,split_refresh_2,split_refresh_3');
+  assert.match(cardText, /拆卡任务 1/);
+  assert.match(cardText, /拆卡任务 2/);
+  assert.match(cardText, /拆卡任务 3/);
+  assert.deepEqual(optionValues(oldTaskSelect), ['潘韵芝 进行中任务 A', '潘韵芝 进行中任务 B']);
+  assert.equal(optionValues(oldTaskSelect).includes('李嘉华 进行中任务 A'), false);
+}
+
 async function testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee() {
   const draft = await createGetNoteActionDraft(`getnote-refresh-unknown-assignee-${Date.now()}`, '张三');
   const updates = [];
@@ -4064,6 +4180,7 @@ await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt();
 await testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee();
 await testGetNoteRefreshOldTasksPersistsAssigneeAndRebuildsOptions();
+await testGetNoteSplitRefreshOldTasksUsesClickedMessageScopeAndNewAssigneeOptions();
 await testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee();
 await testGetNoteRegularDiscardDoesNotRequireAssigneeSelection();
 await testGetNotePendingItemStaysActionableAfterReviewerConfirmedState();

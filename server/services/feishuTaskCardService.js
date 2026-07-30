@@ -240,9 +240,15 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   const state = await getDraftAssigneeState(draftId, assigneeKey, cardKind);
   const draft = await getMeetingTaskDraftById(draftId);
 
-  const scopedMessage = itemId
-    ? (await listDraftCardMessages(draftId, assigneeKey, cardKind)).find((row) => itemScopeIncludes(row.item_id, itemId))
+  const cardMessages = messageId || itemId
+    ? await listDraftCardMessages(draftId, assigneeKey, cardKind)
+    : [];
+  const exactMessage = messageId
+    ? cardMessages.find((row) => row.card_message_id === messageId)
     : null;
+  const scopedMessage = exactMessage || (itemId
+    ? cardMessages.find((row) => itemScopeIncludes(row.item_id, itemId))
+    : null);
   const targetMessageId = messageId || scopedMessage?.card_message_id || state?.card_message_id || '';
 
   if (!state || !draft || !targetMessageId) {
@@ -255,7 +261,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     receive_id_type: state.receive_id_type,
     receive_id: state.receive_id
   };
-  const scopedItemId = state.split_item_id || (scopedMessage ? itemId : '');
+  const scopedItemId = exactMessage?.item_id || state.split_item_id || (scopedMessage ? itemId : '');
   const effectiveCardKind = state.card_kind || cardKind;
   const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
   const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));

@@ -555,7 +555,7 @@ async function refreshGetNoteOldTaskOptions(parsed, state, dependencies) {
     updated_at: new Date().toISOString()
   }));
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
-  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
+  await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: scopedRefreshItemId(parsed, state) || parsed.item_id || '' });
   return feishuCallbackToast('旧任务选项已刷新');
 }
 
