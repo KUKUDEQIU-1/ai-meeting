@@ -446,6 +446,7 @@ GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
 GETNOTE_SYNC_REMOTE_URL=
 GETNOTE_CARD_DISPATCH_MODE=disabled
 GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
+GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 ```
 
 - `GETNOTE_REQUIRE_TAG=false`：默认不按标签过滤，扫描最近 Get笔记列表中的所有新笔记。
@@ -456,6 +457,7 @@ GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
 - `GETNOTE_RESIDENT_WORKER_ENABLED=false`：默认不接入 HTTP 服务内置 resident worker。生产设为 `true` 后，Get笔记会随 `server/index.js` 的 resident worker 按 `FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES` 周期自动扫描，无需手动调用维护接口。
 - `GETNOTE_PROCESSING_TIMEOUT_MINUTES=30`：`processing` 状态超过 30 分钟允许重试。
 - `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=`：Get笔记任务分配卡片接收人的飞书 `open_id`，生产应配置为伟填。Get笔记不会按任务负责人分发卡片，也不会直接写入正式总表；每篇笔记只给该接收人发送一张待处理卡片。
+- `GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=`：可选 GetNote 卡片测试覆盖接收人。配置为非空时，新发送或强制重发的 GetNote 审核卡会发给该测试 `open_id`，优先级高于 `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID`；留空时仍发给伟填。实际收件人会持久化用于回调操作者校验。该变量只影响 GetNote 审核卡，不影响 `FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID` 控制的普通负责人任务卡，也不会改写历史已发送卡片。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID_TYPE=chat_id`：群通知接收 ID 类型。仅用于非草稿确认类群通知；飞书会议纪要/docx 草稿确认不再使用群确认链接。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID=`：目标群聊 ID。该变量不再控制草稿确认投递，草稿确认改为按负责人私发交互卡片。
 - `FEISHU_ASSIGNEE_MAP_JSON=`：负责人到飞书 `open_id` 的映射，键会按去空格后的负责人姓名匹配；未映射负责人会记录为投递失败，不会回退发送到全局收件人。示例：`{"张三":"ou_xxx","李四":{"open_id":"ou_yyy"}}`。
@@ -610,7 +612,10 @@ GETNOTE_RESIDENT_WORKER_ENABLED=true
 FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES=1
 GETNOTE_CARD_DISPATCH_MODE=production
 GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=ou_xxx
+GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 ```
+
+正式运行时保持 `GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID` 为空，审核卡会发给 `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID`，也就是伟填。修改 GetNote 卡片后需要自测时，可临时设置 `GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=ou_tester` 并触发新同步或强制重发；测试完成后清空该变量并重启服务。
 
 启动 `server/index.js` 后，每轮 resident worker 会先扫描飞书 Wiki/docx，再扫描 Get笔记最近列表；上一轮未结束时不会并发启动下一轮。健康检查 `/api/health` 的 `resident_worker.getnote_scan_enabled`、`getnote_scan_source`、`getnote_last_cycle` 会显示 GetNote 自动扫描状态。
 
