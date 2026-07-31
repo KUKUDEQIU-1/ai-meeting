@@ -9,6 +9,7 @@ const GETNOTE_MAX_ASSIGNEE_OPTIONS = 20;
 const GETNOTE_TASKS_PER_CARD = 3;
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
+const UNKNOWN_ASSIGNEE_PATTERN = /^(待确认|未提供|未知|不明确|无|暂无)$/;
 
 function elapsedMs(startedAt) {
   return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
@@ -38,6 +39,40 @@ function getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCou
     receive_id_type: 'open_id',
     receive_id_masked: maskIdentifier(receiveId),
     task_count: taskCount
+  };
+}
+
+function isGetNoteReviewerTask(task) {
+  const assignee = assigneeNameOf(task).trim();
+
+  return !assignee || UNKNOWN_ASSIGNEE_PATTERN.test(assignee);
+}
+
+function getNoteOldTaskAssigneeName(task) {
+  const assignee = assigneeNameOf(task).trim();
+
+  return UNKNOWN_ASSIGNEE_PATTERN.test(assignee)
+    ? String(task?.source_speaker || '').trim() || assignee
+    : assignee;
+}
+
+function draftWithTasks(draft, tasks) {
+  return { ...draft, draft_tasks: tasks, progress_updates: [] };
+}
+
+function mergeDispatchResults(results) {
+  const parts = results.filter(Boolean);
+  const sentCount = parts.reduce((sum, item) => sum + (item.sent_count || 0), 0);
+  const skippedCount = parts.reduce((sum, item) => sum + (item.skipped_count || 0), 0);
+  const failedCount = parts.reduce((sum, item) => sum + (item.failed_count || 0), 0);
+
+  return {
+    status: sentCount > 0 || skippedCount > 0 || failedCount === 0 ? 'success' : 'failed',
+    sent_count: sentCount,
+    skipped_count: skippedCount,
+    failed_count: failedCount,
+    results: parts.flatMap((item) => item.results || []),
+    delivery_failures: parts.flatMap((item) => item.delivery_failures || [])
   };
 }
 
@@ -187,7 +222,7 @@ function buildGetNoteOldTaskOptionsByItemId(tasks, records) {
     const itemId = String(task?.item_id || '');
     if (!itemId) continue;
 
-    const assigneeKey = normalizeAssigneeKey(assigneeNameOf(task));
+    const assigneeKey = normalizeAssigneeKey(getNoteOldTaskAssigneeName(task));
     if (assigneeKey === '待确认') {
       optionsByItemId[itemId] = [];
       continue;
@@ -396,6 +431,18 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     throw error;
   }
 
+  const tasks = draft.draft_tasks || [];
+  const reviewerTasks = tasks.filter(isGetNoteReviewerTask);
+  const ownerTasks = tasks.filter((task) => !isGetNoteReviewerTask(task));
+  const ownerResult = ownerTasks.length
+    ? await dispatchDraftTaskCards(draftWithTasks(draft, ownerTasks), deps)
+    : null;
+
+  if (!reviewerTasks.length) {
+    return mergeDispatchResults([ownerResult]);
+  }
+
+  const reviewerDraft = draftWithTasks(draft, reviewerTasks);
   const receiveId = deps.receiveId || getNoteReviewerOpenId();
   if (!receiveId) {
     emitDeliveryDiagnostics(diagnosticsLogger, {
@@ -403,10 +450,10 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       status: 'failed',
       reason: 'receiver_not_configured',
       card_kind: cardKind,
-      draft_id: draft.id,
+      draft_id: reviewerDraft.id,
       dispatch_mode: dispatchMode,
       receive_id_type: 'open_id',
-      task_count: (draft.draft_tasks || []).length,
+      task_count: reviewerTasks.length,
       prepare_ms: elapsedMs(startedAt),
       process_ms: elapsedMs(startedAt)
     });
@@ -415,8 +462,8 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
 
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
   const patchMessage = deps.patchMessage || patchInteractiveFeishuMessage;
-  const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'GetNote Reviewer', receive_id_type: 'open_id', receive_id: receiveId, tasks: draft.draft_tasks || [] };
-  const deliveryBase = getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCount: assignee.tasks.length });
+  const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'GetNote Reviewer', receive_id_type: 'open_id', receive_id: receiveId, tasks: reviewerTasks };
+  const deliveryBase = getNoteDeliveryBase({ draft: reviewerDraft, cardKind, dispatchMode, receiveId, taskCount: assignee.tasks.length });
   emitDeliveryDiagnostics(diagnosticsLogger, {
     phase: 'delivery_prepare',
     status: 'ready',
@@ -424,8 +471,8 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     prepare_ms: elapsedMs(startedAt),
     process_ms: elapsedMs(startedAt)
   });
-  const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
-  const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
+  const existingState = await getDraftAssigneeState(reviewerDraft.id, assignee.assignee_key, cardKind);
+  const existingMessages = await listDraftCardMessages(reviewerDraft.id, assignee.assignee_key, cardKind);
   const hasSentSplitMessages = existingMessages.some((message) => message.delivery_status === 'sent' && message.card_message_id);
   const hasActiveGetNoteCard = existingState?.delivery_status === 'sent' && (existingState.card_message_id || hasSentSplitMessages);
   if (hasActiveGetNoteCard && !deps.forceCardResend) {
@@ -438,20 +485,20 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       prepare_ms: elapsedMs(startedAt),
       process_ms: elapsedMs(startedAt)
     });
-    return { status: 'success', sent_count: 0, skipped_count: 1, failed_count: 0, results: [{ status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id }] };
+    return mergeDispatchResults([ownerResult, { status: 'success', sent_count: 0, skipped_count: 1, failed_count: 0, results: [{ status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id }] }]);
   }
 
   if (hasActiveGetNoteCard && deps.forceCardResend) {
     await invalidateGetNoteActiveCards({ existingState, existingMessages, patchMessage });
   }
 
-  await upsertDraftAssigneeState({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, assigneeName: assignee.assignee_name, receiveIdType: 'open_id', receiveId, deliveryStatus: 'pending' });
+  await upsertDraftAssigneeState({ draftId: reviewerDraft.id, assigneeKey: assignee.assignee_key, cardKind, assigneeName: assignee.assignee_name, receiveIdType: 'open_id', receiveId, deliveryStatus: 'pending' });
 
   try {
     const listRecords = deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords;
     const records = await listRecords();
     const assigneeOptions = await buildMasterAssigneeOptions(listRecords);
-    const pendingTasks = (draft.draft_tasks || []).filter((task) => task.status !== 'confirmed' && task.status !== 'discarded');
+    const pendingTasks = reviewerTasks.filter((task) => task.status !== 'confirmed' && task.status !== 'discarded');
     const oldTaskOptionsByItemId = buildGetNoteOldTaskOptionsByItemId(pendingTasks, records);
     const chunks = [];
     for (let index = 0; index < pendingTasks.length; index += GETNOTE_TASKS_PER_CARD) {
@@ -461,7 +508,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     const cardChunks = chunks.length ? chunks : [[]];
     for (const [index, tasks] of cardChunks.entries()) {
       const prepareStartedAt = performance.now();
-      const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
+      const card = buildGetNoteTaskReviewCard({ draft: reviewerDraft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
       const prepareMs = elapsedMs(prepareStartedAt);
       emitDeliveryDiagnostics(diagnosticsLogger, {
         phase: 'delivery_send',
@@ -475,7 +522,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       });
       const messageId = await postMessage({ receiveId, card });
       await upsertDraftCardMessage({
-        draftId: draft.id,
+        draftId: reviewerDraft.id,
         assigneeKey: assignee.assignee_key,
         cardKind,
         itemId: tasks.map((task) => task.item_id || '').filter(Boolean).join(','),
@@ -494,10 +541,10 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       });
       results.push({ status: 'sent', message_id: messageId, item_ids: tasks.map((task) => task.item_id || '') });
     }
-    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent' });
-    return { status: 'success', sent_count: results.length, skipped_count: 0, failed_count: 0, results };
+    await updateDraftAssigneeDelivery({ draftId: reviewerDraft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent' });
+    return mergeDispatchResults([ownerResult, { status: 'success', sent_count: results.length, skipped_count: 0, failed_count: 0, results }]);
   } catch (error) {
-    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
+    await updateDraftAssigneeDelivery({ draftId: reviewerDraft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
     emitDeliveryDiagnostics(diagnosticsLogger, {
       phase: 'delivery_send',
       error_phase: 'delivery_send',
@@ -507,7 +554,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       prepare_ms: elapsedMs(startedAt),
       process_ms: elapsedMs(startedAt)
     });
-    return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ status: 'failed', error: error.message }] };
+    return mergeDispatchResults([ownerResult, { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ status: 'failed', error: error.message }] }]);
   }
 }
 

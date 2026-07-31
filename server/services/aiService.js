@@ -328,7 +328,7 @@ function mergeGetNoteSupportingItems(tasks) {
 
 function normalizeGetNoteTasks(tasks) {
   return mergeGetNoteSupportingItems(tasks).map((task) => {
-    if (task.assignee_source === 'speaker') {
+    if (task.assignee_source === 'speaker' && isPendingAssignee(task.assignee || task.owner)) {
       return {
         ...task,
         assignee: PENDING_ASSIGNEE,
