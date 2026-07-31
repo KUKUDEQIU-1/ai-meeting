@@ -117,11 +117,14 @@ function getNoteTags(note) {
 }
 
 export function isDatedTodayWorkArrangementTitle(title) {
-  const value = String(title || '').trim();
+  const value = String(title || '').normalize('NFKC').replace(/\s+/g, '').trim();
   const hasTodayWorkArrangement = /今日\s*工作\s*安排/.test(value);
-  const hasDate = /(?:\d{4}[-/.年]\s*)?\d{1,2}\s*(?:[-/.月]\s*)\d{1,2}\s*(?:日)?/.test(value);
+  const hasDate = /(?:\d{4}[-/.年]\s*)?\d{1,2}\s*(?:[-/.月]\s*)\d{1,2}\s*(?:日)?/.test(value)
+    || /[一二三四五六七八九十]{1,3}月[一二三四五六七八九十]{1,3}日/.test(value);
+  const hasMeetingSignal = /早会|晨会|会议|例会/.test(value);
+  const hasWorkSignal = /工作安排|工作进展|工作同步|任务同步|进展同步/.test(value);
 
-  return hasTodayWorkArrangement && hasDate;
+  return hasDate && (hasTodayWorkArrangement || hasMeetingSignal && hasWorkSignal);
 }
 
 function getNoteTopics(note) {

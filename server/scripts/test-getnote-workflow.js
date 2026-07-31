@@ -125,6 +125,8 @@ function testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles() {
   assert.equal(isDatedTodayWorkArrangementTitle('7.29今日工作安排与代运营合作讨论'), true);
   assert.equal(isDatedTodayWorkArrangementTitle('07/29 今日工作安排'), true);
   assert.equal(isDatedTodayWorkArrangementTitle('2026-07-29 今日工作安排'), true);
+  assert.equal(isDatedTodayWorkArrangementTitle('7.31早会工作进展同步'), true);
+  assert.equal(isDatedTodayWorkArrangementTitle('七月三十日研发团队早会工作安排同步'), true);
   assert.equal(isDatedTodayWorkArrangementTitle('今日工作安排'), false);
   assert.equal(isDatedTodayWorkArrangementTitle('7.29代运营合作讨论'), false);
   assert.equal(isDatedTodayWorkArrangementTitle('项目团队早会工作安排与讨论'), false);
