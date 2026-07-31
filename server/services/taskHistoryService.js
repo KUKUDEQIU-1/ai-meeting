@@ -1,5 +1,5 @@
 import { all, get, run } from '../db/database.js';
-import { addFollowerField, getTenantAccessToken, listBitableFields, listBitableRecords, updateBitableRecord } from './feishuBitableClient.js';
+import { addFollowerField, getTenantAccessToken, listBitableFields, listBitableRecords, resolveMasterTaskTableConfig, updateBitableRecord } from './feishuBitableClient.js';
 
 const ACTION_SYNONYMS = [
   [/继续|持续|后续|推进|跟进|处理|执行/g, '处理'],
@@ -84,7 +84,7 @@ function isHighConfidenceCompleted(item) {
   return item?.progress_type === 'completed_update' && Number(item.confidence || 0) >= 0.85;
 }
 
-const VALID_TASK_STATUSES = new Set([
+export const VALID_TASK_STATUSES = new Set([
   '已完成',
   '进行中',
   '待开始',
@@ -191,8 +191,12 @@ function masterTaskAppToken(context = {}) {
 }
 
 async function findMasterTaskRecordByName(item, tenantAccessToken, context = {}) {
-  const appToken = masterTaskAppToken(context);
-  const tableId = masterTaskTableId(context);
+  const config = await resolveMasterTaskTableConfig({
+    table_id: masterTaskTableId(context),
+    app_token: masterTaskAppToken(context)
+  });
+  const appToken = config.appToken;
+  const tableId = config.tableId;
 
   if (!appToken || !tableId) return null;
 
@@ -242,7 +246,7 @@ async function normalizeProgressFieldName({ appToken, tableId, tenantAccessToken
   return nextFields;
 }
 
-function formatDateOnly(value) {
+export function formatDateOnly(value) {
   const date = value ? new Date(String(value).replace(' ', 'T')) : new Date();
   const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
   const pad = (number) => String(number).padStart(2, '0');
@@ -250,7 +254,7 @@ function formatDateOnly(value) {
   return `${safeDate.getFullYear()}-${pad(safeDate.getMonth() + 1)}-${pad(safeDate.getDate())}`;
 }
 
-function dateOnlyTimestamp(value) {
+export function dateOnlyTimestamp(value) {
   const date = value ? new Date(String(value).replace(' ', 'T')) : new Date();
   const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
   const localDate = new Date(safeDate.getFullYear(), safeDate.getMonth(), safeDate.getDate());
