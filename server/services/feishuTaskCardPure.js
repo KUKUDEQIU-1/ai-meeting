@@ -364,9 +364,9 @@ function taskOutcome(task) {
 }
 
 function taskOutcomeTitle(outcome) {
-  if (outcome === 'new_task') return '已处理为新任务';
-  if (outcome === 'old_task_progress') return '已处理为旧任务进展';
-  if (outcome === 'discarded') return '已丢弃';
+  if (outcome === 'new_task') return '✅ 已处理为新任务';
+  if (outcome === 'old_task_progress') return '✅ 已处理为旧任务进展';
+  if (outcome === 'discarded') return '✅ 已丢弃';
   return '';
 }
 

@@ -32,12 +32,12 @@ async function testFastAckDispatchDoesNotAwaitSlowHandler() {
     }
   });
 
-  const response = dispatcher({ toast: { type: 'info', content: '正在处理' } }, async () => {
+  const response = dispatcher({ toast: { type: 'info', content: '已收到，正在后台处理，稍后卡片会自动更新' } }, async () => {
     await handlerFinished;
     handlerCompleted = true;
   });
 
-  assert.equal(response.toast.content, '正在处理');
+  assert.equal(response.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
   assert.equal(handlerCompleted, false);
   assert.equal(dispatched.length, 1);
   resolveHandler();
@@ -223,7 +223,7 @@ async function testBackgroundFailureStoresErrorAndKeepsFastAck() {
     });
   });
 
-  assert.equal(ack.toast.content, '正在处理');
+  assert.equal(ack.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
   assert.equal(dispatched.length, 1);
   await dispatched[0]();
 

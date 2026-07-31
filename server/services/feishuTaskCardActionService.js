@@ -154,6 +154,14 @@ function feishuCallbackToast(content) {
   return { toast: { type: 'info', content } };
 }
 
+function processingToast() {
+  return feishuCallbackToast('已收到，正在后台处理，稍后卡片会自动更新');
+}
+
+function refreshOldTasksToast() {
+  return feishuCallbackToast('已收到，正在刷新旧任务，稍后卡片会自动更新');
+}
+
 async function assertAssigneeExists(assignee, dependencies) {
   const records = await (dependencies.listMasterTaskAuditRecords ? dependencies.listMasterTaskAuditRecords() : []);
   const names = new Set((Array.isArray(records) ? records : []).flatMap((record) => String(record.assigneeName || record.assigneeKey || '').split(/\s+/).map((item) => item.trim()).filter(Boolean)));
@@ -161,6 +169,7 @@ async function assertAssigneeExists(assignee, dependencies) {
 }
 
 function scopedRefreshItemId(parsed, state) {
+  if (state.card_kind === 'getnote_tasks') return state.split_item_id || parsed.item_id || '';
   return state.split_item_id || state.split_card_message_id ? (state.split_item_id || parsed.item_id || '') : '';
 }
 
@@ -798,10 +807,10 @@ export async function prepareFeishuCardAction(payload) {
     return { parsed, state, response: feishuCallbackToast('已处理，无需重复操作'), shouldProcess: false };
   }
   if (parsed.card_kind === 'getnote_tasks' && (parsed.action === 'getnote_submit_task' || parsed.action === 'getnote_discard_task')) {
-    return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
+    return { parsed, state, response: processingToast(), shouldProcess: true };
   }
   if (parsed.card_kind === 'getnote_tasks' && parsed.action === 'refresh_old_tasks') {
-    return { parsed, state, response: feishuCallbackToast('正在刷新旧任务，请稍候'), shouldProcess: true };
+    return { parsed, state, response: refreshOldTasksToast(), shouldProcess: true };
   }
   if ((parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress') && state.confirmation_status === 'processing') {
     return { parsed, state, response: feishuCallbackToast(parsed.action === 'discard_task' ? '确认处理中，暂不能丢弃' : '确认处理中，暂不能修改'), shouldProcess: false };
@@ -810,7 +819,7 @@ export async function prepareFeishuCardAction(payload) {
     return { parsed, state, response: feishuCallbackToast(parsed.action === 'discard_task' ? '已确认，不能再丢弃' : '已确认，不能再修改'), shouldProcess: false };
   }
   if (parsed.action === 'edit_task' || parsed.action === 'discard_task' || parsed.action === 'mark_task_as_new' || parsed.action === 'mark_task_as_progress' || parsed.action === 'confirm_assignee_tasks' || parsed.action === 'confirm_assignee_progress') {
-    return { parsed, state, response: feishuCallbackToast('正在处理'), shouldProcess: true };
+    return { parsed, state, response: processingToast(), shouldProcess: true };
   }
 
   reject('不支持的卡片操作', 400);
