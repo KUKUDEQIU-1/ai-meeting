@@ -156,8 +156,8 @@ app.get('/api/health', async (req, res, next) => {
       },
       capabilities: healthCapabilities(),
       card_readiness: cardReadiness(),
-      resident_worker: feishuResidentWorker.snapshot(),
-      scan_coordinator: feishuScanCoordinator.snapshot()
+      resident_worker: feishuResidentWorker.publicSnapshot(),
+      scan_coordinator: feishuScanCoordinator.publicSnapshot()
     });
   } catch (error) {
     next(error);

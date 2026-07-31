@@ -584,7 +584,12 @@ router.post('/sync-feishu-wiki-docx', async (req, res, next) => {
       force,
       reanalyze,
       nodeTokenOrUrl
-    }));
+    }), {
+      route: '/api/meeting/sync-feishu-wiki-docx',
+      capability: 'feishu_wiki_docx_import',
+      equivalenceKey: 'wiki-docx-library-active-scan',
+      mode: 'wiki_docx_library'
+    });
 
     res.json({
       ...result,

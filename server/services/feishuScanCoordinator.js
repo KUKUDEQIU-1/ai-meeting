@@ -57,8 +57,14 @@ function completeActiveScan(activeScan, result) {
   return completed;
 }
 
-function isEquivalentScan(activeScan, metadata) {
-  return activeScan.equivalence_key === normalizeMetadata(activeScan.type, metadata).equivalence_key;
+function isEquivalentScan(activeScan, type, metadata) {
+  const explicitKey = normalizeText(metadata.equivalenceKey) ?? normalizeText(metadata.equivalence_key);
+
+  if (!explicitKey) {
+    return activeScan.type === type;
+  }
+
+  return activeScan.equivalence_key === explicitKey;
 }
 
 export function createFeishuScanCoordinator() {
@@ -73,9 +79,19 @@ export function createFeishuScanCoordinator() {
       };
     },
 
+    publicSnapshot() {
+      return {
+        running: Boolean(activeScan),
+        active_scan: activeScan ? {
+          type: activeScan.type,
+          started_at: activeScan.started_at
+        } : null
+      };
+    },
+
     async runScan(type, scan, metadata = {}) {
       if (activeScan) {
-        const equivalent = isEquivalentScan(activeScan, metadata);
+        const equivalent = isEquivalentScan(activeScan, type, metadata);
         return {
           success: false,
           status: 'already_running',

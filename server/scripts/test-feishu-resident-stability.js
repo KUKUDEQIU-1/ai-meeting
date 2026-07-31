@@ -63,6 +63,46 @@ async function testCoordinatorRejectsEquivalentScanWithoutSecondInvocation() {
   assert.equal(busy.running_scan.equivalence_key, 'wiki-docx-library-active-scan');
 }
 
+async function testCoordinatorTreatsRouteFirstWikiScanAsEquivalentToWorker() {
+  let releaseScan;
+  let calls = 0;
+  const coordinator = createFeishuScanCoordinator();
+  const first = coordinator.runScan('wiki', async () => {
+    calls += 1;
+    return new Promise((resolve) => { releaseScan = resolve; });
+  }, {
+    route: '/api/meeting/sync-feishu-wiki-docx',
+    capability: 'feishu_wiki_docx_import',
+    equivalenceKey: 'wiki-docx-library-active-scan',
+    mode: 'wiki_docx_library'
+  });
+
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false'
+    },
+    scans: {
+      wiki: async () => {
+        calls += 1;
+        return { should_not_run: true };
+      }
+    },
+    coordinator,
+    scheduler: () => ({ cancel() {} })
+  });
+
+  await worker.runCycle();
+  releaseScan({ success: true, imported: [], skipped: [], failed: [] });
+  await first;
+
+  const snapshot = worker.snapshot();
+  assert.equal(calls, 1);
+  assert.equal(snapshot.last_cycle.wiki.status, 'already_running');
+  assert.equal(snapshot.last_cycle.wiki.imported_count, 0);
+  assert.equal(snapshot.last_cycle.status, 'success');
+}
+
 async function testWorkerDisabledAndSafetyGateDoNotScan() {
   let calls = 0;
   const worker = createFeishuResidentWorker({
@@ -322,8 +362,38 @@ async function testWorkerSkipsAuditOnBeijingWeekend() {
   assert.equal(auditCalls, 0);
 }
 
+async function testStopDuringInFlightCycleKeepsStoppedStatusAndSkipsSchedule() {
+  let releaseScan;
+  let schedules = 0;
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false'
+    },
+    scans: {
+      wiki: async () => new Promise((resolve) => { releaseScan = resolve; })
+    },
+    scheduler: () => {
+      schedules += 1;
+      return { cancel() {} };
+    }
+  });
+
+  const cycle = worker.runCycle();
+  while (!releaseScan) await Promise.resolve();
+  await worker.stop();
+  releaseScan({ imported: [], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' });
+  await cycle;
+  const snapshot = worker.snapshot();
+
+  assert.equal(snapshot.status, 'stopped');
+  assert.equal(snapshot.running, false);
+  assert.equal(schedules, 0);
+}
+
 await testCoordinatorReturnsBusyWithoutOverlap();
 await testCoordinatorRejectsEquivalentScanWithoutSecondInvocation();
+await testCoordinatorTreatsRouteFirstWikiScanAsEquivalentToWorker();
 await testWorkerDisabledAndSafetyGateDoNotScan();
 await testWorkerRunsWikiDocumentLibraryScanAndSchedulesAfterFinish();
 await testWorkerDoesNotRunGetNoteScanUnlessEnabled();
@@ -331,5 +401,6 @@ await testWorkerRunsGetNoteScanAfterWikiWhenEnabled();
 await testWorkerReportsGetNoteFailureWithoutBlockingNextCycle();
 await testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay();
 await testWorkerSkipsAuditOnBeijingWeekend();
+await testStopDuringInFlightCycleKeepsStoppedStatusAndSkipsSchedule();
 
 console.log('feishu resident stability tests passed');
