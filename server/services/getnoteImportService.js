@@ -39,6 +39,43 @@ function getCardDispatchMode() {
   return process.env.GETNOTE_CARD_DISPATCH_MODE?.trim().toLowerCase() || '';
 }
 
+function dispatchLockLeaseMs() {
+  return envNumber('GETNOTE_DISPATCH_LOCK_LEASE_SECONDS', envNumber('GETNOTE_PROCESSING_TIMEOUT_MINUTES', 30) * 60) * 1000;
+}
+
+function newDispatchLockOwner() {
+  return `${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+}
+
+async function claimGetNoteDispatchLock(noteId, owner, now = new Date()) {
+  const timestamp = now.toISOString();
+  const leaseUntil = new Date(now.getTime() + dispatchLockLeaseMs()).toISOString();
+  const expired = await run(
+    'UPDATE getnote_dispatch_locks SET lock_owner = ?, lease_until = ?, updated_at = ? WHERE note_id = ? AND lease_until <= ?',
+    [owner, leaseUntil, timestamp, noteId, timestamp]
+  );
+
+  if (expired.changes === 1) {
+    return { claimed: true, owner, lease_until: leaseUntil };
+  }
+
+  const inserted = await run(
+    'INSERT OR IGNORE INTO getnote_dispatch_locks (note_id, lock_owner, lease_until, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    [noteId, owner, leaseUntil, timestamp, timestamp]
+  );
+
+  if (inserted.changes === 1) {
+    return { claimed: true, owner, lease_until: leaseUntil };
+  }
+
+  const current = await get('SELECT note_id, lock_owner, lease_until, updated_at FROM getnote_dispatch_locks WHERE note_id = ?', [noteId]);
+  return { claimed: false, owner: current?.lock_owner || '', lease_until: current?.lease_until || '' };
+}
+
+async function releaseGetNoteDispatchLock(noteId, owner) {
+  await run('DELETE FROM getnote_dispatch_locks WHERE note_id = ? AND lock_owner = ?', [noteId, owner]);
+}
+
 function summarizeDispatchResult(result) {
   return {
     status: result?.status || 'unknown',
@@ -359,6 +396,24 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       content_length: existingRecord.content_length || 0,
       used_transcript: Boolean(existingRecord.used_transcript),
       message: SKIPPED_MESSAGE
+    };
+  }
+
+  const lockOwner = newDispatchLockOwner();
+  const dispatchLock = await claimGetNoteDispatchLock(normalizedNoteId, lockOwner);
+
+  if (!dispatchLock.claimed) {
+    return {
+      success: true,
+      note_id: normalizedNoteId,
+      title: existingRecord?.title || undefined,
+      status: 'skipped',
+      reason: 'dispatch_in_progress',
+      table_url: existingRecord?.table_url || undefined,
+      lock: {
+        status: 'busy',
+        lease_until: dispatchLock.lease_until || undefined
+      }
     };
   }
 
@@ -775,6 +830,8 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     error.content_length = contentMeta?.length;
     error.used_transcript = contentMeta ? ['audio.original', 'audio.transcript', 'transcript', 'audio.text'].includes(contentMeta.source) : false;
     throw error;
+  } finally {
+    await releaseGetNoteDispatchLock(normalizedNoteId, lockOwner);
   }
 }
 

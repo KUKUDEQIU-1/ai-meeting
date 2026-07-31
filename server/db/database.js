@@ -95,6 +95,14 @@ function migrateDatabase() {
     updated_at TEXT NOT NULL
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS getnote_dispatch_locks (
+    note_id TEXT PRIMARY KEY,
+    lock_owner TEXT NOT NULL,
+    lease_until TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
   db.run(`CREATE TABLE IF NOT EXISTS feishu_meeting_note_sync_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     note_id TEXT NOT NULL UNIQUE,

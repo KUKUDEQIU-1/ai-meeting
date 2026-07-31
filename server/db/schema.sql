@@ -125,6 +125,14 @@ CREATE TABLE IF NOT EXISTS getnote_task_history (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS getnote_dispatch_locks (
+  note_id TEXT PRIMARY KEY,
+  lock_owner TEXT NOT NULL,
+  lease_until TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS getnote_task_seen (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_key TEXT NOT NULL,
