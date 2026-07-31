@@ -9,6 +9,9 @@ services:
       - "3000"
     environment:
       PORT: ${PORT:-3000}
+      BUILD_VERSION: ${BUILD_VERSION:-}
+      BUILD_ID: ${BUILD_ID:-}
+      BUILD_SHA: ${BUILD_SHA:-}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-https://huiyiai.yourtest.top}
       APP_BASE_URL: ${APP_BASE_URL:-https://huiyiai.yourtest.top}
       AI_API_URL: ${AI_API_URL:-}
@@ -65,6 +68,7 @@ services:
       GETNOTE_MAX_LOOKBACK_DAYS: ${GETNOTE_MAX_LOOKBACK_DAYS:-7}
       GETNOTE_MIN_NOTE_AGE_MINUTES: ${GETNOTE_MIN_NOTE_AGE_MINUTES:-10}
       GETNOTE_PROCESSING_TIMEOUT_MINUTES: ${GETNOTE_PROCESSING_TIMEOUT_MINUTES:-30}
+      GETNOTE_DISPATCH_LOCK_LEASE_SECONDS: ${GETNOTE_DISPATCH_LOCK_LEASE_SECONDS:-1800}
       FEISHU_DOCX_USER_ACCESS_TOKEN: ${FEISHU_DOCX_USER_ACCESS_TOKEN:-}
     volumes:
       - ai_meeting_data:/app/server/data
