@@ -410,6 +410,12 @@ export async function getDraftAssigneeStateByMessageId(messageId) {
   return split || null;
 }
 
+export async function getDraftCardMessageByMessageId(messageId) {
+  if (!messageId) return null;
+
+  return get('SELECT * FROM meeting_task_draft_card_messages WHERE card_message_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [messageId]);
+}
+
 export async function getLatestDraftAssigneeStateByKind(cardKind) {
   return get('SELECT * FROM meeting_task_draft_assignees WHERE card_kind = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [cardKind]);
 }

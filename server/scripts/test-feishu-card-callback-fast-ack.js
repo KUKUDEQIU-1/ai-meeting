@@ -12,7 +12,8 @@ import {
   createMeetingTaskDraft,
   getDraftAssigneeState,
   getMeetingTaskDraftById,
-  upsertDraftAssigneeState
+  upsertDraftAssigneeState,
+  upsertDraftCardMessage
 } from '../services/taskDraftService.js';
 
 async function testFastAckDispatchDoesNotAwaitSlowHandler() {
@@ -71,7 +72,7 @@ function testTestRecipientOverridePreservesOriginalAssignees() {
   }
 }
 
-async function createDraftWithAssigneeState(suffix) {
+async function createDraftWithAssigneeState(suffix, { cardKind = 'tasks' } = {}) {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
     sourceId: `callback-${suffix}`,
@@ -103,27 +104,134 @@ async function createDraftWithAssigneeState(suffix) {
   await upsertDraftAssigneeState({
     draftId: draft.id,
     assigneeKey: '张三',
+    cardKind,
     assigneeName: '张三',
     receiveId: 'ou_actor',
-    deliveryStatus: 'sent'
+    deliveryStatus: 'sent',
+    cardMessageId: `om_current_${suffix}`
   });
 
   return draft;
 }
 
-function buildActionPayload({ action, draftId, itemId = '', eventId, taskName = '新任务名' }) {
+function buildActionPayload({ action, draftId, itemId = '', eventId, taskName = '新任务名', messageId = '', cardKind = 'tasks' }) {
   const formValue = itemId ? { [`task_name_${itemId}`]: taskName } : {};
 
   return {
     header: { event_id: eventId, token: 'secret' },
     event: {
+      context: messageId ? { open_message_id: messageId } : {},
       operator: { open_id: 'ou_actor' },
       action: {
-        value: { action, draft_id: draftId, assignee_key: '张三', item_id: itemId },
+        value: { action, draft_id: draftId, assignee_key: '张三', item_id: itemId, card_kind: cardKind },
         form_value: formValue
       }
     }
   };
+}
+
+async function testStaleCardMessageIdDoesNotMutateDraft() {
+  const draft = await createDraftWithAssigneeState('stale-card', { cardKind: 'getnote_tasks' });
+  let finalizeCount = 0;
+  const staleMessageId = `om_known_stale_card_${draft.id}`;
+
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    cardKind: 'getnote_tasks',
+    itemId: 'item_other-stale-card',
+    cardMessageId: staleMessageId
+  });
+
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'edit_task',
+    draftId: draft.id,
+    itemId: 'item_stale-card',
+    eventId: 'evt_stale_card',
+    taskName: '不应写入',
+    messageId: staleMessageId,
+    cardKind: 'getnote_tasks'
+  }));
+
+  if (prepared.shouldProcess) {
+    await processPreparedFeishuCardAction(prepared, {
+      finalizeAssignee: async () => {
+        finalizeCount += 1;
+      },
+      updateCard: async () => ({ status: 'updated' })
+    });
+  }
+
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(prepared.response.toast.content, '此卡片已失效，请使用最新卡片');
+  assert.equal(prepared.shouldProcess, false);
+  assert.equal(finalizeCount, 0);
+  assert.equal(updatedDraft.draft_tasks[0].task_name, '原任务');
+}
+
+async function testCurrentCardMessageIdStillProcesses() {
+  const draft = await createDraftWithAssigneeState('current-card');
+  const response = await handleFeishuCardAction(buildActionPayload({
+    action: 'edit_task',
+    draftId: draft.id,
+    itemId: 'item_current-card',
+    eventId: 'evt_current_card',
+    taskName: '当前卡修改',
+    messageId: 'om_current_current-card'
+  }), {
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '任务已更新');
+  assert.equal(updatedDraft.draft_tasks[0].task_name, '当前卡修改');
+}
+
+async function testStaleSplitCardMessageIdDoesNotMutateDraft() {
+  const draft = await createDraftWithAssigneeState('stale-split', { cardKind: 'getnote_tasks' });
+  const otherSplitMessageId = `om_other_split_${draft.id}`;
+
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    cardKind: 'getnote_tasks',
+    itemId: 'item_other-split',
+    cardMessageId: otherSplitMessageId
+  });
+
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'edit_task',
+    draftId: draft.id,
+    itemId: 'item_stale-split',
+    eventId: 'evt_stale_split',
+    taskName: '不应写入',
+    messageId: otherSplitMessageId,
+    cardKind: 'getnote_tasks'
+  }));
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(prepared.response.toast.content, '此卡片已失效，请使用最新卡片');
+  assert.equal(prepared.shouldProcess, false);
+  assert.equal(updatedDraft.draft_tasks[0].task_name, '原任务');
+}
+
+async function testUnmappedAggregateMessageIdStillProcessesByLegacyFallback() {
+  const draft = await createDraftWithAssigneeState('legacy-message-fallback');
+  const response = await handleFeishuCardAction(buildActionPayload({
+    action: 'edit_task',
+    draftId: draft.id,
+    itemId: 'item_legacy-message-fallback',
+    eventId: 'evt_legacy_message_fallback',
+    taskName: '兼容卡修改',
+    messageId: 'om_unmapped_legacy_message'
+  }), {
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '任务已更新');
+  assert.equal(updatedDraft.draft_tasks[0].task_name, '兼容卡修改');
 }
 
 async function testConfirmClaimOnlyOnce() {
@@ -240,6 +348,10 @@ await testFastAckDispatchDoesNotAwaitSlowHandler();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();
 await testConfirmClaimOnlyOnce();
+await testStaleCardMessageIdDoesNotMutateDraft();
+await testCurrentCardMessageIdStillProcesses();
+await testStaleSplitCardMessageIdDoesNotMutateDraft();
+await testUnmappedAggregateMessageIdStillProcessesByLegacyFallback();
 await testEditDuringProcessingDoesNotFinalizeOrMutate();
 await testDuplicateConfirmIsIdempotent();
 await testBackgroundFailureStoresErrorAndKeepsFastAck();

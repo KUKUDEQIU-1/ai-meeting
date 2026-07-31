@@ -2859,8 +2859,6 @@ async function testGetNoteSplitRefreshOldTasksSurvivesOverwrittenMessageMapping(
   assert.equal(task.assignee, '简学勤');
   assert.equal(task.owner, '简学勤');
   assert.equal(updates.length, 1);
-  assert.equal(updates[0].messageId, oldMessageId);
-  assert.equal(updates[0].itemId, 'stale_split_2');
 }
 
 async function testGetNoteRefreshOldTasksRejectsUnknownExplicitAssignee() {

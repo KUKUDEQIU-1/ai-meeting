@@ -9,6 +9,7 @@ import {
 } from './feishuTaskCardPure.js';
 import {
   claimDraftAssigneeConfirmation,
+  getDraftCardMessageByMessageId,
   getDraftAssigneeState,
   getDraftAssigneeStateByMessageId,
   getMeetingTaskDraftById,
@@ -162,6 +163,10 @@ function refreshOldTasksToast() {
   return feishuCallbackToast('已收到，正在刷新旧任务，稍后卡片会自动更新');
 }
 
+function staleCardToast() {
+  return feishuCallbackToast('此卡片已失效，请使用最新卡片');
+}
+
 async function assertAssigneeExists(assignee, dependencies) {
   const records = await (dependencies.listMasterTaskAuditRecords ? dependencies.listMasterTaskAuditRecords() : []);
   const names = new Set((Array.isArray(records) ? records : []).flatMap((record) => String(record.assigneeName || record.assigneeKey || '').split(/\s+/).map((item) => item.trim()).filter(Boolean)));
@@ -269,6 +274,33 @@ async function loadAuthorizedState(parsed) {
     : await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
 
   if (!state && parsed.message_id && isGetNoteItemAction(parsed) && parsed.item_id) {
+    const message = await getDraftCardMessageByMessageId(parsed.message_id);
+
+    if (message
+      && Number(message.draft_id) === parsed.draft_id
+      && message.assignee_key === parsed.assignee_key
+      && message.card_kind === parsed.card_kind
+      && !itemScopeIncludes(message.item_id, parsed.item_id)
+    ) {
+      state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
+
+      if (state && validateCallbackActor(state, parsed)) {
+        return { ...state, stale_card: true };
+      }
+    }
+  }
+
+  if (state?.split_item_id && isGetNoteItemAction(parsed) && parsed.item_id && !itemScopeIncludes(state.split_item_id, parsed.item_id)) {
+    if (validateCallbackActor(state, parsed)) {
+      return { ...state, stale_card: true };
+    }
+  }
+
+  if (!state && isGetNoteItemAction(parsed) && parsed.item_id) {
+    state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
+  }
+
+  if (!state && parsed.message_id) {
     state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
   }
 
@@ -799,6 +831,10 @@ export async function prepareFeishuCardAction(payload) {
 
   const parsed = parseFeishuCardActionPayload(payload);
   const state = await loadAuthorizedState(parsed);
+
+  if (state.stale_card) {
+    return { parsed, state, response: staleCardToast(), shouldProcess: false };
+  }
 
   if (isReplayCallback(state, parsed)) {
     return { parsed, state, response: feishuCallbackToast('已处理，无需重复操作'), shouldProcess: false };
