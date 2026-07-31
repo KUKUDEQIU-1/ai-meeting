@@ -611,6 +611,29 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       throw error;
     }
 
+    if (dispatchSummary.sent_count > 0) {
+      const notifyResult = await notifyUserSafe({
+        notifyUser: options.notifyUser,
+        status: 'getnote_cards_sent',
+        note_id: normalizedNoteId,
+        meeting_title: meetingTitle,
+        meeting_source: 'Get笔记',
+        table_name: meetingTable.table_name,
+        table_url: meetingTable.table_url,
+        tasks_count: aiResult.tasks.length,
+        today_tasks_count: todayTasksCount,
+        progress_updates_count: progressUpdatesCount,
+        discarded_items_count: discardedItemsCount,
+        needs_confirmation_count: needsConfirmationCount
+      });
+      notifyStatus = notifyResult.status;
+      notifyError = notifyResult.error;
+      console.log(`[GetNote Sync] success notify result note_id=${normalizedNoteId} draft_id=${draft.id} status=${notifyStatus}`);
+    } else {
+      notifyStatus = 'skipped';
+      notifyError = null;
+    }
+
     await upsertSyncRecord({
       noteId: normalizedNoteId,
       title: meetingTitle,
@@ -656,9 +679,6 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       console.warn(`[GetNote Sync] write meeting index skipped error=${error.message}`);
     }
 
-    notifyStatus = 'skipped';
-    notifyError = null;
-
     await upsertSyncRecord({
       noteId: normalizedNoteId,
       title: meetingTitle,
@@ -679,7 +699,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       notifyStatus,
       notifyError
     });
-    console.log(`[GetNote Sync] legacy notify skipped note_id=${normalizedNoteId} status=${notifyStatus}`);
+    console.log(`[GetNote Sync] success notify saved note_id=${normalizedNoteId} status=${notifyStatus}`);
 
     await (options.addTags || addTagsToNote)(normalizedNoteId, [process.env.GETNOTE_PROCESSED_TAG?.trim() || '已同步飞书']);
 

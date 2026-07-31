@@ -1436,6 +1436,7 @@ function formatAssigneeTaskCounts(value) {
 export function buildMeetingTableNotifyText(params) {
   const isFailed = params.status === 'failed';
   const isWorkerNoContent = params.status === 'worker_no_content';
+  const isGetNoteCardsSent = params.status === 'getnote_cards_sent';
   const assigneeCounts = formatAssigneeTaskCounts(params.assignee_task_counts);
   const lines = isFailed
     ? [
@@ -1452,6 +1453,21 @@ export function buildMeetingTableNotifyText(params) {
           '',
           params.error_message || '本次 worker 启动后的扫描未读取到会议内容，请确认今天是否已上传会议。'
         ]
+      : isGetNoteCardsSent
+        ? [
+            '【Get笔记任务确认卡片已发送】',
+            '',
+            `会议：${params.meeting_title || 'Get笔记会议'}`,
+            `来源：${params.meeting_source || 'Get笔记'}`,
+            `今日新增任务：${params.today_tasks_count ?? params.tasks_count ?? 0}`,
+            `历史进展：${params.progress_updates_count || 0}`,
+            `过滤事项：${params.discarded_items_count || 0}`,
+            `待确认任务：${params.needs_confirmation_count || 0}`,
+            `表格：${params.table_name || ''}`,
+            '',
+            '确认卡片已发送，请在飞书私信中处理。',
+            params.table_url ? `总任务表：${params.table_url}` : ''
+          ]
       : [
           '【会议任务已同步到总任务表】',
           '',
