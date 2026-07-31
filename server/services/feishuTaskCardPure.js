@@ -459,7 +459,11 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOp
     const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, itemOldTaskOptions);
     if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: itemOldTaskOptions, value: matchedTaskName }));
-    elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: task.progress_summary || task.comment || '' }));
+    elements.push(inputElement({
+      tag: `progress_summary_${itemId}`,
+      label: cardKind === 'getnote_tasks' ? '任务进展' : '备注',
+      value: cardKind === 'getnote_tasks' ? progressSummaryOf(task) : task.progress_summary || task.comment || ''
+    }));
     elements.push(taskActionSet({ draft, assignee, task, cardKind }));
     elements.push({ tag: 'hr' });
   }

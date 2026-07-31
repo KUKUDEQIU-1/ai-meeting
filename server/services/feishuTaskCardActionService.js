@@ -44,7 +44,7 @@ function validateEditableValues(values) {
     reject('任务字段长度超限', 400);
   }
   if (progressSummary.length > MAX_PROGRESS_SUMMARY_LENGTH) {
-    reject('进展备注长度超限', 400);
+    reject('任务进展长度超限', 400);
   }
   if (matchedTaskName.length > MAX_MATCHED_TASK_NAME_LENGTH) {
     reject('对应旧任务名称长度超限', 400);

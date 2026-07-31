@@ -702,6 +702,35 @@ function testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect
   assert.doesNotMatch(text, /getnote_submit_task/);
 }
 
+function testGetNoteReviewCardLabelsAndPrefillsTaskProgress() {
+  const card = buildGetNoteTaskReviewCard({
+    draft: { id: 41, meeting_title: 'GetNote 例会' },
+    assignee: { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' },
+    tasks: [
+      {
+        item_id: 'getnote_1',
+        task_name: '修复卡片响应Bug',
+        task_brief: '卡片响应 Bug 已定位到回调状态缺失，需要补齐线上状态后复测',
+        task_description: '排查卡片回调失败并补齐线上状态。',
+        assignee: '洪伟填'
+      }
+    ],
+    oldTaskOptions: [
+      { text: { tag: 'plain_text', content: '历史任务 A' }, value: '历史任务 A' }
+    ],
+    assigneeOptions: [
+      { text: { tag: 'plain_text', content: '洪伟填' }, value: '洪伟填' }
+    ]
+  });
+  const text = JSON.stringify(card);
+  const progressInput = formControl(card, 'progress_summary_getnote_1');
+
+  assert.match(text, /任务进展/);
+  assert.doesNotMatch(text, /\*\*备注\*\*/);
+  assert.equal(progressInput.placeholder.content, '任务进展');
+  assert.equal(inputDefaultValue(card, 'progress_summary_getnote_1'), '卡片响应 Bug 已定位到回调状态缺失，需要补齐线上状态后复测');
+}
+
 function testGetNoteReviewCardAddsRefreshOldTasksButtonOnlyForGetNote() {
   const draft = { id: 43, meeting_title: 'GetNote 刷新旧任务测试' };
   const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' };
@@ -4451,6 +4480,7 @@ testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();
 testFailureCardShowsConfirmationError();
 testTaskAndProgressCardsUseDistinctLabelsAndActions();
 testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect();
+testGetNoteReviewCardLabelsAndPrefillsTaskProgress();
 testGetNoteReviewCardAddsRefreshOldTasksButtonOnlyForGetNote();
 testGetNoteCompactCardShowsHandledItemAndPendingSibling();
 testCallbackParsingAndSafety();
