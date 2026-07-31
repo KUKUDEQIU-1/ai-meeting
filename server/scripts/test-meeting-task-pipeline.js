@@ -225,9 +225,9 @@ async function testGetNoteMainlineMergesSupportAndRequiresAssigneeConfirmation()
   }, { source_type: 'getnote' });
 
   assert.equal(result.tasks.length, 1);
-  assert.equal(result.tasks[0].assignee, '待确认');
-  assert.equal(result.tasks[0].owner, '待确认');
-  assert.equal(result.tasks[0].assignee_source, 'speaker_pending_confirmation');
+  assert.equal(result.tasks[0].assignee, '张三');
+  assert.equal(result.tasks[0].owner, '张三');
+  assert.equal(result.tasks[0].assignee_source, 'speaker');
   assert.match(result.tasks[0].task_description, /发送负责人不准确/);
   assert.deepEqual(result.tasks[0].source_turn_ids, ['turn_1', 'turn_2']);
 }

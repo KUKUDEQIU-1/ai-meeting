@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { all, get, initDatabase } from '../db/database.js';
+import { parseAssigneeMap } from '../services/feishuTaskCardPure.js';
 import { extractGetNoteContentWithMeta } from '../services/getnoteClient.js';
 import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle } from '../services/getnoteImportService.js';
 
@@ -30,6 +31,8 @@ function workflowOptions(noteId, content, sentCards) {
     cardDispatchDeps: {
       dispatchMode: 'local',
       receiveId: 'ou_wei_tian',
+      assigneeMap: parseAssigneeMap(JSON.stringify({ 张三: 'ou_zhang' })),
+      listGroupMembers: async () => ({ status: 'failed' }),
       listMasterTaskAuditRecords: async () => [
         { taskName: '已有任务A', status: '进行中', assigneeName: '洪伟填 李嘉华', assigneeKey: '洪伟填李嘉华' },
         { taskName: '已有任务B', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' }
@@ -96,7 +99,7 @@ async function testImportCreatesPendingDraftAndSkipsUnchangedContent() {
   assert.equal(second.status, 'skipped');
   assert.equal(second.reason, 'content_unchanged');
   assert.equal(sentCards.length, 1);
-  assert.equal(sentCards[0].receiveId, 'ou_wei_tian');
+  assert.equal(sentCards[0].receiveId, 'ou_zhang');
   assert.equal(firstOptions.notifications.length, 1);
   assert.equal(secondOptions.notifications.length, 0);
   assert.equal(firstOptions.notifications[0].status, 'getnote_cards_sent');
@@ -112,23 +115,72 @@ async function testImportCreatesPendingDraftAndSkipsUnchangedContent() {
   assert.equal(record.status, 'pending_confirmation');
   assert.equal(record.content_hash, buildGetNoteContentHash({ noteId, contentSource: 'audio.transcript', rawText: content }));
   assert.equal(states.length, 1);
-  assert.equal(states[0].card_kind, 'getnote_tasks');
-  assert.equal(states[0].assignee_name, 'GetNote Reviewer');
-  assert.equal(states[0].receive_id, 'ou_wei_tian');
+  assert.equal(states[0].card_kind, 'tasks');
+  assert.equal(states[0].assignee_name, '张三');
+  assert.equal(states[0].receive_id, 'ou_zhang');
   assert.deepEqual(firstOptions.deliveryDiagnostics.map((event) => `${event.phase}:${event.status}`), [
-    'delivery_prepare:ready',
-    'delivery_send:attempt',
     'delivery_send:sent'
   ]);
-  assert.equal(firstOptions.deliveryDiagnostics[0].card_kind, 'getnote_tasks');
+  assert.equal(firstOptions.deliveryDiagnostics[0].card_kind, 'tasks');
   assert.equal(firstOptions.deliveryDiagnostics[0].draft_id, draft.id);
-  assert.equal(firstOptions.deliveryDiagnostics[0].dispatch_mode, 'local');
-  assert.equal(firstOptions.deliveryDiagnostics[0].receive_id_type, 'open_id');
-  assert.notEqual(firstOptions.deliveryDiagnostics[0].receive_id_masked, 'ou_wei_tian');
-  assert.match(firstOptions.deliveryDiagnostics[0].receive_id_masked, /^ou_w\*+ian$/);
-  assert.equal(firstOptions.deliveryDiagnostics[1].item_count, 1);
-  assert.equal(firstOptions.deliveryDiagnostics[2].message_id.includes(noteId), false);
+  assert.equal(firstOptions.deliveryDiagnostics[0].message_id.includes(noteId), false);
   assert.match(draft.draft_json, /待确认/);
+}
+
+async function testImportSplitsKnownAndUnknownGetNoteTasks() {
+  const content = '张三今天修复 GetNote 确认卡片，另外有人要整理订单接口错误日志并发到群里但无法确认负责人。';
+  const noteId = `getnote_workflow_mixed_${Date.now()}`;
+  const sentCards = [];
+  const options = workflowOptions(noteId, content, sentCards);
+  options.generateMeetingTasks = async () => ({
+    today_tasks: [
+      {
+        task_name: '修复GetNote确认卡片',
+        task_description: '修复 GetNote 确认卡片并接入总表。',
+        task_brief: '修复 GetNote 确认卡片',
+        evidence_quote: '张三今天修复 GetNote 确认卡片',
+        assignee: '张三',
+        assignee_source: 'speaker',
+        source_speaker: '张三',
+        source_speaker_status: 'provided',
+        source_speaker_confidence: 0.95,
+        task_role: 'primary_task',
+        actionability: 'actionable',
+        item_type: 'today_new_task',
+        should_create_task: true
+      },
+      {
+        task_name: '整理订单接口错误日志',
+        task_description: '整理订单接口错误日志并发到群里。',
+        task_brief: '整理订单接口错误日志',
+        evidence_quote: '有人要整理订单接口错误日志并发到群里但无法确认负责人',
+        assignee: '待确认',
+        task_role: 'primary_task',
+        actionability: 'actionable',
+        item_type: 'today_new_task',
+        should_create_task: true
+      }
+    ],
+    progress_updates: [],
+    discarded_items: []
+  });
+
+  const result = await importGetNoteMeeting(noteId, options);
+  const draft = await get('SELECT * FROM meeting_task_drafts WHERE source_type = ? AND source_id = ?', ['getnote', noteId]);
+  const states = await all('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ? ORDER BY card_kind, assignee_key', [draft.id]);
+  const ownerCardText = JSON.stringify(sentCards.find((message) => message.receiveId === 'ou_zhang').card);
+  const reviewerCardText = JSON.stringify(sentCards.find((message) => message.receiveId === 'ou_wei_tian').card);
+
+  assert.equal(result.status, 'pending_confirmation');
+  assert.deepEqual(sentCards.map((message) => message.receiveId).sort(), ['ou_wei_tian', 'ou_zhang']);
+  assert.match(ownerCardText, /修复GetNote确认卡片/);
+  assert.doesNotMatch(ownerCardText, /整理订单接口错误日志/);
+  assert.match(reviewerCardText, /整理订单接口错误日志/);
+  assert.doesNotMatch(reviewerCardText, /修复GetNote确认卡片/);
+  assert.deepEqual(states.map((state) => `${state.card_kind}:${state.assignee_name}:${state.receive_id}`).sort(), [
+    'getnote_tasks:GetNote Reviewer:ou_wei_tian',
+    'tasks:张三:ou_zhang'
+  ]);
 }
 
 async function testForceCardResendReplacesExistingGetNoteCard() {
@@ -138,6 +190,22 @@ async function testForceCardResendReplacesExistingGetNoteCard() {
 
   const firstOptions = workflowOptions(noteId, content, sentCards);
   const replacementOptions = { ...workflowOptions(noteId, content, sentCards), force: true, forceCardResend: true };
+  firstOptions.generateMeetingTasks = async () => ({
+    today_tasks: [{
+      task_name: '修复GetNote确认卡片',
+      task_description: '修复 GetNote 确认卡片并接入总表。',
+      task_brief: '修复 GetNote 确认卡片',
+      evidence_quote: '今天修复 GetNote 确认卡片并接入总表',
+      assignee: '待确认',
+      task_role: 'primary_task',
+      actionability: 'actionable',
+      item_type: 'today_new_task',
+      should_create_task: true
+    }],
+    progress_updates: [],
+    discarded_items: []
+  });
+  replacementOptions.generateMeetingTasks = firstOptions.generateMeetingTasks;
   const first = await importGetNoteMeeting(noteId, firstOptions);
   const replacement = await importGetNoteMeeting(noteId, replacementOptions);
 
@@ -171,6 +239,7 @@ await initDatabase();
 testGetNoteSummaryIsNotUsedAsTaskSource();
 testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles();
 await testImportCreatesPendingDraftAndSkipsUnchangedContent();
+await testImportSplitsKnownAndUnknownGetNoteTasks();
 await testForceCardResendReplacesExistingGetNoteCard();
 
 console.log('getnote workflow tests passed');

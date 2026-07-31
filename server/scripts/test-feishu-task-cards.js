@@ -1609,10 +1609,10 @@ async function testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions() {
     meetingTitle: 'GetNote 选项测试',
     meetingSource: 'Get笔记',
     draftTasks: [
-      { item_id: 'getnote_option_1', task_name: 'GetNote 新任务 1', assignee: '洪伟填' },
-      { item_id: 'getnote_option_2', task_name: 'GetNote 新任务 2', assignee: '洪伟填' },
-      { item_id: 'getnote_option_3', task_name: 'GetNote 新任务 3', assignee: '洪伟填' },
-      { item_id: 'getnote_option_4', task_name: 'GetNote 新任务 4', assignee: '洪伟填' }
+      { item_id: 'getnote_option_1', task_name: 'GetNote 新任务 1', assignee: '待确认', source_speaker: '洪伟填' },
+      { item_id: 'getnote_option_2', task_name: 'GetNote 新任务 2', assignee: '待确认', source_speaker: '洪伟填' },
+      { item_id: 'getnote_option_3', task_name: 'GetNote 新任务 3', assignee: '待确认', source_speaker: '洪伟填' },
+      { item_id: 'getnote_option_4', task_name: 'GetNote 新任务 4', assignee: '待确认', source_speaker: '洪伟填' }
     ],
     tableId: 'table_getnote_options',
     tableName: '事务列表',
@@ -1673,8 +1673,8 @@ async function testGetNoteDispatchScopesOldTaskOptionsPerAssignee() {
     meetingTitle: 'GetNote 旧任务分组测试',
     meetingSource: 'Get笔记',
     draftTasks: [
-      { item_id: 'getnote_scope_1', task_name: 'GetNote 新任务 1', assignee: '洪伟填' },
-      { item_id: 'getnote_scope_2', task_name: 'GetNote 新任务 2', assignee: '李嘉华' }
+      { item_id: 'getnote_scope_1', task_name: 'GetNote 新任务 1', assignee: '待确认', source_speaker: '洪伟填' },
+      { item_id: 'getnote_scope_2', task_name: 'GetNote 新任务 2', assignee: '待确认', source_speaker: '李嘉华' }
     ],
     tableId: 'table_getnote_scope',
     tableName: '事务列表',
@@ -1722,7 +1722,7 @@ async function testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit() {
     sourceId: `getnote-option-cap-${Date.now()}-${Math.random()}`,
     meetingTitle: 'GetNote 选项上限测试',
     meetingSource: 'Get笔记',
-    draftTasks: [{ item_id: 'getnote_cap_1', task_name: 'GetNote 新任务', assignee: '负责人1' }],
+    draftTasks: [{ item_id: 'getnote_cap_1', task_name: 'GetNote 新任务', assignee: '待确认', source_speaker: '负责人1' }],
     tableId: 'table_getnote_option_cap',
     tableName: '事务列表',
     tableUrl: 'https://example.com/master'
@@ -2003,6 +2003,112 @@ async function testGetNoteDispatchForceDoesNotResendExistingSentCard() {
   assert.equal(sentCards.length, 1);
 }
 
+async function testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-known-assignee-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 已知负责人分发测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{ item_id: 'getnote_known_1', task_name: 'GetNote 已知负责人任务', assignee: '李嘉华', owner: '李嘉华', needs_confirmation: true }],
+    tableId: 'table_getnote_known',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+  const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_getnote_known_${draft.id}_${sentMessages.length}`;
+    }
+  });
+  const ownerState = await getDraftAssigneeState(draft.id, '李嘉华', 'tasks');
+  const reviewerState = await getDraftAssigneeState(draft.id, 'getnote_reviewer', 'getnote_tasks');
+  const cardText = JSON.stringify(sentMessages[0].card);
+
+  assert.equal(result.sent_count, 1);
+  assert.equal(sentMessages[0].receiveId, 'ou_li');
+  assert.doesNotMatch(cardText, /选择负责人/);
+  assert.doesNotMatch(cardText, /刷新旧任务/);
+  assert.equal(ownerState.delivery_status, 'sent');
+  assert.equal(ownerState.receive_id, 'ou_li');
+  assert.equal(reviewerState, undefined);
+}
+
+async function testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-unknown-assignee-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 未知负责人分发测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{ item_id: 'getnote_unknown_1', task_name: 'GetNote 未知负责人任务', assignee: '待确认', owner: '待确认' }],
+    tableId: 'table_getnote_unknown',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+  const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    receiveId: 'ou_getnote_reviewer',
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_getnote_unknown_${draft.id}_${sentMessages.length}`;
+    }
+  });
+  const reviewerState = await getDraftAssigneeState(draft.id, 'getnote_reviewer', 'getnote_tasks');
+  const cardText = JSON.stringify(sentMessages[0].card);
+
+  assert.equal(result.sent_count, 1);
+  assert.equal(sentMessages[0].receiveId, 'ou_getnote_reviewer');
+  assert.match(cardText, /刷新旧任务/);
+  assert.match(cardText, /GetNote 未知负责人任务/);
+  assert.equal(reviewerState.delivery_status, 'sent');
+}
+
+async function testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-mixed-assignee-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 混合负责人分发测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'getnote_mixed_known', task_name: 'GetNote 已知任务', assignee: '李嘉华', owner: '李嘉华' },
+      { item_id: 'getnote_mixed_unknown', task_name: 'GetNote 待确认任务', assignee: '待确认', owner: '待确认' }
+    ],
+    tableId: 'table_getnote_mixed',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+  const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    receiveId: 'ou_getnote_reviewer',
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_getnote_mixed_${draft.id}_${sentMessages.length}`;
+    }
+  });
+  const ownerMessage = sentMessages.find((message) => message.receiveId === 'ou_li');
+  const reviewerMessage = sentMessages.find((message) => message.receiveId === 'ou_getnote_reviewer');
+  const ownerState = await getDraftAssigneeState(draft.id, '李嘉华', 'tasks');
+  const reviewerState = await getDraftAssigneeState(draft.id, 'getnote_reviewer', 'getnote_tasks');
+
+  assert.equal(result.sent_count, 2);
+  assert.match(JSON.stringify(ownerMessage.card), /GetNote 已知任务/);
+  assert.doesNotMatch(JSON.stringify(ownerMessage.card), /GetNote 待确认任务/);
+  assert.match(JSON.stringify(reviewerMessage.card), /GetNote 待确认任务/);
+  assert.doesNotMatch(JSON.stringify(reviewerMessage.card), /GetNote 已知任务/);
+  assert.equal(ownerState.delivery_status, 'sent');
+  assert.equal(reviewerState.delivery_status, 'sent');
+}
+
 async function testGetNoteExplicitReplacementResendInvalidatesOldCardBeforeSendingNewCard() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -2223,8 +2329,8 @@ async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
     meetingTitle: 'GetNote 空待办终态测试',
     meetingSource: 'Get笔记',
     draftTasks: [
-      { item_id: 'getnote_terminal_1', task_name: '已完成任务 1', assignee: '洪伟填', status: 'confirmed' },
-      { item_id: 'getnote_terminal_2', task_name: '已丢弃任务 2', assignee: '李嘉华', status: 'discarded' }
+      { item_id: 'getnote_terminal_1', task_name: '已完成任务 1', assignee: '待确认', status: 'confirmed' },
+      { item_id: 'getnote_terminal_2', task_name: '已丢弃任务 2', assignee: '待确认', status: 'discarded' }
     ],
     tableId: 'table_getnote_force_terminal',
     tableName: '事务列表',
@@ -4738,6 +4844,9 @@ await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
 await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions();
 await testGetNoteSplitCompactRefreshKeepsClickedMessageScopeWithoutMessageId();
 await testGetNoteDispatchForceDoesNotResendExistingSentCard();
+await testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard();
+await testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard();
+await testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees();
 await testGetNoteExplicitReplacementResendInvalidatesOldCardBeforeSendingNewCard();
 await testRegularTaskAndProgressDispatchDoesNotResendExistingSentCards();
 await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
