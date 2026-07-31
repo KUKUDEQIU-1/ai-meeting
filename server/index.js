@@ -35,7 +35,8 @@ function buildMetadata() {
       source: process.env.BUILD_SOURCE || (process.env.BUILD_VERSION || process.env.APP_VERSION ? 'env' : 'package.json'),
       package_version: readServerPackageVersion(),
       id: String(process.env.BUILD_ID || process.env.GIT_SHA || process.env.COMMIT_SHA || ''),
-      sha: String(process.env.BUILD_SHA || process.env.VERCEL_GIT_COMMIT_SHA || process.env.GIT_SHA || process.env.COMMIT_SHA || '')
+      sha: String(process.env.BUILD_SHA || process.env.VERCEL_GIT_COMMIT_SHA || process.env.GIT_SHA || process.env.COMMIT_SHA || ''),
+      runtime: `node-${process.versions.node}`
     }
   };
 }
@@ -125,7 +126,20 @@ function healthCapabilities() {
     failed_card_resend: routeCapability(recoveryRoute, true),
     targeted_card_resend: true,
     card_action_callback: routeCapability(canonicalCardActionRoute, true),
-    idempotent_delivery: routeCapability(canonicalCardActionRoute, true)
+    idempotent_delivery: routeCapability(canonicalCardActionRoute, true),
+    stale_card_protection: routeCapability(canonicalCardActionRoute, true),
+    getnote_dispatch_lock: true,
+    getnote_card_delivery_audit: routeCapability('/api/meeting/getnote-card-deliveries/:noteId', true)
+  };
+}
+
+function residentWorkerHealthSnapshot() {
+  const snapshot = feishuResidentWorker.publicSnapshot();
+
+  return {
+    getnote_scan_source: null,
+    getnote_last_cycle: null,
+    ...snapshot
   };
 }
 
@@ -140,7 +154,8 @@ app.get('/', (req, res) => {
     '/api/health',
     `Canonical wiki DOCX sync: POST ${canonicalWikiSyncRoute}`,
     `Canonical Feishu callback: POST ${canonicalCardActionRoute}`,
-    `Recovery route: POST ${recoveryRoute}`
+    `Recovery route: POST ${recoveryRoute}`,
+    'GetNote delivery audit: GET /api/meeting/getnote-card-deliveries/:noteId'
   ].join('\n'));
 });
 
@@ -156,7 +171,7 @@ app.get('/api/health', async (req, res, next) => {
       },
       capabilities: healthCapabilities(),
       card_readiness: cardReadiness(),
-      resident_worker: feishuResidentWorker.publicSnapshot(),
+      resident_worker: residentWorkerHealthSnapshot(),
       scan_coordinator: feishuScanCoordinator.publicSnapshot()
     });
   } catch (error) {

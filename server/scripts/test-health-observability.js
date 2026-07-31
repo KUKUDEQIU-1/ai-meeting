@@ -66,6 +66,9 @@ async function testHealthExposesCanonicalCapabilitiesWithoutSecrets() {
       FEISHU_RESIDENT_WORKER_ENABLED: 'false',
       FEISHU_DOCX_SOURCE_API_TOKEN: 'health-test-secret-token',
       FEISHU_APP_SECRET: 'health-test-app-secret',
+      BUILD_VERSION: '2026.07.31-test',
+      BUILD_ID: 'build-health-1',
+      BUILD_SHA: 'abc123health',
       FEISHU_APP_ID: '',
       FEISHU_BITABLE_APP_TOKEN: '',
       FEISHU_MASTER_TASK_APP_TOKEN: '',
@@ -96,10 +99,13 @@ async function testHealthExposesCanonicalCapabilitiesWithoutSecrets() {
       path: '/api/meeting/sync-feishu-wiki-docx',
       capability: 'wiki_docx_scan'
     });
-    assert.equal(body.version, 'latest-draft-v2');
+    assert.equal(body.version, '2026.07.31-test');
     assert.equal(body.service, 'ai-meeting-server');
     assert.equal(body.build.package_version, '1.0.0');
-    assert.equal(body.build.source, 'package.json');
+    assert.equal(body.build.source, 'env');
+    assert.equal(body.build.id, 'build-health-1');
+    assert.equal(body.build.sha, 'abc123health');
+    assert.equal(body.build.runtime.startsWith('node-'), true);
     assert.equal(body.canonical_route.path, '/api/meeting/sync-feishu-wiki-docx');
     assert.equal(body.capabilities.wiki_docx_scan.route, '/api/meeting/sync-feishu-wiki-docx');
     assert.equal(body.capabilities.wiki_docx_scan.status, 'ready');
@@ -109,6 +115,9 @@ async function testHealthExposesCanonicalCapabilitiesWithoutSecrets() {
     assert.equal(body.capabilities.targeted_card_resend, true);
     assert.equal(body.capabilities.card_action_callback.route, '/api/feishu/card-action');
     assert.equal(body.capabilities.idempotent_delivery.route, '/api/feishu/card-action');
+    assert.equal(body.capabilities.stale_card_protection.route, '/api/feishu/card-action');
+    assert.equal(body.capabilities.getnote_dispatch_lock, true);
+    assert.equal(body.capabilities.getnote_card_delivery_audit.route, '/api/meeting/getnote-card-deliveries/:noteId');
     assert.equal(body.capabilities.failed_card_resend.route, '/api/meeting/resend-failed-draft-task-cards');
     assert.equal(body.capabilities.member_lookup.status, body.capabilities.member_lookup.configured ? 'ready' : 'unconfigured');
     assert.equal(body.card_readiness.normal_task_card_ready.ready, false);
@@ -190,6 +199,7 @@ async function testRootAdvertisesOperatorCanonicalRoute() {
 
     assert.equal(response.status, 200);
     assert.equal(body.includes('/api/meeting/sync-feishu-wiki-docx'), true);
+    assert.equal(body.includes('/api/meeting/getnote-card-deliveries/:noteId'), true);
     assert.equal(body.includes('/api/meeting/sync-feishu-docx'), false);
     assert.equal(body.includes('/api/meeting/sync-feishu-meeting-notes'), false);
   } finally {
