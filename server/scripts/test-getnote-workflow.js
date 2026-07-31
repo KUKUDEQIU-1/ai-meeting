@@ -14,6 +14,7 @@ function note(noteId, content) {
 
 function workflowOptions(noteId, content, sentCards) {
   const notifications = [];
+  const deliveryDiagnostics = [];
 
   return {
     note: note(noteId, content),
@@ -34,7 +35,8 @@ function workflowOptions(noteId, content, sentCards) {
       postMessage: async ({ receiveId, card }) => {
         sentCards.push({ receiveId, card });
         return `om_getnote_workflow_${noteId}_${sentCards.length}`;
-      }
+      },
+      diagnosticsLogger: { warn: (record) => deliveryDiagnostics.push(record) }
     },
     generateMeetingSummary: async () => ({ title: 'GetNote 工作流测试', overview: 'summary' }),
     generateMeetingTasks: async () => ({
@@ -63,6 +65,7 @@ function workflowOptions(noteId, content, sentCards) {
       return { status: 'success' };
     },
     notifications,
+    deliveryDiagnostics,
     writeMeetingIndex: async () => ({ status: 'skipped' }),
     addTags: async () => ({ status: 'skipped' })
   };
@@ -95,6 +98,19 @@ async function testImportCreatesPendingDraftAndSkipsUnchangedContent() {
   assert.equal(states[0].card_kind, 'getnote_tasks');
   assert.equal(states[0].assignee_name, 'GetNote Reviewer');
   assert.equal(states[0].receive_id, 'ou_wei_tian');
+  assert.deepEqual(firstOptions.deliveryDiagnostics.map((event) => `${event.phase}:${event.status}`), [
+    'delivery_prepare:ready',
+    'delivery_send:attempt',
+    'delivery_send:sent'
+  ]);
+  assert.equal(firstOptions.deliveryDiagnostics[0].card_kind, 'getnote_tasks');
+  assert.equal(firstOptions.deliveryDiagnostics[0].draft_id, draft.id);
+  assert.equal(firstOptions.deliveryDiagnostics[0].dispatch_mode, 'production');
+  assert.equal(firstOptions.deliveryDiagnostics[0].receive_id_type, 'open_id');
+  assert.notEqual(firstOptions.deliveryDiagnostics[0].receive_id_masked, 'ou_wei_tian');
+  assert.match(firstOptions.deliveryDiagnostics[0].receive_id_masked, /^ou_w\*+ian$/);
+  assert.equal(firstOptions.deliveryDiagnostics[1].item_count, 1);
+  assert.equal(firstOptions.deliveryDiagnostics[2].message_id.includes(noteId), false);
   assert.match(draft.draft_json, /待确认/);
 }
 

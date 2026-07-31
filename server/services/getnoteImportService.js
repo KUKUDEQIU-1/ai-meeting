@@ -39,6 +39,15 @@ function getCardDispatchMode() {
   return process.env.GETNOTE_CARD_DISPATCH_MODE?.trim().toLowerCase() || '';
 }
 
+function summarizeDispatchResult(result) {
+  return {
+    status: result?.status || 'unknown',
+    sent_count: Number(result?.sent_count || 0),
+    skipped_count: Number(result?.skipped_count || 0),
+    failed_count: Number(result?.failed_count || 0)
+  };
+}
+
 function assertGetNoteCardDispatchEnabled(mode) {
   if (mode === 'production' || mode === 'local') {
     return;
@@ -585,13 +594,17 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     const draft = existingDraft
       ? await updateMeetingTaskDraftContent(existingDraft.id, draftPayload)
       : await createMeetingTaskDraft({ sourceType: 'getnote', sourceId: normalizedNoteId, segments: [], discardedSegments: [], existingMatches: [], uncertainTasks: [], ...draftPayload });
+    console.log(`[GetNote Sync] draft ready note_id=${normalizedNoteId} draft_id=${draft.id} action=${existingDraft ? 'updated' : 'created'} today_tasks_count=${todayTasksCount} progress_updates_count=${progressUpdatesCount} needs_confirmation_count=${needsConfirmationCount}`);
     const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
-    assertGetNoteCardDispatchEnabled(cardDispatchMode);
+    console.log(`[GetNote Sync] card dispatch mode note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks dispatch_mode=${cardDispatchMode || 'unset'}`);
     const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: options.force });
+    const dispatchSummary = summarizeDispatchResult(feishuResult);
+    console.log(`[GetNote Sync] card dispatch result note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count}`);
 
     if (feishuResult.status !== 'success') {
       const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片发送失败');
       error.feishuSync = feishuResult;
+      console.warn(`[GetNote Sync] card dispatch failed note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count}`);
       throw error;
     }
 

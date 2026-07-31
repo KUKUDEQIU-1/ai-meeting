@@ -15,6 +15,7 @@ async function testImportFailsBeforeFeishuCardSendWhenDispatchModeDisabled() {
   const previousMode = process.env.GETNOTE_CARD_DISPATCH_MODE;
   delete process.env.GETNOTE_CARD_DISPATCH_MODE;
   let postMessageCalled = false;
+  const deliveryDiagnostics = [];
 
   try {
     // Given: GetNote import reaches the draft/card boundary with no dispatch mode configured.
@@ -48,7 +49,8 @@ async function testImportFailsBeforeFeishuCardSendWhenDispatchModeDisabled() {
           postMessage: async () => {
             postMessageCalled = true;
             return 'om_should_not_send';
-          }
+          },
+          diagnosticsLogger: { warn: (record) => deliveryDiagnostics.push(record) }
         }
       }),
       /GETNOTE_CARD_DISPATCH_MODE must be production or local before sending GetNote cards/
@@ -56,6 +58,11 @@ async function testImportFailsBeforeFeishuCardSendWhenDispatchModeDisabled() {
 
     // Then: the failure happens before Feishu send.
     assert.equal(postMessageCalled, false);
+    assert.equal(deliveryDiagnostics.length, 1);
+    assert.equal(deliveryDiagnostics[0].phase, 'delivery_prepare');
+    assert.equal(deliveryDiagnostics[0].status, 'failed');
+    assert.equal(deliveryDiagnostics[0].reason, 'dispatch_mode_invalid');
+    assert.equal(deliveryDiagnostics[0].dispatch_mode, 'unset');
   } finally {
     restoreEnv('GETNOTE_CARD_DISPATCH_MODE', previousMode);
   }

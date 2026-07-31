@@ -30,6 +30,17 @@ function emitDeliveryDiagnostics(logger, record) {
   diagnosticsLoggerFor(logger).warn(record);
 }
 
+function getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCount }) {
+  return {
+    card_kind: cardKind,
+    draft_id: draft.id,
+    dispatch_mode: dispatchMode,
+    receive_id_type: 'open_id',
+    receive_id_masked: maskIdentifier(receiveId),
+    task_count: taskCount
+  };
+}
+
 function configuredTaskCardTestReceiveOpenId() {
   return process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID?.trim() || '';
 }
@@ -325,22 +336,61 @@ function assertExplicitGetNoteDispatchMode(mode) {
     return;
   }
 
-  throw new Error('GETNOTE_CARD_DISPATCH_MODE must be production or local before sending GetNote cards');
+  const error = new Error('GETNOTE_CARD_DISPATCH_MODE must be production or local before sending GetNote cards');
+  error.status = 403;
+  throw error;
 }
 
 export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   const startedAt = performance.now();
-  assertExplicitGetNoteDispatchMode(deps.dispatchMode);
+  const dispatchMode = String(deps.dispatchMode || '').trim().toLowerCase();
+  const diagnosticsLogger = deps.diagnosticsLogger || null;
+  const cardKind = 'getnote_tasks';
+
+  try {
+    assertExplicitGetNoteDispatchMode(dispatchMode);
+  } catch (error) {
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_prepare',
+      status: 'failed',
+      reason: 'dispatch_mode_invalid',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      dispatch_mode: dispatchMode || 'unset',
+      task_count: (draft.draft_tasks || []).length,
+      prepare_ms: elapsedMs(startedAt),
+      process_ms: elapsedMs(startedAt)
+    });
+    throw error;
+  }
 
   const receiveId = deps.receiveId || getNoteReviewerOpenId();
   if (!receiveId) {
+    emitDeliveryDiagnostics(diagnosticsLogger, {
+      phase: 'delivery_prepare',
+      status: 'failed',
+      reason: 'receiver_not_configured',
+      card_kind: cardKind,
+      draft_id: draft.id,
+      dispatch_mode: dispatchMode,
+      receive_id_type: 'open_id',
+      task_count: (draft.draft_tasks || []).length,
+      prepare_ms: elapsedMs(startedAt),
+      process_ms: elapsedMs(startedAt)
+    });
     throw new Error('GETNOTE_TASK_CARD_RECEIVE_OPEN_ID 未配置');
   }
 
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
-  const diagnosticsLogger = deps.diagnosticsLogger || null;
   const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'GetNote Reviewer', receive_id_type: 'open_id', receive_id: receiveId, tasks: draft.draft_tasks || [] };
-  const cardKind = 'getnote_tasks';
+  const deliveryBase = getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCount: assignee.tasks.length });
+  emitDeliveryDiagnostics(diagnosticsLogger, {
+    phase: 'delivery_prepare',
+    status: 'ready',
+    ...deliveryBase,
+    prepare_ms: elapsedMs(startedAt),
+    process_ms: elapsedMs(startedAt)
+  });
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
   const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
   const hasSentSplitMessages = existingMessages.some((message) => message.delivery_status === 'sent' && message.card_message_id);
@@ -348,8 +398,8 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     emitDeliveryDiagnostics(diagnosticsLogger, {
       phase: 'delivery_send',
       status: 'skipped',
-      card_kind: cardKind,
-      draft_id: draft.id,
+      reason: 'already_sent',
+      ...deliveryBase,
       message_id: maskIdentifier(existingState.card_message_id || existingMessages.find((message) => message.card_message_id)?.card_message_id || ''),
       prepare_ms: elapsedMs(startedAt),
       process_ms: elapsedMs(startedAt)
@@ -370,10 +420,21 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       chunks.push(pendingTasks.slice(index, index + GETNOTE_TASKS_PER_CARD));
     }
     const results = [];
-    for (const tasks of chunks.length ? chunks : [[]]) {
+    const cardChunks = chunks.length ? chunks : [[]];
+    for (const [index, tasks] of cardChunks.entries()) {
       const prepareStartedAt = performance.now();
       const card = buildGetNoteTaskReviewCard({ draft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
       const prepareMs = elapsedMs(prepareStartedAt);
+      emitDeliveryDiagnostics(diagnosticsLogger, {
+        phase: 'delivery_send',
+        status: 'attempt',
+        ...deliveryBase,
+        chunk_index: index + 1,
+        chunk_count: cardChunks.length,
+        item_count: tasks.length,
+        prepare_ms: prepareMs,
+        process_ms: elapsedMs(startedAt)
+      });
       const messageId = await postMessage({ receiveId, card });
       await upsertDraftCardMessage({
         draftId: draft.id,
@@ -385,8 +446,10 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       emitDeliveryDiagnostics(diagnosticsLogger, {
         phase: 'delivery_send',
         status: 'sent',
-        card_kind: cardKind,
-        draft_id: draft.id,
+        ...deliveryBase,
+        chunk_index: index + 1,
+        chunk_count: cardChunks.length,
+        item_count: tasks.length,
         message_id: maskIdentifier(messageId),
         prepare_ms: prepareMs,
         process_ms: elapsedMs(startedAt)
@@ -402,8 +465,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       error_phase: 'delivery_send',
       error_class: 'delivery_failed',
       status: 'failed',
-      card_kind: cardKind,
-      draft_id: draft.id,
+      ...deliveryBase,
       prepare_ms: elapsedMs(startedAt),
       process_ms: elapsedMs(startedAt)
     });

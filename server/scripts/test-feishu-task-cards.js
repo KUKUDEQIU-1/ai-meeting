@@ -1964,7 +1964,7 @@ async function testDraftCardDeliveryDiagnosticsMaskIdentifiers() {
 
   const serialized = JSON.stringify(diagnostics);
   const normalTrace = diagnostics.find((record) => record.card_kind === 'tasks' && record.draft_id === normalDraft.id);
-  const getNoteTrace = diagnostics.find((record) => record.card_kind === 'getnote_tasks' && record.draft_id === getNoteDraft.id);
+  const getNoteTrace = diagnostics.find((record) => record.card_kind === 'getnote_tasks' && record.draft_id === getNoteDraft.id && record.status === 'sent');
 
   assert.equal(normalResult.sent_count, 1);
   assert.equal(getNoteResult.sent_count, 1, JSON.stringify(getNoteResult));
