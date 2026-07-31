@@ -1008,6 +1008,19 @@ function testConfirmedNewTaskBuildsFollowerField() {
   assert.equal(fields.跟进人, 'ou_card_actor');
 }
 
+function testConfirmedNewTaskPrefersAssignedFollowerOverReviewer() {
+  const fields = formatTaskForMasterTable({
+    task_name: 'AI会议助手新任务',
+    assignee: '李嘉华',
+    owner: '李嘉华',
+    confirmed_by: 'ou_card_actor'
+  }, {
+    bitable_fields: [{ field_name: '跟进人' }]
+  });
+
+  assert.equal(fields.跟进人, '李嘉华');
+}
+
 function testConfirmedProgressBuildsFollowerField() {
   const update = buildProgressUpdateFields({
     task_name: 'AI会议助手历史任务',
@@ -4682,6 +4695,7 @@ testCallbackParsingExtractsScopedAssigneeForRefreshOldTasksOnly();
 testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
+testConfirmedNewTaskPrefersAssignedFollowerOverReviewer();
 testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();

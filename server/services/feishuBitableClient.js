@@ -302,6 +302,10 @@ function taskNameOf(task) {
   return task.task_name || task.title || task.task || task.name || '未命名任务';
 }
 
+function assigneeNameOf(task) {
+  return task.assignee || task.owner || task.assignee_name || task.responsible || '';
+}
+
 function fieldNameOf(field) {
   return field.field_name || field.name;
 }
@@ -347,6 +351,7 @@ export function formatTaskForBitable(task, context = {}) {
 
 export function formatTaskForMasterTable(task, context = {}) {
   const taskName = truncateText(taskNameOf(task), 100) || '未命名任务';
+  const follower = assigneeNameOf(task) || task.confirmed_by || task.confirmedBy || context.confirmed_by || context.confirmedBy;
   const formatted = {
     事务需求名称: taskName
   };
@@ -357,7 +362,7 @@ export function formatTaskForMasterTable(task, context = {}) {
 
   console.log(`[GetNote Sync] format master task done task_name=${formatted.事务需求名称} start_date=${formatted.开始日期 ? formatDateOnly(context.meeting_time || context.meetingTime || context.created_at) : 'empty'}`);
 
-  return addFollowerField(formatted, task.confirmed_by || task.confirmedBy || context.confirmed_by || context.confirmedBy, context.bitable_fields || context.bitableFields || []);
+  return addFollowerField(formatted, follower, context.bitable_fields || context.bitableFields || []);
 }
 
 function buildTableUrl(tableId) {
