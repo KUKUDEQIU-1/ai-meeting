@@ -26,6 +26,10 @@ function getNoteImportOptions(body) {
   };
 }
 
+function deliveryErrorStatus(error) {
+  return String(error || '').trim() ? 'present' : '';
+}
+
 export function getMaintenanceGetNotePayload(body = {}) {
   return {
     noteId: String(body.note_id || '').trim(),
@@ -33,43 +37,64 @@ export function getMaintenanceGetNotePayload(body = {}) {
   };
 }
 
-function getGetNoteSyncResponse(result) {
+export function getGetNoteSyncResponse(result) {
+  const item = {
+    note_id: result.note_id,
+    title: result.title || result.meeting_title,
+    status: result.status,
+    reason: result.reason || '',
+    table_id: result.table_id,
+    table_name: result.table_name,
+    table_url: result.table_url || null,
+    tasks_count: result.tasks_count,
+    sent_count: result.feishu_result?.sent_count,
+    skipped_count: result.feishu_result?.skipped_count,
+    failed_count: result.feishu_result?.failed_count,
+    draft_id: result.draft_id
+  };
+  const imported = result.status && result.status !== 'skipped' ? [item] : [];
+  const skipped = result.status === 'skipped'
+    ? [{
+        note_id: result.note_id,
+        title: result.title,
+        status: result.status,
+        reason: result.reason || 'already_synced',
+        table_url: result.table_url || null,
+        lock: result.lock || undefined
+      }]
+    : [];
+
   return {
     success: true,
-    imported: result.status === 'success'
-      ? [{ note_id: result.note_id, title: result.title, status: result.status }]
-      .map((item) => ({
-        ...item,
-        table_id: result.table_id,
-        table_name: result.table_name,
-        table_url: result.table_url,
-        tasks_count: result.tasks_count,
-        status: result.status
-      }))
-      : [],
-    skipped: result.status === 'skipped'
-      ? [{
-          note_id: result.note_id,
-          title: result.title,
-          reason: result.reason || 'already_synced',
-          table_url: result.table_url || null
-        }]
-      : [],
+    status: result.status || 'success',
+    note_id: result.note_id,
+    title: result.title || result.meeting_title,
+    reason: result.reason || undefined,
+    processed: imported.length ? imported : skipped,
+    imported,
+    skipped,
     failed: []
   };
 }
 
-function getGetNoteSyncErrorResponse(error, noteId) {
+export function getGetNoteSyncErrorResponse(error, noteId) {
+  const failed = {
+    note_id: error.note_id || noteId,
+    title: error.meeting_title,
+    status: 'failed',
+    table_url: error.table_url,
+    error: error.message
+  };
+
   return {
     success: false,
+    status: 'failed',
+    note_id: failed.note_id,
+    title: failed.title,
+    processed: [],
     imported: [],
     skipped: [],
-    failed: [{
-      note_id: error.note_id || noteId,
-      title: error.meeting_title,
-      table_url: error.table_url,
-      error: error.message
-    }]
+    failed: [failed]
   };
 }
 
@@ -106,9 +131,9 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
         assignee_name: row.assignee_name,
         card_kind: row.card_kind,
         delivery_status: row.delivery_status,
-        delivery_error: row.delivery_error || '',
+        delivery_error: deliveryErrorStatus(row.delivery_error),
         confirmation_status: row.confirmation_status,
-        confirmation_error: row.confirmation_error || '',
+        confirmation_error: deliveryErrorStatus(row.confirmation_error),
         has_message_id: Boolean(row.card_message_id),
         split_card_count: splitMessages.filter((message) => message.assignee_key === row.assignee_key && message.card_kind === row.card_kind).length,
         updated_at: row.updated_at
@@ -118,7 +143,62 @@ router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
         card_kind: row.card_kind,
         item_id: row.item_id,
         delivery_status: row.delivery_status,
-        delivery_error: row.delivery_error || '',
+        delivery_error: deliveryErrorStatus(row.delivery_error),
+        has_message_id: Boolean(row.card_message_id),
+        updated_at: row.updated_at
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/getnote-card-deliveries/:noteId', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const noteId = String(req.params.noteId || '').trim();
+
+    if (!noteId) {
+      res.status(400).json({ message: 'noteId 不能为空' });
+      return;
+    }
+
+    const draft = await getMeetingTaskDraftBySource('getnote', noteId, { includeAnyStatus: true });
+    if (!draft) {
+      res.status(404).json({ message: 'GetNote draft 不存在' });
+      return;
+    }
+
+    const deliveries = await listDraftAssigneeStates(draft.id);
+    const splitMessages = await listDraftCardMessages(draft.id);
+
+    res.json({
+      note_id: noteId,
+      draft_id: draft.id,
+      source_type: draft.source_type,
+      meeting_title: draft.meeting_title,
+      confirmation_status: draft.confirmation_status,
+      sent_count: deliveries.filter((row) => row.delivery_status === 'sent').length,
+      failed_count: deliveries.filter((row) => row.delivery_status === 'failed').length,
+      pending_count: deliveries.filter((row) => row.delivery_status === 'pending').length,
+      split_card_count: splitMessages.length,
+      deliveries: deliveries.map((row) => ({
+        assignee_key: row.assignee_key,
+        assignee_name: row.assignee_name,
+        card_kind: row.card_kind,
+        delivery_status: row.delivery_status,
+        delivery_error: deliveryErrorStatus(row.delivery_error),
+        confirmation_status: row.confirmation_status,
+        confirmation_error: deliveryErrorStatus(row.confirmation_error),
+        has_message_id: Boolean(row.card_message_id),
+        split_card_count: splitMessages.filter((message) => message.assignee_key === row.assignee_key && message.card_kind === row.card_kind).length,
+        updated_at: row.updated_at
+      })),
+      split_cards: splitMessages.map((row) => ({
+        assignee_key: row.assignee_key,
+        card_kind: row.card_kind,
+        item_id: row.item_id,
+        delivery_status: row.delivery_status,
+        delivery_error: deliveryErrorStatus(row.delivery_error),
         has_message_id: Boolean(row.card_message_id),
         updated_at: row.updated_at
       }))
