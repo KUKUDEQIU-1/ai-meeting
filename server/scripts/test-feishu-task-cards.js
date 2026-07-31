@@ -337,7 +337,7 @@ function testHandledTaskCardShowsOutcomeWhileSiblingRemainsActionable() {
   const names = buttonNames(card);
 
   assert.match(text, /已确认新任务/);
-  assert.match(text, /已处理为新任务/);
+  assert.match(text, /✅ 已处理为新任务/);
   assert.equal(names.includes('mark_new_handled_new_task'), false);
   assert.equal(names.includes('mark_new_pending_sibling_task'), true);
   assert.equal(names.includes('mark_old_pending_sibling_task'), true);
@@ -773,7 +773,7 @@ function testGetNoteCompactCardShowsHandledItemAndPendingSibling() {
   });
   const text = JSON.stringify(card);
 
-  assert.match(text, /已处理为新任务/);
+  assert.match(text, /✅ 已处理为新任务/);
   assert.match(text, /已点击任务/);
   assert.match(text, /task_name_getnote_pending/);
   assert.match(text, /mark_new_getnote_pending/);
@@ -1502,7 +1502,7 @@ async function testGetNoteRefreshOldTasksReturnsImmediateRefreshToast() {
     updateCard: async () => ({ status: 'updated' })
   });
 
-  assert.equal(prepared.response.toast.content, '正在刷新旧任务，请稍候');
+  assert.equal(prepared.response.toast.content, '已收到，正在刷新旧任务，稍后卡片会自动更新');
 }
 
 async function testGetNoteRefreshOldTasksPersistsLatestAssigneeAcrossSequentialCallbacks() {
@@ -1836,12 +1836,14 @@ async function testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedO
 
     const rebuiltCard = JSON.parse(patchedBodies[0].content);
     const remainingOldTaskSelect = formControl(rebuiltCard, 'matched_task_name_select_getnote_refresh_2');
+    const remainingAssigneeSelect = formControl(rebuiltCard, 'assignee_select_getnote_refresh_2');
 
     assert.equal(response.toast.content, '旧任务进展已处理');
     assert.equal(updateCalls[0].compactRefresh, true);
     assert.equal(updateCalls[0].cardKind, 'getnote_tasks');
     assert.equal(remainingOldTaskSelect.options.length > 0, true);
     assert.deepEqual(optionValues(remainingOldTaskSelect), ['李嘉华 进行中任务 A', '李嘉华 进行中任务 B']);
+    assert.deepEqual(optionValues(remainingAssigneeSelect), ['李嘉华', '洪伟填']);
   } finally {
     globalThis.fetch = previousFetch;
     process.env.FEISHU_APP_ID = previousAppId;
@@ -1849,7 +1851,111 @@ async function testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedO
   }
 }
 
-async function testGetNoteDispatchForceResendsExistingSentCard() {
+async function testGetNoteSplitCompactRefreshKeepsClickedMessageScopeWithoutMessageId() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-split-refresh-scope-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote split 刷新范围测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'split_scope_1', task_name: '拆卡任务 1', assignee: '洪伟填' },
+      { item_id: 'split_scope_2', task_name: '拆卡任务 2', assignee: '李嘉华' },
+      { item_id: 'split_scope_3', task_name: '拆卡任务 3', assignee: '洪伟填' },
+      { item_id: 'split_scope_4', task_name: '另一张卡任务', assignee: '李嘉华' }
+    ],
+    tableId: 'table_getnote_split_refresh_scope',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const records = [
+    { taskName: '洪伟填 进行中任务', status: '进行中', assigneeName: '洪伟填', assigneeKey: '洪伟填' },
+    { taskName: '李嘉华 进行中任务', status: '进行中', assigneeName: '李嘉华', assigneeKey: '李嘉华' }
+  ];
+  const patchedMessages = [];
+  const patchedCards = [];
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  globalThis.fetch = async (url, init) => {
+    const href = String(url || '');
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ code: 0, tenant_access_token: 'tenant_token' })
+      };
+    }
+
+    patchedMessages.push(decodeURIComponent(href.split('/messages/')[1] || ''));
+    patchedCards.push(JSON.parse(JSON.parse(init.body).content));
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ code: 0 })
+    };
+  };
+
+  try {
+    await upsertDraftAssigneeState({
+      draftId: draft.id,
+      assigneeKey: 'getnote_reviewer',
+      cardKind: 'getnote_tasks',
+      assigneeName: 'Wei Tian',
+      receiveId: 'ou_getnote_reviewer',
+      deliveryStatus: 'sent',
+      cardMessageId: `om_getnote_state_${draft.id}`
+    });
+    await upsertDraftCardMessage({
+      draftId: draft.id,
+      assigneeKey: 'getnote_reviewer',
+      cardKind: 'getnote_tasks',
+      itemId: 'split_scope_1,split_scope_2,split_scope_3',
+      cardMessageId: `om_getnote_split_scope_${draft.id}`
+    });
+
+    const payload = getNotePayloadForActor({
+      draft,
+      eventId: 'evt_getnote_split_scope_no_message_id',
+      action: 'mark_task_as_new',
+      operatorOpenId: 'ou_getnote_reviewer',
+      itemId: 'split_scope_1',
+      formValue: {
+        task_name_split_scope_1: '拆卡任务 1',
+        assignee_select_split_scope_1: '洪伟填'
+      }
+    });
+    payload.event.context = {};
+
+    const response = await handleFeishuCardAction(payload, {
+      listMasterTaskAuditRecords: async () => records,
+      finalizeAssignee: async (params) => ({ status: 'synced', created_count: params.itemIds.length }),
+      updateCard: async (params) => updateFeishuTaskCard({ ...params, messageId: '' }, {
+        listMasterTaskAuditRecords: async () => records
+      })
+    });
+    const rebuiltCardText = JSON.stringify(patchedCards[0]);
+
+    assert.equal(response.toast.content, '新任务已处理');
+    assert.equal(patchedMessages[0], `om_getnote_split_scope_${draft.id}`);
+    assert.match(rebuiltCardText, /拆卡任务 1/);
+    assert.match(rebuiltCardText, /已处理为新任务/);
+    assert.ok(formControl(patchedCards[0], 'assignee_select_split_scope_2'));
+    assert.ok(formControl(patchedCards[0], 'assignee_select_split_scope_3'));
+    assert.equal(formControl(patchedCards[0], 'assignee_select_split_scope_4'), undefined);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
+}
+
+async function testGetNoteDispatchForceDoesNotResendExistingSentCard() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
     sourceId: `getnote-force-resend-${Date.now()}-${Math.random()}`,
@@ -1878,7 +1984,93 @@ async function testGetNoteDispatchForceResendsExistingSentCard() {
   assert.equal(first.sent_count, 1);
   assert.equal(skipped.skipped_count, 1);
   assert.equal(skipped.results[0].reason, 'already_sent');
-  assert.equal(resent.sent_count, 1);
+  assert.equal(resent.sent_count, 0);
+  assert.equal(resent.skipped_count, 1);
+  assert.equal(resent.results[0].reason, 'already_sent');
+  assert.equal(sentCards.length, 1);
+}
+
+async function testGetNoteExplicitReplacementResendInvalidatesOldCardBeforeSendingNewCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-replace-resend-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 替换重发测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{ item_id: 'getnote_replace_1', task_name: 'GetNote 替换重发任务', assignee: '待确认' }],
+    tableId: 'table_getnote_replace',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentCards = [];
+  const patchedCards = [];
+  const deps = {
+    dispatchMode: 'local',
+    receiveId: 'ou_getnote_reviewer',
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      return `om_getnote_replace_${draft.id}_${sentCards.length}`;
+    },
+    patchMessage: async ({ messageId, card }) => {
+      patchedCards.push({ messageId, card });
+      return { status: 'updated', message_id: messageId };
+    }
+  };
+
+  const first = await dispatchGetNoteTaskCard(draft, deps);
+  const replaced = await dispatchGetNoteTaskCard(draft, { ...deps, forceCardResend: true });
+  const messages = await listDraftCardMessages(draft.id, 'getnote_reviewer', 'getnote_tasks');
+
+  assert.equal(first.sent_count, 1);
+  assert.equal(replaced.sent_count, 1);
+  assert.equal(sentCards.length, 2);
+  assert.equal(patchedCards.length, 1);
+  assert.equal(patchedCards[0].messageId, `om_getnote_replace_${draft.id}_1`);
+  assert.match(JSON.stringify(patchedCards[0].card), /此卡片已失效，请使用最新卡片/);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].card_message_id, `om_getnote_replace_${draft.id}_2`);
+}
+
+async function testRegularTaskAndProgressDispatchDoesNotResendExistingSentCards() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `regular-repeat-dispatch-${Date.now()}-${Math.random()}`,
+    meetingTitle: '普通飞书卡重复发送测试',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-31',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'repeat_task_1', task_name: '处理重复发送任务', assignee: '张三' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [{ item_id: 'repeat_progress_1', task_name: '同步重复发送进展', assignee: '张三', progress_summary: '已推进' }],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_regular_repeat_dispatch',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+  const sentCards = [];
+  const deps = {
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 张三: 'ou_zhang' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ card }) => {
+      sentCards.push(card);
+      return `om_regular_repeat_${draft.id}_${sentCards.length}`;
+    }
+  };
+
+  const first = await dispatchDraftTaskCards(draft, deps);
+  const second = await dispatchDraftTaskCards(draft, deps);
+
+  assert.equal(first.sent_count, 2);
+  assert.equal(second.sent_count, 0);
+  assert.equal(second.skipped_count, 2);
+  assert.deepEqual(second.results.map((item) => item.reason), ['already_sent', 'already_sent']);
   assert.equal(sentCards.length, 2);
 }
 
@@ -4530,7 +4722,10 @@ await testGetNoteDispatchSeparatesOldTaskAndAssigneeOptions();
 await testGetNoteDispatchScopesOldTaskOptionsPerAssignee();
 await testGetNoteDispatchCapsDropdownOptionsForFeishuCardLimit();
 await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOptions();
-await testGetNoteDispatchForceResendsExistingSentCard();
+await testGetNoteSplitCompactRefreshKeepsClickedMessageScopeWithoutMessageId();
+await testGetNoteDispatchForceDoesNotResendExistingSentCard();
+await testGetNoteExplicitReplacementResendInvalidatesOldCardBeforeSendingNewCard();
+await testRegularTaskAndProgressDispatchDoesNotResendExistingSentCards();
 await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
 await testDraftCardDeliveryDiagnosticsMaskIdentifiers();
 await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();

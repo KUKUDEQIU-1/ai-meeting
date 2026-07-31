@@ -229,6 +229,38 @@ function buildCardForKind({ cardKind, draft, assignee, terminal, itemId, oldTask
   return buildAssigneeTaskCard({ draft, assignee, tasks, terminal, confirmItemId: itemId || '', oldTaskOptions });
 }
 
+function buildStaleCard({ title = '卡片已失效', message = '此卡片已失效，请使用最新卡片' } = {}) {
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: {
+      template: 'grey',
+      title: { tag: 'plain_text', content: title }
+    },
+    body: {
+      elements: [{
+        tag: 'markdown',
+        content: `**${message}**\n\n这张卡片已经被新的任务确认卡替换，为避免重复处理，请回到最新卡片继续操作。`
+      }]
+    }
+  };
+}
+
+async function invalidateGetNoteActiveCards({ existingState, existingMessages, patchMessage }) {
+  const messageIds = new Set();
+  if (existingState?.card_message_id) messageIds.add(existingState.card_message_id);
+  for (const message of existingMessages || []) {
+    if (message.delivery_status === 'sent' && message.card_message_id) {
+      messageIds.add(message.card_message_id);
+    }
+  }
+
+  const card = buildStaleCard();
+  for (const messageId of messageIds) {
+    await patchMessage({ messageId, card });
+  }
+}
+
 export async function buildMasterAssigneeOptions(listRecords = listMasterTaskAuditRecords) {
   const records = await listRecords();
   const seen = new Set();
@@ -292,7 +324,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     receive_id_type: state.receive_id_type,
     receive_id: state.receive_id
   };
-  const scopedItemId = exactMessage?.item_id || state.split_item_id || (scopedMessage ? itemId : '');
+  const scopedItemId = exactMessage?.item_id || scopedMessage?.item_id || state.split_item_id || '';
   const effectiveCardKind = state.card_kind || cardKind;
   const listRecords = memoizeMasterTaskAuditRecords(deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
   const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));
@@ -304,7 +336,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     : effectiveCardKind === 'tasks'
       ? await loadOldTaskOptionsForAssignee(assignee.assignee_key, listRecords)
       : [];
-  const assigneeOptions = !terminal && !compactRefresh && effectiveCardKind === 'getnote_tasks'
+  const assigneeOptions = !terminal && effectiveCardKind === 'getnote_tasks'
     ? await buildMasterAssigneeOptions(listRecords)
     : [];
   const card = buildCardForKind({ cardKind: effectiveCardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
@@ -382,6 +414,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   }
 
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
+  const patchMessage = deps.patchMessage || patchInteractiveFeishuMessage;
   const assignee = { assignee_key: 'getnote_reviewer', assignee_name: 'GetNote Reviewer', receive_id_type: 'open_id', receive_id: receiveId, tasks: draft.draft_tasks || [] };
   const deliveryBase = getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCount: assignee.tasks.length });
   emitDeliveryDiagnostics(diagnosticsLogger, {
@@ -394,7 +427,8 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
   const existingMessages = await listDraftCardMessages(draft.id, assignee.assignee_key, cardKind);
   const hasSentSplitMessages = existingMessages.some((message) => message.delivery_status === 'sent' && message.card_message_id);
-  if (!deps.force && existingState?.delivery_status === 'sent' && (existingState.card_message_id || hasSentSplitMessages)) {
+  const hasActiveGetNoteCard = existingState?.delivery_status === 'sent' && (existingState.card_message_id || hasSentSplitMessages);
+  if (hasActiveGetNoteCard && !deps.forceCardResend) {
     emitDeliveryDiagnostics(diagnosticsLogger, {
       phase: 'delivery_send',
       status: 'skipped',
@@ -405,6 +439,10 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       process_ms: elapsedMs(startedAt)
     });
     return { status: 'success', sent_count: 0, skipped_count: 1, failed_count: 0, results: [{ status: 'skipped', reason: 'already_sent', message_id: existingState.card_message_id }] };
+  }
+
+  if (hasActiveGetNoteCard && deps.forceCardResend) {
+    await invalidateGetNoteActiveCards({ existingState, existingMessages, patchMessage });
   }
 
   await upsertDraftAssigneeState({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, assigneeName: assignee.assignee_name, receiveIdType: 'open_id', receiveId, deliveryStatus: 'pending' });
