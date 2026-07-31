@@ -9,6 +9,7 @@ import { syncRecentGetNotes } from './getnoteImportService.js';
 // allow: SIZE_OK — central resident scheduler state machine with injected test seams.
 const DEFAULT_INTERVAL_MINUTES = 1;
 const RETRY_DELAY_MS = 60 * 1000;
+const MAX_RETRY_DELAY_MS = 30 * 60 * 1000;
 const AUDIT_TIME_ZONE = 'Asia/Shanghai';
 
 function errorStatus(error) {
@@ -34,6 +35,11 @@ function envPositiveNumber(env, name, fallback) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function toIso(value) {
+  const date = value instanceof Date ? value : new Date(value || Date.now());
+  return date.toISOString();
 }
 
 function localDateKey(value = new Date()) {
@@ -108,6 +114,55 @@ function summarizeAuditResult(result) {
   };
 }
 
+function createLaneState() {
+  return {
+    status: 'idle',
+    last_result: null,
+    last_error: null,
+    failure_streak: 0,
+    last_started_at: null,
+    last_finished_at: null,
+    cooldown_ms: 0,
+    next_retry_at: null
+  };
+}
+
+function laneSnapshot(lane) {
+  return { ...lane };
+}
+
+function publicLaneSnapshot(lane) {
+  return {
+    status: lane.status,
+    failure_streak: lane.failure_streak,
+    cooldown_ms: lane.cooldown_ms,
+    next_retry_at: lane.next_retry_at
+  };
+}
+
+function retryDelayForStreak(failureStreak) {
+  if (failureStreak <= 0) return 0;
+  return Math.min(RETRY_DELAY_MS * (2 ** (failureStreak - 1)), MAX_RETRY_DELAY_MS);
+}
+
+function isLaneCoolingDown(lane, value) {
+  return lane.status === 'failed'
+    && lane.next_retry_at
+    && Date.parse(lane.next_retry_at) > Date.parse(toIso(value));
+}
+
+function skippedLaneResult(lane, fallbackSource) {
+  return {
+    status: 'skipped_cooldown',
+    scan_source: lane.last_result?.scan_source || fallbackSource,
+    imported_count: 0,
+    skipped_count: 0,
+    failed_count: 0,
+    next_retry_at: lane.next_retry_at,
+    cooldown_ms: lane.cooldown_ms
+  };
+}
+
 export function createFeishuResidentWorker({
   env = process.env,
   scans = {},
@@ -144,6 +199,11 @@ export function createFeishuResidentWorker({
   let lastCycle = null;
   let getnoteLastCycle = null;
   let lastAuditDate = '';
+  const lanes = {
+    wiki: createLaneState(),
+    getnote: createLaneState(),
+    audit: createLaneState()
+  };
 
   function clearTimer() {
     if (timer) {
@@ -159,16 +219,48 @@ export function createFeishuResidentWorker({
       status,
       require_test_recipient: requireTestRecipient,
       test_recipient_configured: hasTestRecipient,
-        interval_minutes: intervalMinutes,
-        scan_source: 'feishu_wiki_docx_library',
-        getnote_scan_enabled: getnoteEnabled,
-        getnote_scan_source: getnoteEnabled ? 'getnote_recent_notes' : null,
-        getnote_last_cycle: getnoteLastCycle,
-        audit_enabled: auditEnabled,
-        audit_last_run_date: lastAuditDate || null,
-        last_cycle: lastCycle,
-        coordinator: coordinator.snapshot()
-      };
+      interval_minutes: intervalMinutes,
+      scan_source: 'feishu_wiki_docx_library',
+      getnote_scan_enabled: getnoteEnabled,
+      getnote_scan_source: getnoteEnabled ? 'getnote_recent_notes' : null,
+      getnote_last_cycle: getnoteLastCycle,
+      audit_enabled: auditEnabled,
+      audit_last_run_date: lastAuditDate || null,
+      lanes: {
+        wiki: laneSnapshot(lanes.wiki),
+        getnote: laneSnapshot(lanes.getnote),
+        audit: laneSnapshot(lanes.audit)
+      },
+      last_cycle: lastCycle,
+      coordinator: coordinator.snapshot()
+    };
+  }
+
+  function publicSnapshot() {
+    return {
+      enabled,
+      running,
+      status,
+      require_test_recipient: requireTestRecipient,
+      test_recipient_configured: hasTestRecipient,
+      interval_minutes: intervalMinutes,
+      scan_source: 'feishu_wiki_docx_library',
+      getnote_scan_enabled: getnoteEnabled,
+      getnote_scan_source: getnoteEnabled ? 'getnote_recent_notes' : null,
+      audit_enabled: auditEnabled,
+      audit_last_run_date: lastAuditDate || null,
+      lanes: {
+        wiki: publicLaneSnapshot(lanes.wiki),
+        getnote: publicLaneSnapshot(lanes.getnote),
+        audit: publicLaneSnapshot(lanes.audit)
+      },
+      last_cycle: lastCycle ? {
+        started_at: lastCycle.started_at,
+        finished_at: lastCycle.finished_at,
+        status: lastCycle.status,
+        scan_source: lastCycle.scan_source
+      } : null
+    };
   }
 
   function scheduleNext(delayMs) {
@@ -177,6 +269,35 @@ export function createFeishuResidentWorker({
     timer = scheduler(() => {
       void runCycle();
     }, delayMs);
+  }
+
+  function recordLaneResult(laneName, result, startedAt, finishedAt) {
+    const lane = lanes[laneName];
+    lane.status = result.status;
+    lane.last_result = result;
+    lane.last_started_at = startedAt;
+    lane.last_finished_at = finishedAt;
+
+    if (result.status === 'failed') {
+      lane.failure_streak += 1;
+      lane.last_error = result.error || 'unknown error';
+      lane.cooldown_ms = retryDelayForStreak(lane.failure_streak);
+      lane.next_retry_at = new Date(Date.parse(finishedAt) + lane.cooldown_ms).toISOString();
+      return;
+    }
+
+    if (result.status === 'blocked') {
+      lane.last_error = result.error || null;
+      lane.failure_streak = 0;
+      lane.cooldown_ms = 0;
+      lane.next_retry_at = null;
+      return;
+    }
+
+    lane.last_error = null;
+    lane.failure_streak = 0;
+    lane.cooldown_ms = 0;
+    lane.next_retry_at = null;
   }
 
   async function runScan(type, scan, options = {}) {
@@ -195,67 +316,92 @@ export function createFeishuResidentWorker({
 
     running = true;
     status = 'running';
-    const startedAt = nowIso();
+    const startedAt = toIso(now());
 
     try {
-      const wiki = await runScan('wiki', () => wikiScan({}), {
-        scanSource: 'feishu_wiki_docx_library'
-      });
-      const getnote = getnoteEnabled
-        ? await runScan('getnote', () => getnoteScan({
-            limit: getnoteLimit,
-            tag: getnoteTag,
-            ignoreTag: getnoteIgnoreTag,
-            reanalyze: false,
-            force: false
-          }), {
-            scanSource: 'getnote_recent_notes',
+      const wikiStartedAt = toIso(now());
+      const wiki = isLaneCoolingDown(lanes.wiki, now())
+        ? skippedLaneResult(lanes.wiki, 'feishu_wiki_docx_library')
+        : await runScan('wiki', () => wikiScan({}), {
+            scanSource: 'feishu_wiki_docx_library',
             metadata: {
-              route: '/api/meeting/maintenance/sync-getnote',
-              capability: 'getnote_resident_scan',
-              equivalenceKey: 'getnote-resident-active-scan',
-              mode: 'recent_getnote_resident'
+              route: '/api/meeting/sync-feishu-wiki-docx',
+              capability: 'feishu_wiki_docx_import',
+              equivalenceKey: 'wiki-docx-library-active-scan',
+              mode: 'wiki_docx_library'
             }
-          })
-        : null;
+          });
+      if (wiki.status !== 'skipped_cooldown') recordLaneResult('wiki', wiki, wikiStartedAt, toIso(now()));
+
+      let getnote = null;
+      if (getnoteEnabled) {
+        const getnoteStartedAt = toIso(now());
+        getnote = isLaneCoolingDown(lanes.getnote, now())
+          ? skippedLaneResult(lanes.getnote, 'getnote_recent_notes')
+          : await runScan('getnote', () => getnoteScan({
+              limit: getnoteLimit,
+              tag: getnoteTag,
+              ignoreTag: getnoteIgnoreTag,
+              reanalyze: false,
+              force: false
+            }), {
+              scanSource: 'getnote_recent_notes',
+              metadata: {
+                route: '/api/meeting/maintenance/sync-getnote',
+                capability: 'getnote_resident_scan',
+                equivalenceKey: 'getnote-resident-active-scan',
+                mode: 'recent_getnote_resident'
+              }
+            });
+        if (getnote.status !== 'skipped_cooldown') recordLaneResult('getnote', getnote, getnoteStartedAt, toIso(now()));
+      }
       getnoteLastCycle = getnote;
       let auditResult = null;
       const currentTime = now();
       const currentAuditDate = localDateKey(currentTime);
 
       if (auditEnabled && isBeijingWorkday(currentTime) && hasReachedAuditTime(currentTime, auditHour, auditMinute) && lastAuditDate !== currentAuditDate) {
-        try {
-          auditResult = summarizeAuditResult(await runAudit());
-          lastAuditDate = currentAuditDate;
-        } catch (error) {
-          auditResult = {
-            status: 'failed',
-            audit_date: currentAuditDate,
-            dry_run: envEnabled(env, 'FEISHU_MASTER_TASK_AUDIT_DRY_RUN', false),
-            total: 0,
-            remindable: 0,
-            passed: 0,
-            skipped: 0,
-            failed: 1,
-            error: error.message
-          };
-          logger.error('[Feishu Resident Worker] master task audit failed:', error.message);
+        const auditStartedAt = toIso(now());
+        if (isLaneCoolingDown(lanes.audit, currentTime)) {
+          auditResult = skippedLaneResult(lanes.audit, 'master_task_audit');
+          auditResult.audit_date = currentAuditDate;
+        } else {
+          try {
+            auditResult = summarizeAuditResult(await runAudit());
+            lastAuditDate = currentAuditDate;
+          } catch (error) {
+            auditResult = {
+              status: 'failed',
+              audit_date: currentAuditDate,
+              dry_run: envEnabled(env, 'FEISHU_MASTER_TASK_AUDIT_DRY_RUN', false),
+              total: 0,
+              remindable: 0,
+              passed: 0,
+              skipped: 0,
+              failed: 1,
+              error: error.message
+            };
+            logger.error('[Feishu Resident Worker] master task audit failed:', error.message);
+          }
+          recordLaneResult('audit', auditResult, auditStartedAt, toIso(now()));
         }
       }
 
       const blocked = wiki.status === 'blocked';
-      const failed = wiki.status === 'failed' || getnote?.status === 'failed';
+      const failed = wiki.status === 'failed' || getnote?.status === 'failed' || auditResult?.status === 'failed';
       lastCycle = {
         started_at: startedAt,
-        finished_at: nowIso(),
+        finished_at: toIso(now()),
         status: blocked ? 'blocked' : failed || auditResult?.status === 'failed' ? 'partial_failed' : 'success',
         scan_source: wiki.scan_source,
         wiki,
         getnote,
         audit: auditResult
       };
-      status = blocked ? 'blocked' : 'idle';
-      if (!blocked) scheduleNext(failed ? RETRY_DELAY_MS : intervalMinutes * 60 * 1000);
+      if (!stopped) {
+        status = blocked ? 'blocked' : 'idle';
+        if (!blocked) scheduleNext(intervalMinutes * 60 * 1000);
+      }
       return snapshot();
     } finally {
       running = false;
@@ -284,7 +430,7 @@ export function createFeishuResidentWorker({
     status = enabled ? 'stopped' : 'disabled';
   }
 
-  return { start, stop, snapshot, runCycle };
+  return { start, stop, snapshot, publicSnapshot, runCycle };
 }
 
 export const feishuResidentWorker = createFeishuResidentWorker();
