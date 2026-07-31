@@ -424,7 +424,7 @@ server/db/schema.sql
 
 ## Get笔记自动同步
 
-当前 Get笔记流程会自动扫描最近笔记，不再默认依赖“会议”标签。系统会优先使用 `audio.original`、`audio.transcript` 或 `transcript` 作为 AI 主输入，严格过滤任务后，为每场会议创建独立飞书任务表，并写入会议索引表和本地同步记录。
+当前 Get笔记流程会自动扫描最近笔记，不再默认依赖“会议”标签。系统会优先使用 `audio.original`、`audio.transcript` 或 `transcript` 作为 AI 主输入，严格过滤任务后，为每场会议创建待确认草稿，并按负责人分发飞书任务卡片：明确负责人时发送给对应负责人；无法确认负责人时发送给伟填审核。
 
 ### 环境变量
 
@@ -445,6 +445,7 @@ GETNOTE_MAX_LOOKBACK_DAYS=7
 GETNOTE_RESIDENT_WORKER_ENABLED=false
 GETNOTE_WORKER_INTERVAL_MINUTES=15
 GETNOTE_PROCESSING_TIMEOUT_MINUTES=30
+GETNOTE_DISPATCH_LOCK_LEASE_SECONDS=1800
 GETNOTE_SYNC_REMOTE_URL=
 GETNOTE_CARD_DISPATCH_MODE=disabled
 GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=
@@ -458,7 +459,8 @@ GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 - `GETNOTE_MAX_LOOKBACK_DAYS=7`：最多处理最近 7 天内的笔记。
 - `GETNOTE_RESIDENT_WORKER_ENABLED=false`：默认不接入 HTTP 服务内置 resident worker。生产设为 `true` 后，Get笔记会随 `server/index.js` 的 resident worker 按 `FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES` 周期自动扫描，无需手动调用维护接口。
 - `GETNOTE_PROCESSING_TIMEOUT_MINUTES=30`：`processing` 状态超过 30 分钟允许重试。
-- `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=`：Get笔记任务分配卡片接收人的飞书 `open_id`，生产应配置为伟填。Get笔记不会按任务负责人分发卡片，也不会直接写入正式总表；每篇笔记只给该接收人发送一张待处理卡片。
+- `GETNOTE_DISPATCH_LOCK_LEASE_SECONDS=1800`：同一 `note_id` 的 GetNote 导入发送锁租约，默认 30 分钟。用于避免维护接口、resident worker 或手动触发在同一服务进程内重复发卡；锁超时后允许恢复重试。
+- `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID=`：Get笔记待确认审核卡接收人的飞书 `open_id`，生产应配置为伟填。仅当任务负责人无法确认时使用；明确负责人任务会走普通个人任务卡分发。
 - `GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=`：可选 GetNote 卡片测试覆盖接收人。配置为非空时，新发送或强制重发的 GetNote 审核卡会发给该测试 `open_id`，优先级高于 `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID`；留空时仍发给伟填。实际收件人会持久化用于回调操作者校验。该变量只影响 GetNote 审核卡，不影响 `FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID` 控制的普通负责人任务卡，也不会改写历史已发送卡片。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID_TYPE=chat_id`：群通知接收 ID 类型。仅用于非草稿确认类群通知；飞书会议纪要/docx 草稿确认不再使用群确认链接。
 - `FEISHU_GROUP_NOTIFY_RECEIVE_ID=`：目标群聊 ID。该变量不再控制草稿确认投递，草稿确认改为按负责人私发交互卡片。
@@ -475,6 +477,42 @@ GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 - `GETNOTE_SYNC_REMOTE_URL=`：本地 `npm run sync:getnote` 的生产触发地址。配置后脚本调用生产 `/api/meeting/maintenance/sync-getnote`。
 - `GETNOTE_CARD_DISPATCH_MODE=disabled`：GetNote 卡片发送保护。生产设为 `production`；确需本地直发测试时显式设为 `local`；默认在发送前失败。
 - `AI_TIMEOUT_MS=300000`：AI 单次请求超时时间，默认 300 秒；强制重新分析较长会议原文时不要低于该值。
+
+### GetNote 运维接口和卡片保护
+
+手动重跑单篇 GetNote 时使用维护接口：
+
+```bash
+curl -X POST "https://huiyiai.yourtest.top/api/meeting/maintenance/sync-getnote" \
+  -H "Authorization: Bearer $OPS_MAINTENANCE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"note_id":"1917129195262244112","force":true,"reanalyze":false,"force_card_resend":true}'
+```
+
+响应保留 `success`、`imported`、`skipped`、`failed` 四个旧字段，同时新增 `status`、`note_id`、`reason` 和 `processed`。当任务卡已发送等待确认时，`status` 通常为 `pending_confirmation`，并会出现在 `imported` 中；如果同一笔记正在处理，会返回 `reason: "dispatch_in_progress"`。
+
+查询单篇 GetNote 的卡片投递状态：
+
+```text
+GET /api/meeting/getnote-card-deliveries/:noteId
+Authorization: Bearer $OPS_MAINTENANCE_TOKEN
+```
+
+该接口只返回脱敏运维字段，例如 `draft_id`、`sent_count`、`failed_count`、`pending_count`、`split_card_count`、`has_message_id` 和投递/确认状态；不会返回收件人 `open_id`、完整 `message_id`、卡片 JSON 或 token。
+
+飞书卡片回调会校验当前持久化的 `message_id`。如果用户点击已被替换或过期的旧卡片，系统返回“此卡片已失效，请使用最新卡片”，不会修改草稿、刷新卡片或写入总表。缺少 `message_id` 的旧兼容回调仍按原路径处理。
+
+### 版本和健康检查
+
+`GET /api/health` 会返回 `version` 和 `build` 信息。生产可设置：
+
+```env
+BUILD_VERSION=2026.07.31
+BUILD_ID=dokploy-build-123
+BUILD_SHA=<git_sha>
+```
+
+未设置时会回退到包版本/默认版本，不影响健康检查通过。健康检查还会显示 `stale_card_protection`、`getnote_dispatch_lock` 和 `getnote_card_delivery_audit` 能力状态，但不会暴露密钥、token 或完整 open_id。
 
 ## 飞书会议原文目录自动扫描
 
