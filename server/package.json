@@ -50,7 +50,9 @@
     "list:master-tasks": "node scripts/list-master-tasks.ts",
     "ops:feishu": "node scripts/feishu-operations.js",
     "test:feishu-operations": "node scripts/test-feishu-operations.js",
-    "test:feishu-wiki-worker": "node scripts/test-feishu-wiki-worker.js"
+    "test:feishu-wiki-worker": "node scripts/test-feishu-wiki-worker.js",
+    "test:feishu-resident-reliability": "node scripts/test-feishu-resident-reliability.js",
+    "test:feishu-resident-stability": "node scripts/test-feishu-resident-stability.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

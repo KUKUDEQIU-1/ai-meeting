@@ -248,6 +248,8 @@ POST /api/feishu/card-action
 http://localhost:3000/api/health
 ```
 
+公开健康检查只返回 resident worker 的脱敏状态摘要，例如 `status`、`running`、各 lane 的 `status`、`failure_streak`、`cooldown_ms` 和 `next_retry_at`。原始错误信息、完整扫描结果和 coordinator 详细元数据不通过 `/api/health` 暴露。
+
 ## API
 
 ### 上传会议文本
@@ -486,6 +488,8 @@ Wiki 目录 -> docx raw content -> AI/import draft -> bot 私聊任务卡片 -> 
 
 常驻 worker 会扫描 Wiki 目录下的 docx 子文档。用户在该目录下新增或更新会议原文文档后，worker 默认每 1 分钟读取子文档内容，生成待确认草稿，并通过飞书私聊卡片发送给对应负责人。可通过 `FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES` 调整间隔。
 
+worker 会分别记录 Wiki、GetNote 和 Master Task Audit 三条 lane 的状态。某条 lane 失败后会按 1 分钟、2 分钟、4 分钟递增退避，最高 30 分钟；冷却期内只跳过该失败 lane，worker 仍按 `FEISHU_RESIDENT_WORKER_INTERVAL_MINUTES` 唤醒并继续运行其他健康 lane。成功后该 lane 的 `failure_streak`、`cooldown_ms` 和 `next_retry_at` 会重置。
+
 必须配置的 bot-only 生产变量：
 
 ```env
@@ -617,7 +621,7 @@ GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=
 
 正式运行时保持 `GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID` 为空，审核卡会发给 `GETNOTE_TASK_CARD_RECEIVE_OPEN_ID`，也就是伟填。修改 GetNote 卡片后需要自测时，可临时设置 `GETNOTE_TASK_CARD_TEST_RECEIVE_OPEN_ID=ou_tester` 并触发新同步或强制重发；测试完成后清空该变量并重启服务。
 
-启动 `server/index.js` 后，每轮 resident worker 会先扫描飞书 Wiki/docx，再扫描 Get笔记最近列表；上一轮未结束时不会并发启动下一轮。健康检查 `/api/health` 的 `resident_worker.getnote_scan_enabled`、`getnote_scan_source`、`getnote_last_cycle` 会显示 GetNote 自动扫描状态。
+启动 `server/index.js` 后，每轮 resident worker 会先扫描飞书 Wiki/docx，再扫描 Get笔记最近列表；上一轮未结束时不会并发启动下一轮。健康检查 `/api/health` 的 `resident_worker.getnote_scan_enabled`、`getnote_scan_source` 和 `resident_worker.lanes` 会显示 GetNote 自动扫描与各 lane 的脱敏状态。
 
 ### 正式使用方式三：独立后台自动轮询
 
