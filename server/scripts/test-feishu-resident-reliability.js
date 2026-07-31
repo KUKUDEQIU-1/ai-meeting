@@ -197,6 +197,7 @@ async function testLaneCooldownBacksOffToCapBeforeSuccessReset() {
 
 async function testCoolingLaneDoesNotThrottleHealthyLane() {
   const events = [];
+  const logs = [];
   let currentTime = new Date('2026-07-24T00:00:00.000Z');
   const worker = createFeishuResidentWorker({
     env: {
@@ -216,7 +217,7 @@ async function testCoolingLaneDoesNotThrottleHealthyLane() {
       }
     },
     scheduler: () => ({ cancel() {} }),
-    logger: { error() {} },
+    logger: { log: (message) => logs.push(message), warn: (message) => logs.push(message), error() {} },
     now: () => currentTime
   });
 
@@ -232,6 +233,9 @@ async function testCoolingLaneDoesNotThrottleHealthyLane() {
   assert.equal(snapshot.last_cycle.getnote.status, 'skipped_cooldown');
   assert.equal(snapshot.lanes.getnote.status, 'failed');
   assert.equal(snapshot.lanes.getnote.failure_streak, 2);
+  assert.equal(logs.some((message) => message.includes('getnote lane start')), true);
+  assert.equal(logs.some((message) => message.includes('getnote lane finish status=failed')), true);
+  assert.equal(logs.some((message) => message.includes('getnote lane skipped status=skipped_cooldown')), true);
 }
 
 async function testBlockedWikiStillPreventsWorkerScheduling() {

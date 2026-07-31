@@ -336,9 +336,12 @@ export function createFeishuResidentWorker({
       let getnote = null;
       if (getnoteEnabled) {
         const getnoteStartedAt = toIso(now());
-        getnote = isLaneCoolingDown(lanes.getnote, now())
-          ? skippedLaneResult(lanes.getnote, 'getnote_recent_notes')
-          : await runScan('getnote', () => getnoteScan({
+        if (isLaneCoolingDown(lanes.getnote, now())) {
+          getnote = skippedLaneResult(lanes.getnote, 'getnote_recent_notes');
+          logger.warn(`[Feishu Resident Worker] getnote lane skipped status=skipped_cooldown next_retry_at=${getnote.next_retry_at} cooldown_ms=${getnote.cooldown_ms}`);
+        } else {
+          logger.log?.(`[Feishu Resident Worker] getnote lane start scan_source=getnote_recent_notes limit=${getnoteLimit} tag_filter=${getnoteIgnoreTag ? 'disabled' : 'enabled'}`);
+          getnote = await runScan('getnote', () => getnoteScan({
               limit: getnoteLimit,
               tag: getnoteTag,
               ignoreTag: getnoteIgnoreTag,
@@ -353,6 +356,8 @@ export function createFeishuResidentWorker({
                 mode: 'recent_getnote_resident'
               }
             });
+          logger.log?.(`[Feishu Resident Worker] getnote lane finish status=${getnote.status} imported_count=${getnote.imported_count} skipped_count=${getnote.skipped_count} failed_count=${getnote.failed_count}`);
+        }
         if (getnote.status !== 'skipped_cooldown') recordLaneResult('getnote', getnote, getnoteStartedAt, toIso(now()));
       }
       getnoteLastCycle = getnote;
