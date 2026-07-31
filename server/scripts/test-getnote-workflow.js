@@ -15,6 +15,7 @@ function note(noteId, content) {
 function workflowOptions(noteId, content, sentCards) {
   const notifications = [];
   const deliveryDiagnostics = [];
+  const patchedCards = [];
 
   return {
     note: note(noteId, content),
@@ -27,6 +28,7 @@ function workflowOptions(noteId, content, sentCards) {
       table_schema_version: 'test_schema'
     }),
     cardDispatchDeps: {
+      dispatchMode: 'local',
       receiveId: 'ou_wei_tian',
       listMasterTaskAuditRecords: async () => [
         { taskName: '已有任务A', status: '进行中', assigneeName: '洪伟填 李嘉华', assigneeKey: '洪伟填李嘉华' },
@@ -35,6 +37,10 @@ function workflowOptions(noteId, content, sentCards) {
       postMessage: async ({ receiveId, card }) => {
         sentCards.push({ receiveId, card });
         return `om_getnote_workflow_${noteId}_${sentCards.length}`;
+      },
+      patchMessage: async ({ messageId, card }) => {
+        patchedCards.push({ messageId, card });
+        return { status: 'updated', message_id: messageId };
       },
       diagnosticsLogger: { warn: (record) => deliveryDiagnostics.push(record) }
     },
@@ -65,6 +71,7 @@ function workflowOptions(noteId, content, sentCards) {
       return { status: 'success' };
     },
     notifications,
+    patchedCards,
     deliveryDiagnostics,
     writeMeetingIndex: async () => ({ status: 'skipped' }),
     addTags: async () => ({ status: 'skipped' })
@@ -115,13 +122,30 @@ async function testImportCreatesPendingDraftAndSkipsUnchangedContent() {
   ]);
   assert.equal(firstOptions.deliveryDiagnostics[0].card_kind, 'getnote_tasks');
   assert.equal(firstOptions.deliveryDiagnostics[0].draft_id, draft.id);
-  assert.equal(firstOptions.deliveryDiagnostics[0].dispatch_mode, 'production');
+  assert.equal(firstOptions.deliveryDiagnostics[0].dispatch_mode, 'local');
   assert.equal(firstOptions.deliveryDiagnostics[0].receive_id_type, 'open_id');
   assert.notEqual(firstOptions.deliveryDiagnostics[0].receive_id_masked, 'ou_wei_tian');
   assert.match(firstOptions.deliveryDiagnostics[0].receive_id_masked, /^ou_w\*+ian$/);
   assert.equal(firstOptions.deliveryDiagnostics[1].item_count, 1);
   assert.equal(firstOptions.deliveryDiagnostics[2].message_id.includes(noteId), false);
   assert.match(draft.draft_json, /待确认/);
+}
+
+async function testForceCardResendReplacesExistingGetNoteCard() {
+  const content = '张三今天修复 GetNote 确认卡片并接入总表。';
+  const noteId = `getnote_workflow_replace_${Date.now()}`;
+  const sentCards = [];
+
+  const firstOptions = workflowOptions(noteId, content, sentCards);
+  const replacementOptions = { ...workflowOptions(noteId, content, sentCards), force: true, forceCardResend: true };
+  const first = await importGetNoteMeeting(noteId, firstOptions);
+  const replacement = await importGetNoteMeeting(noteId, replacementOptions);
+
+  assert.equal(first.status, 'pending_confirmation');
+  assert.equal(replacement.status, 'pending_confirmation');
+  assert.equal(sentCards.length, 2);
+  assert.equal(replacementOptions.patchedCards.length, 1);
+  assert.match(JSON.stringify(replacementOptions.patchedCards[0].card), /此卡片已失效，请使用最新卡片/);
 }
 
 function testGetNoteSummaryIsNotUsedAsTaskSource() {
@@ -147,5 +171,6 @@ await initDatabase();
 testGetNoteSummaryIsNotUsedAsTaskSource();
 testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles();
 await testImportCreatesPendingDraftAndSkipsUnchangedContent();
+await testForceCardResendReplacesExistingGetNoteCard();
 
 console.log('getnote workflow tests passed');

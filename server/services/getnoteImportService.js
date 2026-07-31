@@ -600,7 +600,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     console.log(`[GetNote Sync] draft ready note_id=${normalizedNoteId} draft_id=${draft.id} action=${existingDraft ? 'updated' : 'created'} today_tasks_count=${todayTasksCount} progress_updates_count=${progressUpdatesCount} needs_confirmation_count=${needsConfirmationCount}`);
     const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
     console.log(`[GetNote Sync] card dispatch mode note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks dispatch_mode=${cardDispatchMode || 'unset'}`);
-    const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: options.force });
+    const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: options.force, forceCardResend: options.forceCardResend });
     const dispatchSummary = summarizeDispatchResult(feishuResult);
     console.log(`[GetNote Sync] card dispatch result note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count}`);
 

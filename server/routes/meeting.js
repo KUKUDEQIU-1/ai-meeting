@@ -21,7 +21,8 @@ function requestBool(value) {
 function getNoteImportOptions(body) {
   return {
     force: requestBool(body?.force),
-    reanalyze: requestBool(body?.reanalyze)
+    reanalyze: requestBool(body?.reanalyze),
+    forceCardResend: requestBool(body?.force_card_resend) || requestBool(body?.forceCardResend)
   };
 }
 
