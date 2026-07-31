@@ -67,7 +67,7 @@ function mergeDispatchResults(results) {
   const failedCount = parts.reduce((sum, item) => sum + (item.failed_count || 0), 0);
 
   return {
-    status: sentCount > 0 || skippedCount > 0 || failedCount === 0 ? 'success' : 'failed',
+    status: failedCount > 0 ? 'failed' : 'success',
     sent_count: sentCount,
     skipped_count: skippedCount,
     failed_count: failedCount,
@@ -434,11 +434,12 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   const tasks = draft.draft_tasks || [];
   const reviewerTasks = tasks.filter(isGetNoteReviewerTask);
   const ownerTasks = tasks.filter((task) => !isGetNoteReviewerTask(task));
-  const ownerResult = ownerTasks.length
-    ? await dispatchDraftTaskCards(draftWithTasks(draft, ownerTasks), deps)
-    : null;
 
   if (!reviewerTasks.length) {
+    const ownerResult = ownerTasks.length
+      ? await dispatchDraftTaskCards(draftWithTasks(draft, ownerTasks), deps)
+      : null;
+
     return mergeDispatchResults([ownerResult]);
   }
 
@@ -459,6 +460,10 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     });
     throw new Error('GETNOTE_TASK_CARD_RECEIVE_OPEN_ID 未配置');
   }
+
+  const ownerResult = ownerTasks.length
+    ? await dispatchDraftTaskCards(draftWithTasks(draft, ownerTasks), deps)
+    : null;
 
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
   const patchMessage = deps.patchMessage || patchInteractiveFeishuMessage;

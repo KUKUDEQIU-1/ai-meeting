@@ -2109,6 +2109,68 @@ async function testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees() {
   assert.equal(reviewerState.delivery_status, 'sent');
 }
 
+async function testGetNoteMixedDispatchRequiresReviewerBeforeOwnerSend() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-mixed-missing-reviewer-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 混合缺审核人测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'mixed_missing_known', task_name: 'GetNote 已知任务', assignee: '李嘉华', owner: '李嘉华' },
+      { item_id: 'mixed_missing_unknown', task_name: 'GetNote 待确认任务', assignee: '待确认', owner: '待确认' }
+    ],
+    tableId: 'table_getnote_mixed_missing_reviewer',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+
+  await assert.rejects(() => dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_getnote_mixed_missing_${draft.id}_${sentMessages.length}`;
+    }
+  }), /GETNOTE_TASK_CARD_RECEIVE_OPEN_ID 未配置/);
+
+  assert.equal(sentMessages.length, 0);
+}
+
+async function testGetNoteMixedDispatchReportsReviewerSendFailure() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-mixed-reviewer-fail-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 混合审核发送失败测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [
+      { item_id: 'mixed_fail_known', task_name: 'GetNote 已知任务', assignee: '李嘉华', owner: '李嘉华' },
+      { item_id: 'mixed_fail_unknown', task_name: 'GetNote 待确认任务', assignee: '待确认', owner: '待确认' }
+    ],
+    tableId: 'table_getnote_mixed_reviewer_fail',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    receiveId: 'ou_getnote_reviewer',
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId }) => {
+      if (receiveId === 'ou_getnote_reviewer') throw new Error('reviewer send failed');
+      return `om_getnote_mixed_fail_${draft.id}_${receiveId}`;
+    }
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.sent_count, 1);
+  assert.equal(result.failed_count, 1);
+  assert.equal(result.results.some((item) => item.error === 'reviewer send failed'), true);
+}
+
 async function testGetNoteExplicitReplacementResendInvalidatesOldCardBeforeSendingNewCard() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -4847,6 +4909,8 @@ await testGetNoteDispatchForceDoesNotResendExistingSentCard();
 await testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard();
 await testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard();
 await testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees();
+await testGetNoteMixedDispatchRequiresReviewerBeforeOwnerSend();
+await testGetNoteMixedDispatchReportsReviewerSendFailure();
 await testGetNoteExplicitReplacementResendInvalidatesOldCardBeforeSendingNewCard();
 await testRegularTaskAndProgressDispatchDoesNotResendExistingSentCards();
 await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
