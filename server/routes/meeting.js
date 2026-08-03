@@ -30,6 +30,23 @@ function deliveryErrorStatus(error) {
   return String(error || '').trim() ? 'present' : '';
 }
 
+export function buildTestMasterTaskAuditLogInput({ target = {}, auditDate = '', forceUnique = false, testToken = '', timestampLabel = '' } = {}) {
+  const tokenSuffix = String(testToken || '').replace(/^TEST-/, '').trim();
+  const auditType = forceUnique && tokenSuffix
+    ? `in_progress_missing_update__test__${tokenSuffix}`
+    : 'in_progress_missing_update';
+  const taskName = forceUnique
+    ? `${target.taskName} [${testToken} ${timestampLabel}]`
+    : target.taskName;
+
+  return {
+    recordId: target.recordId,
+    taskName,
+    auditDate,
+    auditType
+  };
+}
+
 export function getMaintenanceGetNotePayload(body = {}) {
   return {
     noteId: String(body.note_id || '').trim(),
@@ -380,7 +397,6 @@ router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req,
     const taskNameQuery = String(req.body?.task_name || req.body?.taskName || '').trim();
     const recordId = String(req.body?.record_id || req.body?.recordId || '').trim();
     const forceUnique = req.body?.force_unique === true || req.body?.forceUnique === true;
-    const auditType = 'in_progress_missing_update';
     const auditDate = new Date().toISOString().slice(0, 10);
     const records = await listMasterTaskAuditRecords();
     const target = records.find((item) => (
@@ -394,17 +410,16 @@ router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req,
 
     const timestampLabel = new Date().toLocaleTimeString('zh-CN', { hour12: false });
     const testToken = `TEST-${Date.now().toString().slice(-6)}`;
-    const auditRecordId = forceUnique ? `${target.recordId}__test__${Date.now()}` : target.recordId;
-    const auditTaskName = forceUnique ? `${target.taskName} [${testToken} ${timestampLabel}]` : target.taskName;
+    const auditInput = buildTestMasterTaskAuditLogInput({ target, auditDate, forceUnique, testToken, timestampLabel });
 
     const auditLog = await upsertMasterTaskAuditLog({
-      recordId: auditRecordId,
-      taskName: auditTaskName,
+      recordId: auditInput.recordId,
+      taskName: auditInput.taskName,
       assigneeKey: target.assigneeKey,
       assigneeName: target.assigneeName,
       taskStatus: target.status,
       auditDate,
-      auditType,
+      auditType: auditInput.auditType,
       actionTaken: 'pending',
       submittedText: target.progressText || ''
     });

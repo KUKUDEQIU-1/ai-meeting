@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import express from 'express';
-import meetingRouter from '../routes/meeting.js';
+import meetingRouter, { buildTestMasterTaskAuditLogInput } from '../routes/meeting.js';
 import { initDatabase } from '../db/database.js';
 import { createMeetingTaskDraft, getMeetingTaskDraftBySource, upsertDraftAssigneeState } from '../services/taskDraftService.js';
 
@@ -296,7 +296,46 @@ async function testMasterTaskAuditTestRouteIsProtectedAndRejectsMissingTask() {
   }
 }
 
+function testForceUniqueMasterTaskAuditKeepsCanonicalRecordId() {
+  const target = {
+    recordId: 'recvoXnJJyPoFM',
+    taskName: 'ai会议助手'
+  };
+  const first = buildTestMasterTaskAuditLogInput({
+    target,
+    auditDate: '2026-08-03',
+    forceUnique: true,
+    testToken: 'TEST-644188',
+    timestampLabel: '02:37:24'
+  });
+  const second = buildTestMasterTaskAuditLogInput({
+    target,
+    auditDate: '2026-08-03',
+    forceUnique: true,
+    testToken: 'TEST-644199',
+    timestampLabel: '02:37:35'
+  });
+  const normal = buildTestMasterTaskAuditLogInput({
+    target,
+    auditDate: '2026-08-03',
+    forceUnique: false,
+    testToken: 'TEST-644200',
+    timestampLabel: '02:37:36'
+  });
+
+  assert.equal(first.recordId, 'recvoXnJJyPoFM');
+  assert.equal(first.recordId.includes('__test__'), false);
+  assert.equal(first.auditType, 'in_progress_missing_update__test__644188');
+  assert.match(first.taskName, /ai会议助手 \[TEST-644188 02:37:24\]/);
+  assert.equal(second.recordId, first.recordId);
+  assert.notEqual(second.auditType, first.auditType);
+  assert.equal(normal.recordId, 'recvoXnJJyPoFM');
+  assert.equal(normal.auditType, 'in_progress_missing_update');
+  assert.equal(normal.taskName, 'ai会议助手');
+}
+
 await initDatabase();
+testForceUniqueMasterTaskAuditKeepsCanonicalRecordId();
 await testWikiSyncDisabledWithoutSource();
 await testWikiTaskDraftLookupRejectsMissingDocumentId();
 await testWikiTaskDraftLookupReturnsFocusedProjectionAndDoesNotMutateDraft();
