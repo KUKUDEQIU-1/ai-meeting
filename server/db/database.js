@@ -174,6 +174,23 @@ function migrateDatabase() {
     updated_at TEXT NOT NULL
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS member_memory (
+    member_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    aliases TEXT NOT NULL DEFAULT '[]',
+    role TEXT NOT NULL DEFAULT '',
+    domains TEXT NOT NULL DEFAULT '[]',
+    project_ownership TEXT NOT NULL DEFAULT '[]',
+    abbreviations TEXT NOT NULL DEFAULT '[]',
+    recent_confirmed_tasks TEXT NOT NULL DEFAULT '[]',
+    extraction_hints TEXT NOT NULL DEFAULT '[]',
+    negative_hints TEXT NOT NULL DEFAULT '[]',
+    confidence TEXT NOT NULL DEFAULT 'medium',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    reviewed_at TEXT
+  )`);
+
   const docxSourceColumns = db.exec('PRAGMA table_info(feishu_docx_note_sources)')[0]?.values || [];
   const docxSourceColumnNames = docxSourceColumns.map((column) => column[1]);
 

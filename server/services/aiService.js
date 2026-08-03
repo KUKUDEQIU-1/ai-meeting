@@ -1,5 +1,6 @@
 import { fetchWithRetry } from '../utils/fetchWithRetry.js';
 import { formatSegmentsForPrompt } from './meetingTranscriptService.js';
+import { buildMemberContextBlock, buildTeamContextBlock } from './memberMemoryService.js';
 
 const fallbackSummary = (meetingText) => ({
   title: '会议纪要',
@@ -246,9 +247,12 @@ function normalizeTasks(tasks) {
 
 		return tasks.map((item) => {
 		  const attribution = normalizeAssigneeAttribution(item);
-		  const sourceTurnIds = Array.isArray(item.source_turn_ids)
-		    ? item.source_turn_ids.map(normalizeText).filter(Boolean)
-		    : [];
+			  const sourceTurnIds = Array.isArray(item.source_turn_ids)
+			    ? item.source_turn_ids.map(normalizeText).filter(Boolean)
+			    : [];
+			  const memoryUsed = Array.isArray(item.memory_used)
+			    ? item.memory_used.map(normalizeText).filter(Boolean)
+			    : [];
 		  const missingFields = Array.isArray(item.missing_fields)
 		    ? item.missing_fields.map(normalizeText).filter(Boolean)
 		    : [];
@@ -288,8 +292,9 @@ function normalizeTasks(tasks) {
 		    task_context: normalizeText(item.task_context),
 		    actionability: normalizeText(item.actionability || 'actionable'),
 		    primary_reason: normalizeText(item.primary_reason),
-		    source_turn_ids: sourceTurnIds,
-		    actionable_uncertain: Boolean(item.actionable_uncertain),
+			    source_turn_ids: sourceTurnIds,
+			    memory_used: memoryUsed,
+			    actionable_uncertain: Boolean(item.actionable_uncertain),
 		    missing_fields: missingFields,
 		    evidence_signal_types: evidenceSignalTypes,
 		    discard_category: normalizeText(item.discard_category),
@@ -647,6 +652,10 @@ export async function generateMeetingChapters(meetingText) {
 
 export async function generateMeetingTasks(meetingText) {
   const meetingInput = buildMeetingText(meetingText);
+  const teamContextBlock = await buildTeamContextBlock();
+  const teamContextPrompt = teamContextBlock
+    ? `\n\nTEAM MEMBER CONTEXT: Use only to resolve names, domains, abbreviations, and likely ownership. Do not create tasks from memory alone. Every task must have transcript evidence.\n${teamContextBlock}`
+    : '';
 
   if (!hasConfiguredAiKey()) {
     return normalizeTaskExtractionResult(fallbackTasks());
@@ -683,8 +692,9 @@ export async function generateMeetingTasks(meetingText) {
 		  24. missing_fields 只能记录确实缺失的 assignee/deadline/object/action/evidence 等字段；缺少 assignee/deadline 本身不是丢弃理由，必须保留为待确认候选。
 		  25. evidence_signal_types 标记原文命中的证据类型，例如 explicit_assignment、deadline_signal、delivery_signal、implicit_next_step、historical_context、new_delivery_signal。
 		  26. actionable_uncertain=true 时必须同时 needs_confirmation=true，并填写 uncertainty_reason；不得用它掩盖无证据或无动作的臆测。
-		  27. source_turn_ids 填引用的结构化发言 turn_id/id，无法取得时填空数组。
-		  28. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
+			  27. source_turn_ids 填引用的结构化发言 turn_id/id，无法取得时填空数组。
+			  28. memory_used 可选，只有实际使用成员记忆来解析姓名/领域/缩写/归属时填写成员姓名或 member_id；不得因为记忆存在而生成没有原文证据的任务。
+			  29. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
 
 分类枚举：
 - today_new_task：今天会议中新安排的任务，或者会后明确开始执行的任务。只有这一类进入 today_tasks。
@@ -753,12 +763,13 @@ export async function generateMeetingTasks(meetingText) {
 	      "source_speaker": "发言人姓名或空字符串",
 	      "source_time": "发言时间或空字符串",
 	      "task_role": "primary_task/context/progress/discarded",
-	      "task_context": "支持执行的背景信息；没有则空字符串",
-	      "actionability": "actionable/context_only/status_only/generic_follow_up/unclear",
-	      "primary_reason": "为什么这是主任务而不是解释或进展",
-	      "source_turn_ids": ["turn_id_1"],
-	      "reason": "为什么这是今日新增任务"
-	    }
+		      "task_context": "支持执行的背景信息；没有则空字符串",
+		      "actionability": "actionable/context_only/status_only/generic_follow_up/unclear",
+		      "primary_reason": "为什么这是主任务而不是解释或进展",
+		      "source_turn_ids": ["turn_id_1"],
+		      "memory_used": ["张三/member_id，可选"],
+		      "reason": "为什么这是今日新增任务"
+		    }
   ],
   "progress_updates": [
     {
@@ -789,8 +800,10 @@ export async function generateMeetingTasks(meetingText) {
   ]
 }
 
-会议内容：
-${meetingInput.promptText}`;
+	${teamContextPrompt}
+
+	会议内容：
+	${meetingInput.promptText}`;
 
   return normalizeTaskExtractionResult(await callAi(prompt, 'generateMeetingTasks'));
 }
@@ -798,6 +811,11 @@ ${meetingInput.promptText}`;
 export async function validateMeetingTasks(input) {
   const meetingInput = buildMeetingText(input?.meetingText || input?.text || '');
   const candidates = Array.isArray(input?.candidates) ? input.candidates : [];
+  const assignees = [...new Set(candidates.map((candidate) => normalizeText(candidate.assignee || candidate.owner)).filter(Boolean))];
+  const memberContextBlock = await buildMemberContextBlock(assignees);
+  const memberContextPrompt = memberContextBlock
+    ? `\n\nRELEVANT MEMBER CONTEXT: Use only to verify owner plausibility. Do not invent tasks.\n${memberContextBlock}`
+    : '';
 
   if (!candidates.length) {
     return { decisions: [] };
@@ -819,7 +837,8 @@ export async function validateMeetingTasks(input) {
 	1. 对每个候选决定 keep、discard 或 merge，并保留结构化证据/不确定性元数据。
 	2. 纠正错误负责人，但 source_speaker 必须保留原始发言人证据，不要把 source_speaker 改成最终 assignee。
 	3. 合并同一交付物的重复候选；同一负责人有多个不同交付物时必须分别 keep，不允许按负责人限量。
-	4. 严禁新增候选之外的任务；只能处理输入 candidates 中的 candidate_id，不得发明新的 candidate_id 或从会议原文二次抽取新任务。
+		 4. 严禁新增候选之外的任务；只能处理输入 candidates 中的 candidate_id，不得发明新的 candidate_id 或从会议原文二次抽取新任务。
+		 5. 成员记忆只用于校验负责人合理性、姓名别名、领域和缩写；不得用记忆替代原文证据。
 
 决策规则：
 	- keep：原文上下文支持这是今天会议产生的新交付动作或会后明确执行事项；缺负责人或缺截止时间本身不是 discard 理由，应保留并标记 actionable_uncertain/needs_confirmation/missing_fields。
@@ -851,8 +870,10 @@ export async function validateMeetingTasks(input) {
   ]
 }
 
-候选任务：
-${JSON.stringify(candidates, null, 2)}
+	${memberContextPrompt}
+
+	候选任务：
+	${JSON.stringify(candidates, null, 2)}
 
 会议内容：
 ${meetingInput.promptText}`;
