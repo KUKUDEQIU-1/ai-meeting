@@ -790,20 +790,27 @@ export function buildMasterTaskPausedAuditCard({ audit, terminal = false }) {
 function extractAllowedFormValues(formValue, itemId) {
   const safeItemId = String(itemId || '');
   const suffix = safeItemId ? `_${safeItemId}` : '';
+  const formContainers = [
+    formValue,
+    formValue?.master_task_audit_form,
+    formValue?.task_form,
+    formValue?.getnote_task_form
+  ];
+  const fieldValue = (name) => formContainers.map((container) => container?.[name]);
   const values = {
-    task_name: firstString(formValue?.[`task_name${suffix}`], formValue?.task_name),
-    progress_summary: firstString(formValue?.[`progress_summary${suffix}`], formValue?.progress_summary),
+    task_name: firstString(...fieldValue(`task_name${suffix}`), ...fieldValue('task_name')),
+    progress_summary: firstString(...fieldValue(`progress_summary${suffix}`), ...fieldValue('progress_summary')),
     matched_task_name: firstString(
-      formValue?.[`matched_task_name_select${suffix}`],
-      formValue?.[`matched_task_name${suffix}`],
-      formValue?.matched_task_name
+      ...fieldValue(`matched_task_name_select${suffix}`),
+      ...fieldValue(`matched_task_name${suffix}`),
+      ...fieldValue('matched_task_name')
     ),
-    task_status: firstString(formValue?.[`task_status${suffix}`], formValue?.task_status),
-    completion_date: firstString(formValue?.[`completion_date${suffix}`], formValue?.completion_date),
-    progress_text: firstString(formValue?.[`progress_text${suffix}`], formValue?.progress_text),
-    task_note: firstString(formValue?.[`task_note${suffix}`], formValue?.task_note)
+    task_status: firstString(...fieldValue(`task_status${suffix}`), ...fieldValue('task_status')),
+    completion_date: firstString(...fieldValue(`completion_date${suffix}`), ...fieldValue('completion_date')),
+    progress_text: firstString(...fieldValue(`progress_text${suffix}`), ...fieldValue('progress_text')),
+    task_note: firstString(...fieldValue(`task_note${suffix}`), ...fieldValue('task_note'))
   };
-  const scopedAssignee = firstString(formValue?.[`assignee_select${suffix}`]);
+  const scopedAssignee = firstString(...fieldValue(`assignee_select${suffix}`));
 
   if (scopedAssignee) {
     values.assignee = scopedAssignee;

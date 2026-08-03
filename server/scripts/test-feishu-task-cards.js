@@ -952,6 +952,32 @@ function testMasterTaskAuditCallbackParsingUnwrapsFormValueObjects() {
   assert.equal(parsed.form_values.task_note, '包装表单备注-357');
 }
 
+function testMasterTaskAuditCallbackParsingReadsNestedFormContainer() {
+  const parsed = parseFeishuCardActionPayload({
+    header: { event_id: 'evt_master_audit_nested_form_1' },
+    event: {
+      operator: { open_id: 'ou_master_audit_actor' },
+      context: { open_message_id: 'om_master_audit_nested_form_1' },
+      action: {
+        value: { action: 'master_task_confirm_update', audit_log_id: 406, card_kind: 'master_task_audit' },
+        form_value: {
+          master_task_audit_form: {
+            task_status: { value: '进行中' },
+            completion_date: { value: '2026-08-29' },
+            progress_text: { value: '嵌套表单进展-246' },
+            task_note: { value: '嵌套表单备注-357' }
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.form_values.task_status, '进行中');
+  assert.equal(parsed.form_values.completion_date, '2026-08-29');
+  assert.equal(parsed.form_values.progress_text, '嵌套表单进展-246');
+  assert.equal(parsed.form_values.task_note, '嵌套表单备注-357');
+}
+
 async function testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping() {
   const originalFetch = global.fetch;
   const calls = [];
@@ -4934,6 +4960,7 @@ testCallbackParsingAcceptsGetNoteAssigneeSelectOnlyForScopedItem();
 testCallbackParsingExtractsScopedAssigneeForRefreshOldTasksOnly();
 testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly();
 testMasterTaskAuditCallbackParsingUnwrapsFormValueObjects();
+testMasterTaskAuditCallbackParsingReadsNestedFormContainer();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
 testConfirmedNewTaskPrefersAssignedFollowerOverReviewer();
