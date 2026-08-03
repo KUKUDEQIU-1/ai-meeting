@@ -193,6 +193,30 @@ async function testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedV
   assert.equal(stored.submitted_note, '动作提交备注-739');
 }
 
+async function testConfirmUpdateAcceptsFeishuDatePickerTimestampString() {
+  const auditLog = await createAuditLog();
+  const submittedValues = {
+    task_status: '已完成',
+    completion_date: String(new Date(2026, 7, 1).getTime()),
+    progress_text: '日期选择器时间戳进展',
+    task_note: ''
+  };
+  const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', submittedValues));
+  let updatedPayload = null;
+
+  await processPreparedFeishuCardAction(prepared, {
+    updateProgress: async (payload) => {
+      updatedPayload = payload;
+      return { status: 'updated' };
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.equal(updatedPayload.completionDate, '2026-08-01');
+  assert.equal(stored.submitted_completion_date, '2026-08-01');
+}
+
 async function testForceUniqueAuditLogConfirmationUsesCanonicalRecordId() {
   const auditLog = await upsertMasterTaskAuditLog({
     recordId: 'recvoXnJJyPoFM',
@@ -636,6 +660,7 @@ await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
 await testConfirmUpdateKeepsSuccessWhenTerminalCardPatchFails();
 await testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues();
+await testConfirmUpdateAcceptsFeishuDatePickerTimestampString();
 await testForceUniqueAuditLogConfirmationUsesCanonicalRecordId();
 await testConfirmUpdatePatchesTerminalMasterAuditCardPayload();
 await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();

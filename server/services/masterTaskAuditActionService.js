@@ -50,6 +50,22 @@ function normalizeSubmittedNote(value) {
   return String(value || '').trim();
 }
 
+function dateOnlyFromDate(date) {
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function dateFromTimestampText(text) {
+  if (!/^\d{10,13}$/.test(text)) return null;
+
+  const timestamp = Number(text);
+  const milliseconds = text.length === 13 ? timestamp : timestamp * 1000;
+  const date = new Date(milliseconds);
+
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
 function normalizeCompletionDate(value, taskStatus) {
   const text = String(value || '').trim();
 
@@ -69,11 +85,13 @@ function normalizeCompletionDate(value, taskStatus) {
     return text;
   }
 
+  const timestampDate = dateFromTimestampText(text);
+  if (timestampDate) return dateOnlyFromDate(timestampDate);
+
   const date = new Date(text.replace(' ', 'T'));
   if (Number.isNaN(date.getTime())) reject('完成日期无效', 400);
 
-  const pad = (number) => String(number).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return dateOnlyFromDate(date);
 }
 
 function hasCanonicalEditValues(formValues) {
