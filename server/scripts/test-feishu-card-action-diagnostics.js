@@ -42,13 +42,14 @@ function createResponse() {
   };
 }
 
-async function runHandler({ body, prepareCardAction, processPreparedCardAction, dispatchFeishuCardAction, logger }) {
+async function runHandler({ body, prepareCardAction, processPreparedCardAction, dispatchFeishuCardAction, prepareAckTimeout, logger }) {
   const res = createResponse();
   let nextError;
   const handler = createFeishuCardActionHandler({
     prepareCardAction,
     processPreparedCardAction,
     dispatchFeishuCardAction,
+    prepareAckTimeout,
     diagnosticsLogger: logger
   });
 
@@ -81,6 +82,15 @@ function errorWithStatus(status) {
 function feishuPatchError() {
   const error = new Error('card patch failed');
   error.feishuResponse = { code: 200671, msg: 'card update failed', log_id: 'feishu_log_1' };
+  return error;
+}
+
+function feishuBitablePutError() {
+  const error = new Error('bitable update failed');
+  error.status = 502;
+  error.phase = 'bitable_put';
+  error.failureClass = 'feishu_bitable_update_failed';
+  error.feishuResponse = { code: 200671, msg: 'bitable update failed', log_id: 'feishu_log_2' };
   return error;
 }
 
@@ -177,6 +187,34 @@ async function testAsyncProcessingFailureDiagnostic() {
   assert.equal(Number.isFinite(logger.records[0].process_ms), true);
 }
 
+async function testAsyncPrepareFailureDiagnostic() {
+  const logger = captureLogger();
+  let rejectPrepare;
+  let resolvePrepareAckTimeout;
+  const handlerResult = runHandler({
+    body: payload(),
+    prepareCardAction: async () => new Promise((_resolve, reject) => {
+      rejectPrepare = reject;
+    }),
+    prepareAckTimeout: async () => new Promise((resolveTimeout) => {
+      resolvePrepareAckTimeout = resolveTimeout;
+    }),
+    logger
+  });
+
+  resolvePrepareAckTimeout();
+  const { res, nextError } = await handlerResult;
+  assert.equal(nextError, undefined);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+  rejectPrepare(errorWithStatus(404));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+
+  assertDiagnosticRecord(logger.records, { phase: 'prepare_async', failure_class: 'missing_state', status: 404 });
+}
+
 async function testDownstreamCardPatchDiagnostic() {
   const logger = captureLogger();
   const dispatched = [];
@@ -199,11 +237,36 @@ async function testDownstreamCardPatchDiagnostic() {
   assert.equal(Number.isFinite(logger.records[0].process_ms), true);
 }
 
+async function testBitablePutDiagnostic() {
+  const logger = captureLogger();
+  const dispatched = [];
+  const prepared = { response: { toast: { type: 'info', content: '正在处理' } }, shouldProcess: true, parsed: {} };
+  await runHandler({
+    body: payload(),
+    prepareCardAction: async () => prepared,
+    processPreparedCardAction: async () => {
+      throw feishuBitablePutError();
+    },
+    dispatchFeishuCardAction: (response, handler) => {
+      dispatched.push(handler);
+      return response;
+    },
+    logger
+  });
+
+  await assert.rejects(dispatched[0], /bitable update failed/);
+  assertDiagnosticRecord(logger.records, { phase: 'bitable_put', failure_class: 'feishu_bitable_update_failed', status: 502 });
+  assert.equal(logger.records[0].code, 200671);
+  assert.equal(Number.isFinite(logger.records[0].process_ms), true);
+}
+
 await testInvalidTokenDiagnostic();
 await testPrepareStageStatusDiagnostic(404, 'missing_state');
 await testPrepareStageStatusDiagnostic(403, 'actor_authorization');
 await testPrepareStageStatusDiagnostic(400, 'validation');
 await testAsyncProcessingFailureDiagnostic();
+await testAsyncPrepareFailureDiagnostic();
 await testDownstreamCardPatchDiagnostic();
+await testBitablePutDiagnostic();
 
 console.log('feishu card action diagnostics regression tests passed');

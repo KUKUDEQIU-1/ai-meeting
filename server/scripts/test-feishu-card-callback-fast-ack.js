@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { initDatabase } from '../db/database.js';
+import { createFeishuCardActionHandler } from '../routes/feishuCardAction.js';
 import { createFeishuCardActionDispatcher } from '../services/feishuCardActionDispatcher.js';
 import {
   handleFeishuCardAction,
@@ -45,6 +46,85 @@ async function testFastAckDispatchDoesNotAwaitSlowHandler() {
   await dispatched[0]();
   assert.equal(handlerCompleted, true);
   assert.equal(errors.length, 0);
+}
+
+async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
+  let resolvePrepare;
+  let resolvePrepareAckTimeout;
+  let processCount = 0;
+  let responseCount = 0;
+  let nextError = null;
+  const unhandledRejections = [];
+  const onUnhandledRejection = (reason) => {
+    unhandledRejections.push(reason);
+  };
+  const preparedAfterAck = new Promise((resolve) => {
+    resolvePrepare = resolve;
+  });
+  const prepareAckTimeout = new Promise((resolve) => {
+    resolvePrepareAckTimeout = resolve;
+  });
+  process.on('unhandledRejection', onUnhandledRejection);
+
+  const processed = new Promise((resolve) => {
+    const handler = createFeishuCardActionHandler({
+      prepareCardAction: async () => preparedAfterAck,
+      processPreparedCardAction: async (prepared) => {
+        assert.equal(prepared.marker, 'slow-prepare');
+        processCount += 1;
+        resolve();
+      },
+      prepareAckTimeoutMs: 1,
+      prepareAckTimeout: async () => prepareAckTimeout,
+      dispatchFeishuCardAction: (_response, task) => {
+        task().catch((error) => {
+          nextError = error;
+        });
+        return _response;
+      }
+    });
+
+    const req = {
+      body: buildActionPayload({ action: 'confirm_assignee_tasks', draftId: 1, eventId: 'evt_slow_prepare' })
+    };
+    const res = {
+      statusCode: 200,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(body) {
+        responseCount += 1;
+        this.body = body;
+        return this;
+      }
+    };
+
+    handler(req, res, (error) => {
+      nextError = error;
+    });
+
+    resolvePrepareAckTimeout();
+    setImmediate(() => {
+      assert.equal(res.statusCode, 200);
+      assert.equal(responseCount, 1);
+      assert.equal(res.body.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+      assert.equal(processCount, 0);
+      resolvePrepare({
+        marker: 'slow-prepare',
+        parsed: { action: 'confirm_assignee_tasks', card_kind: 'tasks', draft_id: 1, message_id: '', operator_open_id: '' },
+        response: { toast: { type: 'info', content: '你的选择已确认' } },
+        shouldProcess: true
+      });
+    });
+  });
+
+  await processed;
+  process.off('unhandledRejection', onUnhandledRejection);
+  assert.equal(processCount, 1);
+  assert.equal(responseCount, 1);
+  assert.equal(nextError, null);
+  assert.deepEqual(unhandledRejections, []);
 }
 
 function testTestRecipientOverridePreservesOriginalAssignees() {
@@ -345,6 +425,7 @@ async function testBackgroundFailureStoresErrorAndKeepsFastAck() {
 }
 
 await testFastAckDispatchDoesNotAwaitSlowHandler();
+await testSlowPrepareReturnsProcessingAckBeforePreparationResolves();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();
 await testConfirmClaimOnlyOnce();

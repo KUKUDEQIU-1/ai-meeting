@@ -2,6 +2,9 @@ import express from 'express';
 import { createFeishuCardActionDispatcher } from '../services/feishuCardActionDispatcher.js';
 import { prepareFeishuCardAction, processPreparedFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 
+const PREPARE_ACK_TIMEOUT_MS = 2500;
+const PREPARE_TIMEOUT = Symbol('prepare-timeout');
+
 function configuredVerificationToken() {
   return process.env.FEISHU_EVENT_VERIFICATION_TOKEN?.trim() || '';
 }
@@ -81,9 +84,74 @@ function prepareFailureClass(error) {
 }
 
 function processFailureClass(error) {
+  if (error?.failureClass) return error.failureClass;
   if (Number(error?.feishuResponse?.code) === 200671) return 'feishu_card_patch_failed';
 
   return 'processing_failed';
+}
+
+function processFailurePhase(error) {
+  if (error?.phase) return error.phase;
+  if (Number(error?.feishuResponse?.code) === 200671) return 'downstream_card_patch';
+
+  return 'process_async';
+}
+
+function processingToast() {
+  return { toast: { type: 'info', content: '已收到，正在后台处理，稍后卡片会自动更新' } };
+}
+
+function prepareTimeout(timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(PREPARE_TIMEOUT), timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+}
+
+async function prepareTimeoutSignal(timeoutFactory, timeoutMs) {
+  await timeoutFactory(timeoutMs);
+  return PREPARE_TIMEOUT;
+}
+
+function preparedMetadataFrom(prepared, metadata) {
+  return prepared.parsed
+    ? {
+        ...metadata,
+        callback_action: prepared.parsed.action || metadata.callback_action,
+        action: prepared.parsed.action || metadata.action,
+        card_kind: prepared.parsed.card_kind || metadata.card_kind,
+        draft_id: Number(prepared.parsed.draft_id) || metadata.draft_id,
+        message_id: maskIdentifier(prepared.parsed.message_id || '') || metadata.message_id,
+        operator_open_id: maskIdentifier(prepared.parsed.operator_open_id || '') || metadata.operator_open_id
+      }
+    : metadata;
+}
+
+function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction, processPreparedCardAction, diagnosticsLogger }) {
+  const response = prepared.response || {};
+  const preparedMetadata = preparedMetadataFrom(prepared, metadata);
+
+  if (prepared.shouldProcess) {
+    dispatchAction(response, async () => {
+      const processStartedAt = performance.now();
+      try {
+        await processPreparedCardAction(prepared);
+      } catch (error) {
+        emitDiagnostics(diagnosticsLogger, {
+          phase: processFailurePhase(error),
+          failure_class: processFailureClass(error),
+          status: error?.status,
+          code: error?.feishuResponse?.code,
+          prepare_ms: prepareMs,
+          process_ms: elapsedMs(processStartedAt),
+          ...preparedMetadata
+        });
+        throw error;
+      }
+    });
+  }
+
+  return response;
 }
 
 function verifyToken(payload) {
@@ -97,6 +165,8 @@ export function createFeishuCardActionHandler({
   dispatchFeishuCardAction,
   prepareCardAction = prepareFeishuCardAction,
   processPreparedCardAction = processPreparedFeishuCardAction,
+  prepareAckTimeoutMs = PREPARE_ACK_TIMEOUT_MS,
+  prepareAckTimeout = prepareTimeout,
   diagnosticsLogger
 } = {}) {
   const dispatchAction = dispatchFeishuCardAction || createFeishuCardActionDispatcher({
@@ -135,40 +205,40 @@ export function createFeishuCardActionHandler({
       return;
     }
 
-    const prepared = await prepareCardAction(payload);
-    const prepareMs = elapsedMs(startedAt);
-    const response = prepared.response || {};
-    const preparedMetadata = prepared.parsed
-      ? {
-          ...metadata,
-          callback_action: prepared.parsed.action || metadata.callback_action,
-          action: prepared.parsed.action || metadata.action,
-          card_kind: prepared.parsed.card_kind || metadata.card_kind,
-          draft_id: Number(prepared.parsed.draft_id) || metadata.draft_id,
-          message_id: maskIdentifier(prepared.parsed.message_id || '') || metadata.message_id,
-          operator_open_id: maskIdentifier(prepared.parsed.operator_open_id || '') || metadata.operator_open_id
-        }
-      : metadata;
+    const preparePromise = prepareCardAction(payload);
+    const prepared = await Promise.race([preparePromise, prepareTimeoutSignal(prepareAckTimeout, prepareAckTimeoutMs)]);
 
-    if (prepared.shouldProcess) {
-      dispatchAction(response, async () => {
-        const processStartedAt = performance.now();
-        try {
-          await processPreparedCardAction(prepared);
-        } catch (error) {
-          emitDiagnostics(diagnosticsLogger, {
-            phase: Number(error?.feishuResponse?.code) === 200671 ? 'downstream_card_patch' : 'process_async',
-            failure_class: processFailureClass(error),
-            status: error?.status,
-            code: error?.feishuResponse?.code,
-            prepare_ms: prepareMs,
-            process_ms: elapsedMs(processStartedAt),
-            ...preparedMetadata
-          });
-          throw error;
-        }
+    if (prepared === PREPARE_TIMEOUT) {
+      res.json(processingToast());
+      preparePromise.then((latePrepared) => {
+        dispatchPreparedAction({
+          prepared: latePrepared,
+          metadata,
+          prepareMs: elapsedMs(startedAt),
+          dispatchAction,
+          processPreparedCardAction,
+          diagnosticsLogger
+        });
+      }).catch((error) => {
+        emitDiagnostics(diagnosticsLogger, {
+          phase: 'prepare_async',
+          failure_class: prepareFailureClass(error),
+          status: error?.status,
+          prepare_ms: elapsedMs(startedAt),
+          ...metadata
+        });
       });
+      return;
     }
+
+    const response = dispatchPreparedAction({
+      prepared,
+      metadata,
+      prepareMs: elapsedMs(startedAt),
+      dispatchAction,
+      processPreparedCardAction,
+      diagnosticsLogger
+    });
 
     res.json(response);
     } catch (error) {
