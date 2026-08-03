@@ -21,6 +21,14 @@ function inputDefaultValue(tag, value) {
 function firstString(...values) {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const text = firstString(...value);
+      if (text) return text;
+    }
+    if (value && typeof value === 'object') {
+      const text = firstString(value.value, value.text, value.name);
+      if (text) return text;
+    }
   }
   return '';
 }
