@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getTenantAccessToken, listMasterTaskAuditRecords } from './feishuBitableClient.js';
-import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, classifyTaskCardDeliveryState, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
+import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, classifyTaskCardDeliveryState, diagnoseAssigneeRecipient, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
 import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
 
@@ -715,9 +715,10 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
 
     const deliveryState = classifyTaskCardDeliveryState(state, { explicit: true });
 
-    const resolved = resolveAssigneeRecipient(assigneeKey, memberMap);
+    const mapping = diagnoseAssigneeRecipient(assigneeKey, memberMap);
+    const resolved = mapping.recipient || null;
     if (!resolved) {
-      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'failed', error: 'current_member_not_found' });
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'failed', error: 'current_member_not_found', mapping_status: mapping.status, candidate_count: mapping.candidate_count, quarantine: mapping.quarantine, suggested_action: mapping.suggested_action });
       continue;
     }
 
@@ -758,7 +759,7 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
   };
 }
 
-export async function forceResendDraftTaskCard({ draftId, assigneeKey, cardKind = 'tasks', execute = false, force = false }, deps = {}) {
+export async function forceResendDraftTaskCard({ draftId, assigneeKey, cardKind = 'tasks', execute = false, force = false, recipientMode = 'production', testReceiveId = '' }, deps = {}) {
   const draft = await getMeetingTaskDraftById(draftId);
 
   if (!draft) {
@@ -794,18 +795,24 @@ export async function forceResendDraftTaskCard({ draftId, assigneeKey, cardKind 
     return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ assignee_key: normalizedAssigneeKey, card_kind: cardKind, status: 'failed', error: 'current_member_not_found' }] };
   }
 
+  const normalizedRecipientMode = String(recipientMode || 'production').trim() || 'production';
+  const testRecipient = String(testReceiveId || deps.testReceiveId || process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim();
+  if (normalizedRecipientMode === 'test_recipient' && !testRecipient) {
+    return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ assignee_key: normalizedAssigneeKey, card_kind: cardKind, status: 'failed', error: 'test_receive_id_required' }] };
+  }
+
   const assignee = {
     assignee_key: normalizedAssigneeKey,
     assignee_name: state.assignee_name || normalizedAssigneeKey,
     receive_id_type: 'open_id',
-    receive_id: resolved.receive_id,
+    receive_id: normalizedRecipientMode === 'test_recipient' ? testRecipient : resolved.receive_id,
     tasks: itemsForAssignee(cardKind === 'progress' ? draft.progress_updates || [] : draft.draft_tasks || [], normalizedAssigneeKey)
   };
   const oldTaskOptions = cardKind === 'tasks'
     ? await loadOldTaskOptionsForAssignee(normalizedAssigneeKey, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords)
     : [];
   const result = await sendAssigneeCard(draft, assignee, cardKind, deps.postMessage || sendInteractiveFeishuMessage, oldTaskOptions, deps.diagnosticsLogger || null, { forceResend: true });
-  const results = [{ card_kind: cardKind, ...result }];
+  const results = [{ card_kind: cardKind, recipient_mode: normalizedRecipientMode, original_receive_id: resolved.receive_id, ...result }];
 
   return {
     status: result.status === 'sent' ? 'success' : 'failed',

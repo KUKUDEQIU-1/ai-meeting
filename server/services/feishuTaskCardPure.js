@@ -144,19 +144,38 @@ function normalizeRecipient(recipient) {
   };
 }
 
-export function resolveAssigneeRecipient(assigneeName, assigneeMap) {
+export function diagnoseAssigneeRecipient(assigneeName, assigneeMap) {
   const assigneeKey = normalizeAssigneeKey(assigneeName);
-  const exact = assigneeMap.get(assigneeKey);
+  if (assigneeKey === '待确认') {
+    return { status: 'placeholder', assignee_key: assigneeKey, matching_strategy: 'none', candidate_count: 0, quarantine: true, suggested_action: 'select_assignee' };
+  }
 
-  if (exact) return normalizeRecipient(exact);
-  if (assigneeKey === '待确认') return null;
+  const exact = assigneeMap.get(assigneeKey);
+  if (exact) {
+    return { status: 'mapped', assignee_key: assigneeKey, matching_strategy: 'exact', candidate_count: 1, recipient: normalizeRecipient(exact), quarantine: false, suggested_action: '' };
+  }
 
   const relaxedMatches = [...assigneeMap.values()].filter((recipient) => {
     const recipientKey = normalizeAssigneeKey(recipient?.assignee_key || recipient?.assignee_name);
     return recipientKey.startsWith(assigneeKey);
   });
 
-  return relaxedMatches.length === 1 ? normalizeRecipient(relaxedMatches[0]) : null;
+  if (relaxedMatches.length === 1) {
+    return { status: 'mapped', assignee_key: assigneeKey, matching_strategy: 'relaxed_prefix', candidate_count: 1, recipient: normalizeRecipient(relaxedMatches[0]), quarantine: false, suggested_action: '' };
+  }
+
+  return {
+    status: relaxedMatches.length > 1 ? 'ambiguous' : 'missing',
+    assignee_key: assigneeKey,
+    matching_strategy: 'none',
+    candidate_count: relaxedMatches.length,
+    quarantine: true,
+    suggested_action: 'repair_assignee_mapping'
+  };
+}
+
+export function resolveAssigneeRecipient(assigneeName, assigneeMap) {
+  return diagnoseAssigneeRecipient(assigneeName, assigneeMap).recipient || null;
 }
 
 export function groupDraftTasksByAssignee(tasks, assigneeMap = parseAssigneeMap()) {

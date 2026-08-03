@@ -16,6 +16,7 @@ const OPEN_IDS = {
   lihao: 'ou_test_lihao_sent_draft_130',
   jian: 'ou_test_jian_sent_draft_130'
 };
+const TEST_RECEIVE_ID = 'ou_test_receiver_override';
 
 function taskFor(assignee, itemId) {
   return {
@@ -220,6 +221,28 @@ async function testResendFailsClosedWhenRequestedAssigneeIsAmbiguous() {
   assert.equal(result.skipped_count, 0);
   assert.equal(result.results[0].status, 'failed');
   assert.equal(result.results[0].error, 'current_member_not_found');
+  assert.equal(result.results[0].mapping_status, 'ambiguous');
+  assert.equal(result.results[0].quarantine, true);
+}
+
+async function testResendReportsMissingMappingDiagnostic() {
+  const draft = await createDraft130LikeState();
+  const result = await taskCardService.resendFailedDraftTaskCards({
+    draftId: draft.id,
+    assigneeKeys: ['胡涌昌'],
+    execute: true
+  }, {
+    listGroupMembers: async () => ({ status: 'success', members: [] }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async () => 'om_should_not_send'
+  });
+
+  assert.equal(result.sent_count, 0);
+  assert.equal(result.failed_count, 1);
+  assert.equal(result.results[0].status, 'failed');
+  assert.equal(result.results[0].mapping_status, 'missing');
+  assert.equal(result.results[0].quarantine, true);
+  assert.equal(result.results[0].suggested_action, 'repair_assignee_mapping');
 }
 
 async function testForceResendSentTaskCardReplacesMessageId() {
@@ -263,6 +286,37 @@ async function testForceResendSentTaskCardReplacesMessageId() {
   assert.deepEqual(afterDraft.progress_updates, beforeDraft.progress_updates);
 }
 
+async function testForceResendCanSendToExplicitTestRecipient() {
+  const draft = await createDraft130LikeState();
+  const sentMessages = [];
+  const result = await taskCardService.forceResendDraftTaskCard({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    cardKind: 'tasks',
+    force: true,
+    execute: true,
+    recipientMode: 'test_recipient',
+    testReceiveId: TEST_RECEIVE_ID
+  }, {
+    listGroupMembers: async () => ({ status: 'success', members: [{ name: '简学勤', open_id: OPEN_IDS.jian }] }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, cardText: JSON.stringify(card) });
+      return `om_force_test_${receiveId}`;
+    }
+  });
+  const states = await listDraftAssigneeStates(draft.id);
+  const jianState = states.find((state) => state.assignee_key === '简学勤');
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(sentMessages.map((call) => call.receiveId), [TEST_RECEIVE_ID]);
+  assert.match(sentMessages[0].cardText, /简学勤 今日明确任务/);
+  assert.equal(result.results[0].recipient_mode, 'test_recipient');
+  assert.equal(jianState.assignee_key, '简学勤');
+  assert.equal(jianState.assignee_name, '简学勤');
+  assert.equal(jianState.receive_id, TEST_RECEIVE_ID);
+}
+
 async function testForceResendRequiresExplicitForceAndExecute() {
   const draft = await createDraft130LikeState();
   let sendCount = 0;
@@ -303,7 +357,9 @@ async function main() {
   await testResendRecoversSentStateMissingMessageId();
   await testResendDryRunDoesNotSendRecoverableState();
   await testResendFailsClosedWhenRequestedAssigneeIsAmbiguous();
+  await testResendReportsMissingMappingDiagnostic();
   await testForceResendSentTaskCardReplacesMessageId();
+  await testForceResendCanSendToExplicitTestRecipient();
   await testForceResendRequiresExplicitForceAndExecute();
 
   console.log('feishu task card resend tests passed');
