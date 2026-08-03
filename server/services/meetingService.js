@@ -188,10 +188,70 @@ function pickMetadata(source, fields) {
 function removalRecord(task, reason, extras = {}) {
   return {
     task: getTaskName(task) || '未命名任务',
+    candidate_id: task?.candidate_id || '',
     reason,
     ...pickMetadata(task, VALIDATOR_METADATA_FIELDS),
     ...extras
   };
+}
+
+function removedStage(reason) {
+  const value = String(reason || '');
+
+  if (value.startsWith('validator_')) return 'stage2';
+  if (['context_only', 'discussion_only', 'status_only', 'unclear'].includes(value)) return 'semantic_context';
+  if (value === 'progress_update') return 'progress_update';
+  if (value === 'generic_continuation') return 'generic_continuation';
+  if (['vague_task_name', 'weak_task_name', 'empty_task_name', 'generic_task_name'].includes(value)) return 'name_quality';
+  return 'deterministic_filter';
+}
+
+function stage2AuditFromRemoved(removed) {
+  const reason = String(removed?.reason || '');
+  const [prefix, detail = reason] = reason.split(/:(.*)/s);
+
+  if (prefix === 'validator_merge') {
+    return { action: 'merge', reason: detail || reason };
+  }
+
+  if (prefix === 'validator_discard') {
+    return { action: 'discard', reason: detail || reason };
+  }
+
+  return { action: '', reason };
+}
+
+function createCandidateAudit(candidates, removedTasks, finalTasks) {
+  const removedById = new Map(removedTasks.filter((item) => item.candidate_id).map((item) => [item.candidate_id, item]));
+  const finalById = new Map(finalTasks.filter((item) => item.candidate_id).map((item) => [item.candidate_id, item]));
+
+  return candidates.map((candidate) => {
+    const removed = removedById.get(candidate.candidate_id);
+    const finalTask = finalById.get(candidate.candidate_id);
+    const finalStatus = finalTask
+      ? finalTask.needs_confirmation ? 'kept_needs_confirmation' : 'kept'
+      : 'removed';
+    const stage2Removed = removed?.reason?.startsWith('validator_') ? stage2AuditFromRemoved(removed) : null;
+    const stage2Action = stage2Removed?.action || (finalTask?.validator_status || removed ? 'keep' : 'keep');
+    const stage2Reason = stage2Removed?.reason || finalTask?.validator_reason || candidate.validator_reason || '';
+
+    return {
+      candidate_id: candidate.candidate_id || '',
+      task_name: getTaskName(finalTask || candidate) || '未命名任务',
+      assignee: (finalTask || candidate).assignee || (finalTask || candidate).owner || '待确认',
+      stage1_status: 'kept',
+      stage2_action: stage2Action === 'kept' ? 'keep' : stage2Action,
+      stage2_reason: stage2Reason,
+      stage2_discard_category: removed?.discard_category || finalTask?.discard_category || candidate.discard_category || '',
+      name_quality_score: finalTask?.name_quality_score ?? removed?.name_quality_score ?? null,
+      name_quality_decision: finalTask?.name_quality_decision || removed?.name_quality_decision || '',
+      actionable_score: finalTask?.actionable_score ?? removed?.actionable_score ?? null,
+      filter_decision: finalTask?.filter_decision || removed?.filter_decision || (finalTask ? 'kept' : 'removed'),
+      filter_reason: finalTask?.filter_reason || removed?.filter_reason || removed?.reason || '',
+      final_status: finalStatus,
+      removed_at_stage: removed ? removedStage(removed.reason) : null
+    };
+  });
 }
 
 function validatorTask(candidate, decision, status) {
@@ -489,6 +549,8 @@ export function filterActionableTasks(tasks = []) {
 		  if (contextReason) {
 		    removed.push(removalRecord(task, contextReason, {
 		      actionable_score: 0,
+		      filter_decision: 'removed',
+		      filter_reason: contextReason,
 		      task_type: task.task_type || task.item_type || 'discussion_only'
 		    }));
 	    console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=${contextReason}`);
@@ -498,19 +560,23 @@ export function filterActionableTasks(tasks = []) {
 	  if (looksLikeProgressUpdate(task)) {
       const progress = taskToProgressUpdate(task, task.item_type || 'existing_task_progress', '进展/完成/历史延续表述，不写入今日任务表');
       progressUpdates.push(progress);
-	      removed.push(removalRecord(task, 'progress_update', {
-	        actionable_score: 0,
-	        task_type: task.task_type || task.item_type || 'progress_update'
-	      }));
+		      removed.push(removalRecord(task, 'progress_update', {
+		        actionable_score: 0,
+		        filter_decision: 'removed',
+		        filter_reason: 'progress_update',
+		        task_type: task.task_type || task.item_type || 'progress_update'
+		      }));
       console.log(`[Task Filter] suppress progress task=${getTaskName(task) || '未命名任务'} reason=progress_update`);
       continue;
     }
 
     if (isGenericContinuationTask(task)) {
-	      removed.push(removalRecord(task, 'generic_continuation', {
-	        actionable_score: 0,
-	        task_type: task.task_type || task.item_type || 'action_item'
-	      }));
+		      removed.push(removalRecord(task, 'generic_continuation', {
+		        actionable_score: 0,
+		        filter_decision: 'removed',
+		        filter_reason: 'generic_continuation',
+		        task_type: task.task_type || task.item_type || 'action_item'
+		      }));
       console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=generic_continuation`);
       continue;
     }
@@ -518,11 +584,15 @@ export function filterActionableTasks(tasks = []) {
     const nameQuality = improveAndValidateTaskName(task);
 
     if (!nameQuality.keep && !llmKeptWithEvidence(task)) {
-	      removed.push(removalRecord(task, nameQuality.reason, {
-	        task: nameQuality.task_name || getTaskName(task) || '未命名任务',
-	        actionable_score: 0,
-	        task_type: task.task_type || task.item_type || 'action_item'
-	      }));
+		      removed.push(removalRecord(task, nameQuality.reason, {
+		        task: nameQuality.task_name || getTaskName(task) || '未命名任务',
+		        actionable_score: 0,
+		        name_quality_score: nameQuality.quality_score ?? null,
+		        name_quality_decision: 'removed',
+		        filter_decision: 'removed',
+		        filter_reason: nameQuality.reason,
+		        task_type: task.task_type || task.item_type || 'action_item'
+		      }));
       console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=${nameQuality.reason}`);
       continue;
     }
@@ -556,19 +626,26 @@ export function filterActionableTasks(tasks = []) {
     console.log(`[Task Filter] score task=${scored.taskName || '未命名任务'} score=${scored.score} type=${scored.taskType} decision=${decision} reason=${reason}`);
 
     if (!canKeep) {
-	      removed.push(removalRecord(qualityTask, reason, {
-	        task: scored.taskName || '未命名任务',
-	        actionable_score: scored.score,
-	        task_type: scored.taskType
-	      }));
+		      removed.push(removalRecord(qualityTask, reason, {
+		        task: scored.taskName || '未命名任务',
+		        actionable_score: scored.score,
+		        name_quality_score: nameQuality.quality_score ?? null,
+		        name_quality_decision: nameQuality.rewritten ? 'rewritten' : 'kept',
+		        filter_decision: 'removed',
+		        filter_reason: reason,
+		        task_type: scored.taskType
+		      }));
       continue;
     }
 
     filtered.push({
       ...qualityTask,
-      task_type: scored.taskType,
-      name_quality_score: nameQuality.quality_score,
-      actionable_score: scored.score,
+	      task_type: scored.taskType,
+	      name_quality_score: nameQuality.quality_score,
+	      name_quality_decision: nameQuality.rewritten ? 'rewritten' : nameQuality.needs_confirmation ? 'kept_needs_confirmation' : 'kept',
+	      actionable_score: scored.score,
+	      filter_decision: 'kept',
+	      filter_reason: reason,
       assignee: scored.assignee,
       owner: scored.assignee,
       deadline: scored.deadline,
@@ -581,11 +658,13 @@ export function filterActionableTasks(tasks = []) {
 
   const dedupeResult = dedupeSimilarTasks(filtered);
   const dedupedTasks = dedupeResult.tasks;
-	  const mergedRemoved = dedupeResult.merged.map((item) => ({
-	    task: item.task,
-	    reason: item.reason,
-	    merged_into: item.into
-	  }));
+		  const mergedRemoved = dedupeResult.merged.map((item) => ({
+		    task: item.task,
+		    reason: item.reason,
+		    filter_decision: 'removed',
+		    filter_reason: item.reason,
+		    merged_into: item.into
+		  }));
   const allRemoved = [...removed, ...mergedRemoved];
   const needsConfirmationCount = dedupedTasks.filter((task) => task.needs_confirmation).length;
 
@@ -825,12 +904,14 @@ async function applySemanticDedupe(aiInput, tasks, dedupeTasks) {
         const currentCanonical = mergedByCanonicalId.get(group.canonical_candidate_id) || canonical;
         mergedByCanonicalId.set(group.canonical_candidate_id, mergeSemanticTask(currentCanonical, duplicate));
         removedIds.add(duplicateId);
-        removed.push({
-          task: getTaskName(duplicate) || '未命名任务',
-          reason: `semantic_merge:${group.reason}`,
-          candidate_id: duplicateId,
-          merged_into: group.canonical_candidate_id
-        });
+	        removed.push({
+	          task: getTaskName(duplicate) || '未命名任务',
+	          reason: `semantic_merge:${group.reason}`,
+	          candidate_id: duplicateId,
+	          filter_decision: 'removed',
+	          filter_reason: `semantic_merge:${group.reason}`,
+	          merged_into: group.canonical_candidate_id
+	        });
       }
     }
 
@@ -891,6 +972,7 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
   const progressUpdates = [...aiProgressUpdates, ...(filterResult.progress_updates || [])];
   const removedTasks = [...validationResult.removed, ...filterResult.removed, ...semanticDedupeResult.removed];
   const finalTasks = semanticDedupeResult.tasks;
+  const candidateAudit = createCandidateAudit(rawCleanTasks, removedTasks, finalTasks);
 
   return {
     meeting_title: meetingTitle,
@@ -901,6 +983,7 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
     progress_updates: progressUpdates,
     discarded_items: discardedItems,
     removed_tasks: removedTasks,
+    candidate_audit: candidateAudit,
     after_filter_count: filterResult.after_filter_count,
     after_dedupe_count: finalTasks.length,
     removed_reasons: removedReasonsSummary(removedTasks),

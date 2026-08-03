@@ -308,6 +308,13 @@ function countRawTasks(analysis) {
   return analysis.raw_tasks?.length || analysis.tasks?.length || 0;
 }
 
+function analysisJsonPayload(analysis) {
+  return {
+    ...analysis,
+    candidate_audit: Array.isArray(analysis?.candidate_audit) ? analysis.candidate_audit : []
+  };
+}
+
 export async function getGetNoteSyncRecord(noteId) {
   return get('SELECT * FROM getnote_sync_records WHERE note_id = ?', [noteId]);
 }
@@ -551,7 +558,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
         contentHash,
         usedTranscript,
         summary: existingRecord.summary,
-        analysisJson: parseJson(existingRecord.analysis_json),
+          analysisJson: analysisJsonPayload(parseJson(existingRecord.analysis_json) || {}),
         feishuResult: parseJson(existingRecord.feishu_result_json),
         notifyTargetType,
         notifyTargetId,
@@ -711,7 +718,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       contentHash,
       usedTranscript,
       summary: aiResult.summary,
-      analysisJson: aiResult,
+      analysisJson: analysisJsonPayload(aiResult),
       notifyTargetType,
       notifyTargetId,
       notifyStatus,
@@ -788,7 +795,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       contentHash,
       usedTranscript,
       summary: aiResult.summary,
-      analysisJson: aiResult,
+      analysisJson: analysisJsonPayload(aiResult),
       feishuResult,
       notifyTargetType,
       notifyTargetId,
@@ -833,7 +840,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       contentHash,
       usedTranscript,
       summary: aiResult.summary,
-      analysisJson: aiResult,
+      analysisJson: analysisJsonPayload(aiResult),
       feishuResult,
       notifyTargetType,
       notifyTargetId,

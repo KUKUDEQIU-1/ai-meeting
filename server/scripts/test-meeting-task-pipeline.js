@@ -501,6 +501,64 @@ async function testRoutesStatusOnlyDataItemToProgress() {
   assert.equal(result.removed_tasks.at(-1).reason, 'progress_update');
 }
 
+async function testCandidateAuditTracksEveryFilteringStage() {
+  const result = await analyzeWith([
+    task({ task_name: '整理订单接口错误日志', title: '整理订单接口错误日志' }),
+    task({
+      task_name: '裂变活动数据表现',
+      title: '裂变活动数据表现',
+      task_brief: '裂变活动能看到带来用户，但具体数量尚未仔细查看。',
+      task_description: '裂变活动能看到带来用户，但具体数量尚未仔细查看。',
+      evidence_quote: '裂变活动方面的话是能看到有通过活动裂变过来的用户',
+      assignee: '潘韵芝',
+      owner: '潘韵芝'
+    }),
+    task({ task_name: '关注问题', title: '关注问题', evidence_quote: '后面关注一下这个问题' })
+  ], {
+    decisions: [
+      { candidate_id: 'candidate_1', action: 'keep', reason: '明确新任务' },
+      { candidate_id: 'candidate_2', action: 'keep', reason: '模型误判为新增任务' },
+      { candidate_id: 'candidate_3', action: 'discard', reason: '弱跟进', discard_category: 'weak_follow_up' }
+    ]
+  });
+
+  assert.equal(result.candidate_audit.length, 3);
+  for (const audit of result.candidate_audit) {
+    for (const key of [
+      'candidate_id',
+      'task_name',
+      'assignee',
+      'stage1_status',
+      'stage2_action',
+      'stage2_reason',
+      'stage2_discard_category',
+      'name_quality_score',
+      'name_quality_decision',
+      'actionable_score',
+      'filter_decision',
+      'filter_reason',
+      'final_status',
+      'removed_at_stage'
+    ]) {
+      assert.ok(Object.hasOwn(audit, key), `missing audit key ${key}`);
+    }
+  }
+
+  const kept = result.candidate_audit.find((item) => item.candidate_id === 'candidate_1');
+  const progress = result.candidate_audit.find((item) => item.candidate_id === 'candidate_2');
+  const stage2Removed = result.candidate_audit.find((item) => item.candidate_id === 'candidate_3');
+
+  assert.equal(kept.stage1_status, 'kept');
+  assert.equal(kept.stage2_action, 'keep');
+  assert.equal(kept.final_status, 'kept_needs_confirmation');
+  assert.equal(kept.removed_at_stage, null);
+  assert.equal(progress.final_status, 'removed');
+  assert.equal(progress.removed_at_stage, 'progress_update');
+  assert.equal(stage2Removed.final_status, 'removed');
+  assert.equal(stage2Removed.removed_at_stage, 'stage2');
+  assert.equal(stage2Removed.stage2_discard_category, 'weak_follow_up');
+}
+
 await testKeepsValidatorApprovedCandidate();
 await testDiscardsValidatorRejectedCandidate();
 await testCorrectsAssigneeBeforeDeterministicFilter();
@@ -521,5 +579,6 @@ await testEmptyCandidatesSkipValidator();
 await testOutputCompatibility();
 await testFiltersGenericContinuationTask();
 await testRoutesStatusOnlyDataItemToProgress();
+await testCandidateAuditTracksEveryFilteringStage();
 
 console.log('test-meeting-task-pipeline passed');
