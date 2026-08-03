@@ -31,6 +31,11 @@ function emitDeliveryDiagnostics(logger, record) {
   diagnosticsLoggerFor(logger).warn(record);
 }
 
+function truncateMessage(value, maxLength) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
 function getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCount }) {
   return {
     card_kind: cardKind,
@@ -290,6 +295,13 @@ function buildStaleCard({ title = '卡片已失效', message = '此卡片已失�
   };
 }
 
+function buildFailureCard({ message }) {
+  return buildStaleCard({
+    title: '任务处理失败',
+    message: `任务处理失败：${truncateMessage(message || '后台处理失败，请稍后重试。', 500)}`
+  });
+}
+
 async function invalidateGetNoteActiveCards({ existingState, existingMessages, patchMessage }) {
   const messageIds = new Set();
   if (existingState?.card_message_id) messageIds.add(existingState.card_message_id);
@@ -383,7 +395,10 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   const assigneeOptions = !terminal && effectiveCardKind === 'getnote_tasks'
     ? await buildMasterAssigneeOptions(listRecords)
     : [];
-  const card = buildCardForKind({ cardKind: effectiveCardKind, draft: { ...draft, confirmation_error: state.confirmation_error || '' }, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
+  const confirmationError = state.confirmation_error || '';
+  const card = confirmationError
+    ? buildFailureCard({ message: confirmationError })
+    : buildCardForKind({ cardKind: effectiveCardKind, draft, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
   return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
 }
 

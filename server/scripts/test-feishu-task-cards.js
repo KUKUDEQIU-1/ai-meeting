@@ -1102,10 +1102,26 @@ function testConfirmedManualProgressBuildsBitableProgressFields() {
 
 function testConfirmedNewTaskBuildsFollowerField() {
   const fields = formatTaskForMasterTable({ task_name: 'AI会议助手新任务', confirmed_by: 'ou_card_actor' }, {
-    bitable_fields: [{ field_name: '跟进人' }]
+    bitable_fields: [{ field_name: '跟进人', type: 'text' }]
   });
 
   assert.equal(fields.跟进人, 'ou_card_actor');
+}
+
+function testConfirmedNewTaskBuildsPersonFollowerFieldFromOpenId() {
+  const fields = formatTaskForMasterTable({ task_name: 'AI会议助手新任务', confirmed_by: 'ou_card_actor' }, {
+    bitable_fields: [{ field_name: '跟进人', type: '11' }]
+  });
+
+  assert.deepEqual(fields.跟进人, [{ id: 'ou_card_actor' }]);
+}
+
+function testConfirmedNewTaskSkipsPersonFollowerFieldForPlainName() {
+  const fields = formatTaskForMasterTable({ task_name: 'AI会议助手新任务', assignee: '简学勤' }, {
+    bitable_fields: [{ field_name: '跟进人', type: '11' }]
+  });
+
+  assert.equal(Object.hasOwn(fields, '跟进人'), false);
 }
 
 function testConfirmedNewTaskPrefersAssignedFollowerOverReviewer() {
@@ -1119,6 +1135,18 @@ function testConfirmedNewTaskPrefersAssignedFollowerOverReviewer() {
   });
 
   assert.equal(fields.跟进人, '李嘉华');
+}
+
+function testConfirmedNewTaskPersonFollowerUsesReviewerWhenAssigneeIsName() {
+  const fields = formatTaskForMasterTable({
+    task_name: 'AI会议助手新任务',
+    assignee: '简学勤',
+    confirmed_by: 'ou_card_actor'
+  }, {
+    bitable_fields: [{ field_name: '跟进人', type: '11' }]
+  });
+
+  assert.deepEqual(fields.跟进人, [{ id: 'ou_card_actor' }]);
 }
 
 function testConfirmedProgressBuildsFollowerField() {
@@ -4871,6 +4899,144 @@ async function testConfirmedNewTaskCreateRecordWritesFollowerField() {
   }
 }
 
+async function testConfirmedNewTaskCreateRecordSkipsInvalidPersonFollowerField() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousAppToken = process.env.FEISHU_BITABLE_APP_TOKEN;
+  const previousTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const creates = [];
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+  process.env.FEISHU_BITABLE_APP_TOKEN = 'fallback_app_token';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_master_create_person';
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/fields')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ field_name: '事务需求名称' }, { field_name: '开始日期' }, { field_name: '跟进人', type: '11' }] }
+      }), { status: 200 });
+    }
+
+    if (href.includes('/records') && options.method === 'POST') {
+      creates.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ code: 0, data: { record: { record_id: 'rec_new_person_1' } } }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const record = await createTaskRecord({ task_name: '优化任务时间卡片', assignee: '简学勤' }, {
+      table_id: 'tbl_master_create_person',
+      meeting_time: '2026-08-03'
+    }, {
+      masterTaskTable: true
+    });
+
+    assert.equal(record.record_id, 'rec_new_person_1');
+    assert.equal(creates.length, 1);
+    assert.equal(creates[0].fields.事务需求名称, '优化任务时间卡片');
+    assert.equal(Object.hasOwn(creates[0].fields, '跟进人'), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+    process.env.FEISHU_BITABLE_APP_TOKEN = previousAppToken;
+    process.env.FEISHU_MASTER_TASK_TABLE_ID = previousTableId;
+  }
+}
+
+async function testFailureCardUpdateUsesNonFormCard() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  let patchedCard = null;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `failure-card-non-form-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-08-03',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'failure_1', task_name: '优化任务时间卡片', assignee: '简学勤', status: 'confirmed' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_failure_card',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_actor',
+    cardMessageId: 'om_failure_card',
+    deliveryStatus: 'sent'
+  });
+
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET confirmation_status = 'pending', confirmation_error = ?
+     WHERE draft_id = ? AND assignee_key = ? AND card_kind = 'tasks'`,
+    ['飞书任务写入失败：UserFieldConvFail', draft.id, '简学勤']
+  );
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/im/v1/messages/') && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      patchedCard = JSON.parse(body.content);
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const result = await updateFeishuTaskCard({
+      messageId: 'om_failure_card',
+      draftId: draft.id,
+      assigneeKey: '简学勤',
+      cardKind: 'tasks'
+    });
+
+    assert.equal(result.status, 'updated');
+    assert.equal(patchedCard.header.title.content, '任务处理失败');
+    assert.equal(patchedCard.body.elements.some((item) => item.tag === 'form'), false);
+    assert.match(JSON.stringify(patchedCard), /UserFieldConvFail/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
+}
+
 async function testProgressConfirmationUsesProgressOnlyAction() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -4963,7 +5129,10 @@ testMasterTaskAuditCallbackParsingUnwrapsFormValueObjects();
 testMasterTaskAuditCallbackParsingReadsNestedFormContainer();
 testConfirmedManualProgressBuildsBitableProgressFields();
 testConfirmedNewTaskBuildsFollowerField();
+testConfirmedNewTaskBuildsPersonFollowerFieldFromOpenId();
+testConfirmedNewTaskSkipsPersonFollowerFieldForPlainName();
 testConfirmedNewTaskPrefersAssignedFollowerOverReviewer();
+testConfirmedNewTaskPersonFollowerUsesReviewerWhenAssigneeIsName();
 testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
@@ -5050,6 +5219,8 @@ await testConfirmedProgressUpdatesExistingTaskProgressDescriptionField();
 await testConfirmedProgressUpdatesMasterRecordWhenLocalInstanceMissing();
 await testConfirmedProgressUsesDraftMasterTableWhenFallbackEnvDiffers();
 await testConfirmedNewTaskCreateRecordWritesFollowerField();
+await testConfirmedNewTaskCreateRecordSkipsInvalidPersonFollowerField();
+await testFailureCardUpdateUsesNonFormCard();
 await testProgressConfirmationUsesProgressOnlyAction();
 
 console.log('feishu task card pure-function tests passed');

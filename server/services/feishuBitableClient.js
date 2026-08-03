@@ -320,14 +320,17 @@ function fieldNameOf(field) {
 }
 
 function followerValueForField(field, follower) {
-  const value = String(follower || '').trim();
+  const values = Array.isArray(follower) ? follower : [follower];
+  const normalizedValues = values.map((item) => String(item || '').trim()).filter(Boolean);
+  const value = normalizedValues[0] || '';
 
   if (!value) return null;
 
   const fieldType = String(field?.type || field?.ui_type || field?.field_type || '');
 
   if (fieldType === '11' || /user|person|人员|联系人/i.test(fieldType)) {
-    return [{ id: value }];
+    const openId = normalizedValues.find((item) => /^ou_[A-Za-z0-9_-]+$/.test(item));
+    return openId ? [{ id: openId }] : null;
   }
 
   return value;
@@ -360,7 +363,7 @@ export function formatTaskForBitable(task, context = {}) {
 
 export function formatTaskForMasterTable(task, context = {}) {
   const taskName = truncateText(taskNameOf(task), 100) || '未命名任务';
-  const follower = assigneeNameOf(task) || task.confirmed_by || task.confirmedBy || context.confirmed_by || context.confirmedBy;
+  const follower = [assigneeNameOf(task), task.confirmed_by, task.confirmedBy, context.confirmed_by, context.confirmedBy];
   const formatted = {
     事务需求名称: taskName
   };
