@@ -47,6 +47,9 @@ function cardTitle({ assignee, label }) {
 
 export function normalizeAssigneeKey(value) {
   const text = String(value || '').replace(/\s+/g, '').trim();
+  const artifactMatch = text.match(/^([\u4e00-\u9fa5]{2,4})(?:CLI-)?(?:skill(?:\.md)?|\.agent|\.md)$/i);
+
+  if (artifactMatch) return artifactMatch[1];
   return text || '待确认';
 }
 
@@ -80,7 +83,7 @@ export function parseAssigneeMap(value = process.env.FEISHU_ASSIGNEE_MAP_JSON ||
     if (assigneeKey && receiveId) {
       assigneeMap.set(assigneeKey, {
         assignee_key: assigneeKey,
-        assignee_name: String(rawName || assigneeKey).trim() || assigneeKey,
+        assignee_name: assigneeKey,
         receive_id_type: 'open_id',
         receive_id: receiveId
       });
@@ -100,7 +103,7 @@ export function assigneeMembersToMap(members) {
     if (assigneeKey && receiveId) {
       assigneeMap.set(assigneeKey, {
         assignee_key: assigneeKey,
-        assignee_name: String(member?.assignee_name || member?.name || assigneeKey).trim(),
+        assignee_name: assigneeKey,
         receive_id_type: 'open_id',
         receive_id: receiveId
       });
@@ -110,11 +113,22 @@ export function assigneeMembersToMap(members) {
   return assigneeMap;
 }
 
+function normalizeRecipient(recipient) {
+  if (!recipient) return null;
+  const assigneeKey = normalizeAssigneeKey(recipient.assignee_key || recipient.assignee_name);
+
+  return {
+    ...recipient,
+    assignee_key: assigneeKey,
+    assignee_name: assigneeKey
+  };
+}
+
 export function resolveAssigneeRecipient(assigneeName, assigneeMap) {
   const assigneeKey = normalizeAssigneeKey(assigneeName);
   const exact = assigneeMap.get(assigneeKey);
 
-  if (exact) return exact;
+  if (exact) return normalizeRecipient(exact);
   if (assigneeKey === '待确认') return null;
 
   const relaxedMatches = [...assigneeMap.values()].filter((recipient) => {
@@ -122,7 +136,7 @@ export function resolveAssigneeRecipient(assigneeName, assigneeMap) {
     return recipientKey.startsWith(assigneeKey);
   });
 
-  return relaxedMatches.length === 1 ? relaxedMatches[0] : null;
+  return relaxedMatches.length === 1 ? normalizeRecipient(relaxedMatches[0]) : null;
 }
 
 export function groupDraftTasksByAssignee(tasks, assigneeMap = parseAssigneeMap()) {

@@ -60,7 +60,11 @@ function testRelaxedAssigneeGroupingMatchesUniqueMemberDisplayNames() {
   assert.equal(grouped.deliveryFailures.length, 0);
   assert.deepEqual(
     [...grouped.deliverable.map((item) => item.assignee_key)].sort(),
-    ['洪伟填skill.md', '李嘉华.agent', '胡涌昌CLI-skill.md'].sort()
+    ['洪伟填', '李嘉华', '胡涌昌'].sort()
+  );
+  assert.deepEqual(
+    [...grouped.deliverable.map((item) => item.assignee_name)].sort(),
+    ['洪伟填', '李嘉华', '胡涌昌'].sort()
   );
   assert.deepEqual(grouped.deliverable.flatMap((item) => item.tasks.map((task) => task.item_id)).sort(), ['hong', 'hu', 'li']);
 }
