@@ -62,7 +62,15 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
   const markSent = deps.markSent || markMasterTaskAuditSent;
   const markFailed = deps.markFailed || markMasterTaskAuditFailed;
 
-  const recipient = await resolveRecipient(auditLog.assignee_key);
+  const baseRecipient = await resolveRecipient(auditLog.assignee_key);
+  const recipientMode = String(deps.recipientMode || 'production').trim() || 'production';
+  const testReceiveId = String(deps.testReceiveId || process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim();
+  if (recipientMode === 'test_recipient' && !testReceiveId) {
+    throw new Error('test_receive_id_required');
+  }
+  const recipient = recipientMode === 'test_recipient'
+    ? { ...baseRecipient, receive_id: testReceiveId }
+    : baseRecipient;
   const taskStatus = normalizeText(auditLog.task_status || auditLog.submitted_status);
   const completionDate = normalizeDateOnlyText(auditLog.completion_date || auditLog.submitted_completion_date);
   const progressText = normalizeText(auditLog.progress_text || auditLog.submitted_progress_text || auditLog.submitted_text);

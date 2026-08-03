@@ -399,6 +399,8 @@ router.post('/force-resend-draft-task-card', requireMaintenanceToken, async (req
     const cardKind = String(req.body?.card_kind || req.body?.cardKind || 'tasks').trim() || 'tasks';
     const force = req.body?.force === true;
     const execute = req.body?.execute === true;
+    const recipientMode = String(req.body?.recipient_mode || req.body?.recipientMode || 'production').trim() || 'production';
+    const testReceiveId = String(req.body?.test_receive_id || req.body?.testReceiveId || '').trim();
 
     if (!Number.isFinite(draftId) || draftId <= 0) {
       res.status(400).json({ success: false, message: 'draft_id 必须是正整数' });
@@ -415,8 +417,8 @@ router.post('/force-resend-draft-task-card', requireMaintenanceToken, async (req
       return;
     }
 
-    const result = await forceResendDraftTaskCard({ draftId, assigneeKey, cardKind, force, execute });
-    res.json({ success: result.status === 'success', draft_id: draftId, assignee_key: assigneeKey, card_kind: cardKind, force, execute, ...result });
+    const result = await forceResendDraftTaskCard({ draftId, assigneeKey, cardKind, force, execute, recipientMode, testReceiveId });
+    res.json({ success: result.status === 'success', draft_id: draftId, assignee_key: assigneeKey, card_kind: cardKind, force, execute, recipient_mode: recipientMode, ...result });
   } catch (error) {
     next(error);
   }
@@ -427,6 +429,8 @@ router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req,
     const taskNameQuery = String(req.body?.task_name || req.body?.taskName || '').trim();
     const recordId = String(req.body?.record_id || req.body?.recordId || '').trim();
     const forceUnique = req.body?.force_unique === true || req.body?.forceUnique === true;
+    const recipientMode = String(req.body?.recipient_mode || req.body?.recipientMode || 'production').trim() || 'production';
+    const testReceiveId = String(req.body?.test_receive_id || req.body?.testReceiveId || '').trim();
     const auditDate = new Date().toISOString().slice(0, 10);
     const records = await listMasterTaskAuditRecords();
     const target = records.find((item) => (
@@ -456,7 +460,7 @@ router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req,
     const sent = await sendMasterTaskAuditCard({
       ...auditLog,
       progress_text: target.progressText || ''
-    });
+    }, { recipientMode, testReceiveId });
 
     res.json({
       success: true,
@@ -465,6 +469,7 @@ router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req,
       task_name: sent.task_name,
       assignee_name: sent.assignee_name,
       test_token: forceUnique ? testToken : '',
+      recipient_mode: recipientMode,
       action_taken: sent.action_taken,
       has_message_id: Boolean(sent.card_message_id)
     });
