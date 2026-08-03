@@ -466,6 +466,40 @@ export async function listDraftCardMessages(draftId, assigneeKey = '', cardKind 
   return all(`SELECT * FROM meeting_task_draft_card_messages WHERE ${clauses.join(' AND ')} ORDER BY assignee_key ASC, item_id ASC`, params);
 }
 
+export async function hasSuccessfulDraftCardDelivery(draftId, cardKind = '') {
+  const assigneeParams = [draftId];
+  const assigneeKindClause = cardKind ? ' AND card_kind = ?' : '';
+  if (cardKind) assigneeParams.push(cardKind);
+
+  const assigneeDelivery = await get(
+    `SELECT 1 AS delivered
+     FROM meeting_task_draft_assignees
+     WHERE draft_id = ?${assigneeKindClause}
+       AND delivery_status = 'sent'
+       AND COALESCE(card_message_id, '') <> ''
+     LIMIT 1`,
+    assigneeParams
+  );
+
+  if (assigneeDelivery) return true;
+
+  const messageParams = [draftId];
+  const messageKindClause = cardKind ? ' AND card_kind = ?' : '';
+  if (cardKind) messageParams.push(cardKind);
+
+  const splitDelivery = await get(
+    `SELECT 1 AS delivered
+     FROM meeting_task_draft_card_messages
+     WHERE draft_id = ?${messageKindClause}
+       AND delivery_status = 'sent'
+       AND COALESCE(card_message_id, '') <> ''
+     LIMIT 1`,
+    messageParams
+  );
+
+  return Boolean(splitDelivery);
+}
+
 function hydrateDraft(row) {
   const draftTasks = normalizeDraftTasks(parseJson(row.draft_json, []), row.id);
   return {

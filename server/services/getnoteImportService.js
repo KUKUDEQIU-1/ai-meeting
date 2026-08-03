@@ -4,7 +4,7 @@ import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeis
 import { addTagsToNote, extractGetNoteContent, extractGetNoteContentWithMeta, getNoteDetail, getNoteList, getTopicNoteList } from './getnoteClient.js';
 import { analyzeMeetingText } from './meetingService.js';
 import { dispatchGetNoteTaskCard } from './feishuTaskCardService.js';
-import { createMeetingTaskDraft, getMeetingTaskDraftBySource, updateMeetingTaskDraftContent } from './taskDraftService.js';
+import { createMeetingTaskDraft, getMeetingTaskDraftBySource, hasSuccessfulDraftCardDelivery, updateMeetingTaskDraftContent } from './taskDraftService.js';
 import { suppressHistoricalTasks } from './taskHistoryService.js';
 
 const SKIPPED_MESSAGE = '该 Get笔记已同步，跳过重复写入';
@@ -82,6 +82,50 @@ function summarizeDispatchResult(result) {
     sent_count: Number(result?.sent_count || 0),
     skipped_count: Number(result?.skipped_count || 0),
     failed_count: Number(result?.failed_count || 0)
+  };
+}
+
+async function recoverGetNoteCardDelivery({ noteId, draft, options, title, tableUrl }) {
+  if (!draft || await hasSuccessfulDraftCardDelivery(draft.id)) return null;
+
+  const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
+  console.log(`[GetNote Sync] recover missing card delivery note_id=${noteId} draft_id=${draft.id} dispatch_mode=${cardDispatchMode || 'unset'}`);
+  const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: false, forceCardResend: false });
+  const dispatchSummary = summarizeDispatchResult(feishuResult);
+  console.log(`[GetNote Sync] card delivery recovery result note_id=${noteId} draft_id=${draft.id} status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count}`);
+
+  if (feishuResult.status !== 'success') {
+    const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片补发失败');
+    error.feishuSync = feishuResult;
+    throw error;
+  }
+
+  if (dispatchSummary.sent_count > 0) {
+    await notifyUserSafe({
+      notifyUser: options.notifyUser,
+      status: 'getnote_cards_sent',
+      note_id: noteId,
+      meeting_title: title || draft.meeting_title,
+      meeting_source: 'Get笔记',
+      table_name: draft.table_name,
+      table_url: draft.table_url || tableUrl,
+      tasks_count: (draft.draft_tasks || []).length,
+      today_tasks_count: (draft.draft_tasks || []).length,
+      progress_updates_count: (draft.progress_updates || []).length,
+      discarded_items_count: (draft.discarded_items || []).length,
+      needs_confirmation_count: (draft.draft_tasks || []).filter((task) => task.status === 'pending').length
+    });
+  }
+
+  return {
+    success: true,
+    note_id: noteId,
+    title: title || draft.meeting_title,
+    status: 'skipped',
+    reason: dispatchSummary.sent_count > 0 ? 'delivery_recovered' : 'delivery_already_handled',
+    table_url: draft.table_url || tableUrl,
+    draft_id: draft.id,
+    feishu_result: feishuResult
   };
 }
 
@@ -382,6 +426,40 @@ export async function importGetNoteMeeting(noteId, options = {}) {
   logFeishuRuntimeDiagnostics('importGetNoteMeeting');
 
   if (existingRecord?.status === 'success' && !existingRecord.content_hash && !options.force) {
+    const existingDraft = await getMeetingTaskDraftBySource('getnote', normalizedNoteId, { includeAnyStatus: true });
+    if (existingDraft && !(await hasSuccessfulDraftCardDelivery(existingDraft.id))) {
+      const recoveryLockOwner = newDispatchLockOwner();
+      const recoveryLock = await claimGetNoteDispatchLock(normalizedNoteId, recoveryLockOwner);
+
+      if (!recoveryLock.claimed) {
+        return {
+          success: true,
+          note_id: normalizedNoteId,
+          title: existingRecord.title || undefined,
+          status: 'skipped',
+          reason: 'dispatch_in_progress',
+          table_url: existingRecord.table_url || undefined,
+          lock: {
+            status: 'busy',
+            lease_until: recoveryLock.lease_until || undefined
+          }
+        };
+      }
+
+      try {
+        const recovered = await recoverGetNoteCardDelivery({
+          noteId: normalizedNoteId,
+          draft: existingDraft,
+          options,
+          title: existingRecord.title || undefined,
+          tableUrl: existingRecord.table_url || undefined
+        });
+        if (recovered) return recovered;
+      } finally {
+        await releaseGetNoteDispatchLock(normalizedNoteId, recoveryLockOwner);
+      }
+    }
+
     return {
       success: true,
       note_id: normalizedNoteId,
@@ -480,6 +558,16 @@ export async function importGetNoteMeeting(noteId, options = {}) {
         notifyStatus: existingRecord.notify_status,
         notifyError: existingRecord.notify_error
       });
+      const existingDraft = await getMeetingTaskDraftBySource('getnote', normalizedNoteId, { includeAnyStatus: true });
+      const recovered = await recoverGetNoteCardDelivery({
+        noteId: normalizedNoteId,
+        draft: existingDraft,
+        options,
+        title: meetingTitle,
+        tableUrl: existingRecord.table_url || undefined
+      });
+      if (recovered) return { ...recovered, content_hash: contentHash };
+
       return {
         success: true,
         note_id: normalizedNoteId,
@@ -887,17 +975,6 @@ export async function syncRecentGetNotes({ limit, tag, ignoreTag = false, reanal
       }
 
       const record = await getGetNoteSyncRecord(noteId);
-
-      if (record?.status === 'success' && !force) {
-        skipped.push({
-          note_id: noteId,
-          title,
-          reason: 'already_synced',
-          table_url: record?.table_url || null
-        });
-        console.log(`[GetNote Sync] skipped note_id=${noteId} reason=already_synced`);
-        continue;
-      }
 
       if (!force && isFreshProcessing(record)) {
         skipped.push({ note_id: noteId, title, reason: 'processing_recently', table_url: record?.table_url || null });

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { all, get, initDatabase } from '../db/database.js';
+import { all, get, initDatabase, run } from '../db/database.js';
 import { parseAssigneeMap } from '../services/feishuTaskCardPure.js';
 import { extractGetNoteContentWithMeta } from '../services/getnoteClient.js';
 import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle } from '../services/getnoteImportService.js';
@@ -127,6 +127,67 @@ async function testImportCreatesPendingDraftAndSkipsUnchangedContent() {
   assert.match(draft.draft_json, /待确认/);
 }
 
+async function testImportRecoversUnchangedDraftWithoutSentDelivery() {
+  const content = '张三今天修复 GetNote 确认卡片并接入总表。';
+  const noteId = `getnote_workflow_recover_${Date.now()}`;
+  const sentCards = [];
+
+  const firstOptions = workflowOptions(noteId, content, sentCards);
+  const recoveryOptions = workflowOptions(noteId, content, sentCards);
+  const first = await importGetNoteMeeting(noteId, firstOptions);
+  const draft = await get('SELECT * FROM meeting_task_drafts WHERE source_type = ? AND source_id = ?', ['getnote', noteId]);
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET delivery_status = 'failed', card_message_id = ''
+     WHERE draft_id = ?`,
+    [draft.id]
+  );
+
+  const recovered = await importGetNoteMeeting(noteId, recoveryOptions);
+  const states = await all('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ?', [draft.id]);
+
+  assert.equal(first.status, 'pending_confirmation');
+  assert.equal(recovered.status, 'skipped');
+  assert.equal(recovered.reason, 'delivery_recovered');
+  assert.equal(sentCards.length, 2);
+  assert.equal(recoveryOptions.notifications.length, 1);
+  assert.equal(recoveryOptions.notifications[0].status, 'getnote_cards_sent');
+  assert.equal(states.length, 1);
+  assert.equal(states[0].delivery_status, 'sent');
+  assert.match(states[0].card_message_id, /om_getnote_workflow_/);
+}
+
+async function testImportRecoveryRespectsActiveDispatchLock() {
+  const content = '张三今天修复 GetNote 确认卡片并接入总表。';
+  const noteId = `getnote_workflow_busy_${Date.now()}`;
+  const sentCards = [];
+
+  const firstOptions = workflowOptions(noteId, content, sentCards);
+  const busyOptions = workflowOptions(noteId, content, sentCards);
+  await importGetNoteMeeting(noteId, firstOptions);
+  const draft = await get('SELECT * FROM meeting_task_drafts WHERE source_type = ? AND source_id = ?', ['getnote', noteId]);
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET delivery_status = 'failed', card_message_id = ''
+     WHERE draft_id = ?`,
+    [draft.id]
+  );
+  await run(
+    `INSERT INTO getnote_dispatch_locks (note_id, lock_owner, lease_until, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [noteId, 'other-worker', new Date(Date.now() + 60000).toISOString(), new Date().toISOString(), new Date().toISOString()]
+  );
+
+  const result = await importGetNoteMeeting(noteId, busyOptions);
+  const lock = await get('SELECT * FROM getnote_dispatch_locks WHERE note_id = ?', [noteId]);
+
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.reason, 'dispatch_in_progress');
+  assert.equal(sentCards.length, 1);
+  assert.equal(busyOptions.notifications.length, 0);
+  assert.equal(lock.lock_owner, 'other-worker');
+}
+
 async function testImportSplitsKnownAndUnknownGetNoteTasks() {
   const content = '张三今天修复 GetNote 确认卡片，另外有人要整理订单接口错误日志并发到群里但无法确认负责人。';
   const noteId = `getnote_workflow_mixed_${Date.now()}`;
@@ -239,6 +300,8 @@ await initDatabase();
 testGetNoteSummaryIsNotUsedAsTaskSource();
 testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles();
 await testImportCreatesPendingDraftAndSkipsUnchangedContent();
+await testImportRecoversUnchangedDraftWithoutSentDelivery();
+await testImportRecoveryRespectsActiveDispatchLock();
 await testImportSplitsKnownAndUnknownGetNoteTasks();
 await testForceCardResendReplacesExistingGetNoteCard();
 
