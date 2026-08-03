@@ -15,6 +15,7 @@
     "test:transcript-attribution": "node scripts/test-transcript-attribution.js",
     "test:ownership-attribution": "node scripts/test-ownership-attribution.js",
     "test:task-filter-explicit-product-actions": "node scripts/test-task-filter-explicit-product-actions.js",
+    "test:task-filter-uncertain-actionables": "node scripts/test-task-filter-uncertain-actionables.js",
     "test:master-task-audit-log": "node scripts/test-master-task-audit-log.js",
     "test:master-task-audit-evaluator": "node scripts/test-master-task-audit-evaluator.js",
     "test:master-task-audit-cards": "node scripts/test-master-task-audit-cards.js",
