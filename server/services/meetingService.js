@@ -24,7 +24,8 @@ const ACTION_VERBS = [
   '对接', '迁移', '开发', '调整', '排查', '提供', '创建', '更新', '删除', '配置', '审核', '验证',
   '梳理', '汇总', '接入', '优化', '完成', '提交', '清理', '迭代', '收集', '分析', '建立', '下架',
   '跑通', '跑起', '研究', '获取', '调试', '推送', '维护', '回归', '计算', '交付', '部署', '运营',
-	  '替换', '观察', '复盘', '复查', '发布', '发版', '拉取', '同步', '改造', '恢复', '开放', '接好', '输出'
+	  '替换', '观察', '复盘', '复查', '发布', '发版', '拉取', '同步', '改造', '恢复', '开放', '接好', '输出',
+	  '解决', '评审', '调研', '分析', '完善', '沟通', '协调', '校验', '搭建', '制定', '复测'
 ];
 
 const OBJECT_KEYWORDS = [
@@ -152,8 +153,21 @@ function isVagueTaskName(taskName) {
     && !hasClearObject(taskName);
 }
 
-function evidenceLooksActionable(evidence) {
+function evidenceLooksActionable(evidence, task) {
+  if (task?.evidence_check?.has_action_signal === true) return Boolean(evidence);
+  if (task?.evidence_check?.has_action_signal === false) return false;
   return Boolean(evidence) && hasActionVerb(evidence);
+}
+
+function objectLooksPresent(combined, task) {
+  if (task?.evidence_check?.has_usable_object === true) return true;
+  if (task?.evidence_check?.has_usable_object === false) return false;
+  return containsAny(combined, OBJECT_KEYWORDS);
+}
+
+function llmKeptWithEvidence(task) {
+  return task?.validator_status === 'kept'
+    && task?.evidence_check?.has_transcript_evidence === true;
 }
 
 function containsAny(value, signals) {
@@ -199,7 +213,15 @@ function uncertainCanKeep(scored, task) {
     && scored.hasEvidence
     && (scored.hasAction || hasStructuredDeliverySignal)
     && scored.hasObject
-    && scored.evidenceActionable
+    && (scored.evidenceActionable || hasStructuredDeliverySignal)
+    && !isVagueTaskName(scored.taskName);
+}
+
+function llmCanKeep(scored, task) {
+  return llmKeptWithEvidence(task)
+    && scored.hasEvidence
+    && (scored.hasAction || task.evidence_check?.has_action_signal === true)
+    && (scored.hasObject || task.evidence_check?.has_usable_object === true)
     && !isVagueTaskName(scored.taskName);
 }
 
@@ -299,12 +321,14 @@ function scoreTask(task) {
     reasons.push('action_verb');
   }
 
-  if (hasClearObject(combined)) {
+  const hasObject = objectLooksPresent(combined, task);
+  if (hasObject) {
     score += 25;
     reasons.push('clear_object');
   }
 
-  if (evidence && evidenceLooksActionable(evidence)) {
+  const isEvidenceActionable = evidenceLooksActionable(evidence, task);
+  if (evidence && isEvidenceActionable) {
     score += 20;
     reasons.push('actionable_evidence');
   }
@@ -324,7 +348,7 @@ function scoreTask(task) {
     reasons.push('vague_task_name');
   }
 
-  if (evidence && !evidenceLooksActionable(evidence)) {
+  if (evidence && !isEvidenceActionable) {
     score -= 30;
     reasons.push('evidence_not_actionable');
   }
@@ -352,9 +376,9 @@ function scoreTask(task) {
     deadline: deadlineResult.deadline,
     deadlineNeedsConfirmation: deadlineResult.needsConfirmation,
     hasAction: hasActionVerb(taskName),
-    hasObject: hasClearObject(combined),
+    hasObject: hasObject,
     hasEvidence: Boolean(evidence),
-    evidenceActionable: evidenceLooksActionable(evidence),
+    evidenceActionable: isEvidenceActionable,
     score: Math.max(0, Math.min(100, score)),
     reasons
   };
@@ -493,7 +517,7 @@ export function filterActionableTasks(tasks = []) {
 
     const nameQuality = improveAndValidateTaskName(task);
 
-    if (!nameQuality.keep) {
+    if (!nameQuality.keep && !llmKeptWithEvidence(task)) {
 	      removed.push(removalRecord(task, nameQuality.reason, {
 	        task: nameQuality.task_name || getTaskName(task) || '未命名任务',
 	        actionable_score: 0,
@@ -501,6 +525,14 @@ export function filterActionableTasks(tasks = []) {
 	      }));
       console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=${nameQuality.reason}`);
       continue;
+    }
+
+    if (!nameQuality.keep && llmKeptWithEvidence(task)) {
+      nameQuality.keep = true;
+      nameQuality.reason = 'llm_kept_uncertain_quality';
+      nameQuality.needs_confirmation = true;
+      nameQuality.quality_score = nameQuality.quality_score || 0;
+      console.log(`[Task Filter] downgrade task=${getTaskName(task) || '未命名任务'} reason=llm_kept_uncertain_quality`);
     }
 
     const qualityTask = nameQuality.rewritten
@@ -516,9 +548,10 @@ export function filterActionableTasks(tasks = []) {
 	    const canKeepByScore = scored.taskType === 'action_item'
 	      ? scored.score >= threshold && scored.hasAction && scored.hasObject && scored.hasEvidence && scored.evidenceActionable && !isVagueTaskName(scored.taskName)
 	      : scored.taskType === 'follow_up' && scored.score >= threshold && scored.hasAction && scored.hasObject && scored.hasEvidence && scored.evidenceActionable && !isVagueTaskName(scored.taskName);
-	    const canKeep = canKeepByScore || uncertainCanKeep(scored, qualityTask);
+	    const canKeepByLlm = !canKeepByScore && llmCanKeep(scored, qualityTask);
+	    const canKeep = canKeepByScore || canKeepByLlm || uncertainCanKeep(scored, qualityTask);
     const decision = canKeep ? 'kept' : 'removed';
-    const reason = canKeep ? 'clear_action_item' : removalReason(scored);
+    const reason = canKeep ? (canKeepByScore ? 'clear_action_item' : 'llm_kept_uncertain') : removalReason(scored);
 
     console.log(`[Task Filter] score task=${scored.taskName || '未命名任务'} score=${scored.score} type=${scored.taskType} decision=${decision} reason=${reason}`);
 
@@ -542,7 +575,7 @@ export function filterActionableTasks(tasks = []) {
       assignee_source: qualityTask.assignee_source || (scored.assignee !== '待确认' ? 'speaker' : 'unclear'),
       source_speaker: qualityTask.source_speaker || '',
       source_time: qualityTask.source_time || '',
-	      needs_confirmation: scored.taskType === 'follow_up' || Boolean(task.needs_confirmation) || Boolean(nameQuality.needs_confirmation) || scored.deadlineNeedsConfirmation
+	      needs_confirmation: scored.taskType === 'follow_up' || Boolean(task.needs_confirmation) || Boolean(nameQuality.needs_confirmation) || scored.deadlineNeedsConfirmation || canKeepByLlm
 	    });
   }
 
