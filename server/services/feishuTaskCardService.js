@@ -355,7 +355,7 @@ async function loadActiveMasterTaskOptions(listRecords = listMasterTaskAuditReco
   }
 }
 
-export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, itemId = '', compactRefresh = false }, deps = {}) {
+export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, itemId = '', compactRefresh = false, recoverableFailure = false }, deps = {}) {
   const state = await getDraftAssigneeState(draftId, assigneeKey, cardKind);
   const draft = await getMeetingTaskDraftById(draftId);
 
@@ -396,9 +396,12 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     ? await buildMasterAssigneeOptions(listRecords)
     : [];
   const confirmationError = state.confirmation_error || '';
-  const card = confirmationError
+  const cardDraft = recoverableFailure && confirmationError
+    ? { ...draft, confirmation_error: confirmationError }
+    : draft;
+  const card = confirmationError && !recoverableFailure
     ? buildFailureCard({ message: confirmationError })
-    : buildCardForKind({ cardKind: effectiveCardKind, draft, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
+    : buildCardForKind({ cardKind: effectiveCardKind, draft: cardDraft, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
   return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
 }
 

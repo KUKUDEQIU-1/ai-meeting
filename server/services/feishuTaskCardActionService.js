@@ -115,13 +115,14 @@ async function assertMasterTaskNamesExist(tasks, dependencies, context) {
   }
 }
 
-async function updateCardAfterConfirmationFailure(dependencies, parsed, state) {
+async function updateCardAfterConfirmationFailure(dependencies, parsed, state, { recoverable = false } = {}) {
   const result = await dependencies.updateCard({
     messageId: parsed.message_id,
     draftId: parsed.draft_id,
     assigneeKey: state.assignee_key,
     cardKind: state.card_kind,
-    itemId: parsed.item_id || state.split_item_id || ''
+    itemId: parsed.item_id || state.split_item_id || '',
+    recoverableFailure: recoverable
   });
 
   if (result?.status === 'skipped') {
@@ -149,6 +150,10 @@ function progressUpdateFromTask(task, operatorOpenId, timestamp) {
     updated_by: operatorOpenId,
     updated_at: timestamp
   };
+}
+
+function isRecoverableTaskChoiceFailure(error, taskChoice) {
+  return taskChoice === 'old_task_progress' && error?.status === 400;
 }
 
 function feishuCallbackToast(content) {
@@ -491,6 +496,21 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     });
     return feishuCallbackToast(taskChoice === 'old_task_progress' ? '旧任务进展已处理' : '新任务已处理');
   } catch (error) {
+    const recoverable = isRecoverableTaskChoiceFailure(error, taskChoice);
+    if (recoverable) {
+      await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
+        ...task,
+        matched_task_name: '',
+        task_choice: '',
+        status: 'pending',
+        action_result: '',
+        action_result_at: '',
+        confirmed_by: '',
+        confirmed_at: '',
+        updated_by: parsed.operator_open_id,
+        updated_at: new Date().toISOString()
+      }));
+    }
     await resetDraftAssigneeConfirmationAfterFailure({
       draftId: parsed.draft_id,
       assigneeKey: state.assignee_key,
@@ -499,7 +519,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
       callbackId: parsed.callback_id
     });
     try {
-      await updateCardAfterConfirmationFailure(dependencies, parsed, state);
+      await updateCardAfterConfirmationFailure(dependencies, parsed, state, { recoverable });
     } catch (cardError) {
       console.warn(`[Feishu Card Action] failure card update failed draft_id=${parsed.draft_id} assignee=${state.assignee_key} error=${cardError instanceof Error ? cardError.message : String(cardError)}`);
     }
@@ -673,6 +693,7 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const ownedTasks = (draft?.draft_tasks || []).filter((task) => normalizeAssigneeKey(assigneeNameOf(task)) === state.assignee_key);
   const timestamp = new Date().toISOString();
+  let hasOldProgressTasks = false;
 
   try {
     const confirmedNewTasks = [];
@@ -687,6 +708,7 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
         return { ...task, task_choice: taskChoiceFromCurrentForm(task, parsed.raw_form_values) };
       });
     const oldProgressTasks = pendingTasks.filter((task) => task.task_choice === 'old_task_progress');
+    hasOldProgressTasks = oldProgressTasks.length > 0;
 
     await assertMasterTaskNamesExist(oldProgressTasks, dependencies, {
     });
@@ -759,6 +781,7 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
     await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: true, itemId: scopedItemId });
     return feishuCallbackToast(convertedProgressUpdates.length && !confirmedNewTasks.length ? '旧任务进展已确认' : '你的选择已确认');
   } catch (error) {
+    const recoverable = hasOldProgressTasks && error?.status === 400;
     await resetDraftAssigneeConfirmationAfterFailure({
       draftId: parsed.draft_id,
       assigneeKey: state.assignee_key,
@@ -767,7 +790,7 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
       callbackId: parsed.callback_id
     });
     try {
-      await updateCardAfterConfirmationFailure(dependencies, parsed, state);
+      await updateCardAfterConfirmationFailure(dependencies, parsed, state, { recoverable });
     } catch (cardError) {
       console.warn(`[Feishu Card Action] failure card update failed draft_id=${parsed.draft_id} assignee=${state.assignee_key} error=${cardError instanceof Error ? cardError.message : String(cardError)}`);
     }
