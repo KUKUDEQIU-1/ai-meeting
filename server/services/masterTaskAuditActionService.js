@@ -116,6 +116,43 @@ function safeAuditCallbackMetadata(parsed) {
   };
 }
 
+function formValueShape(value) {
+  if (Array.isArray(value)) return 'array';
+  if (value === null) return 'null';
+  return typeof value;
+}
+
+function rawFormValueShape(rawFormValues) {
+  const entries = Object.entries(rawFormValues || {});
+
+  return entries.slice(0, 20).map(([key, value]) => ({
+    key,
+    type: formValueShape(value),
+    child_keys: value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.keys(value).slice(0, 20)
+      : []
+  }));
+}
+
+function parsedFormPresence(formValues) {
+  return {
+    task_status: Boolean(String(formValues.task_status || '').trim()),
+    completion_date: Boolean(String(formValues.completion_date || '').trim()),
+    progress_text: Boolean(String(formValues.progress_text || '').trim()),
+    task_note: Boolean(String(formValues.task_note || '').trim())
+  };
+}
+
+function logAuditValidationFailure({ error, parsed, submittedValues }) {
+  console.error('[Master Task Audit] validation failed', JSON.stringify({
+    ...safeAuditCallbackMetadata(parsed),
+    status: error?.status ?? null,
+    error_message: error instanceof Error ? error.message : String(error),
+    raw_form_value_shape: rawFormValueShape(parsed.raw_form_values || {}),
+    parsed_form_presence: parsedFormPresence(submittedValues || {})
+  }, null, 2));
+}
+
 function feishuPatchFailureClass(feishuResponse) {
   return Number(feishuResponse.code) === 200671 ? 'feishu_card_patch_failed' : 'terminal_card_patch_failed';
 }
@@ -198,9 +235,15 @@ export async function prepareMasterTaskAuditCardAction(payload) {
     return { parsed, auditLog, response: feishuCallbackToast('已处理，无需重复操作'), shouldProcess: false };
   }
 
-  const submittedValues = parsed.action === 'master_task_confirm_update'
-    ? normalizeConfirmUpdateValues(parsed.form_values)
-    : null;
+  let submittedValues = null;
+  if (parsed.action === 'master_task_confirm_update') {
+    try {
+      submittedValues = normalizeConfirmUpdateValues(parsed.form_values);
+    } catch (error) {
+      logAuditValidationFailure({ error, parsed, submittedValues: parsed.form_values });
+      throw error;
+    }
+  }
 
   return { parsed, auditLog, submittedValues, response: feishuCallbackToast('正在处理'), shouldProcess: true };
 }

@@ -353,6 +353,42 @@ async function testConfirmUpdateRejectsMissingProgressBeforeWriting() {
   assert.equal(stored.callback_id || '', '');
 }
 
+async function testConfirmUpdateValidationLogRedactsFormValues() {
+  const auditLog = await createAuditLog();
+  const previousError = console.error;
+  const records = [];
+  console.error = (...args) => {
+    records.push(args.map((item) => String(item)).join(' '));
+  };
+
+  try {
+    await assert.rejects(
+      prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', {
+        task_status: '进行中',
+        completion_date: '2026-08-21',
+        progress_text: '',
+        raw_secret_field: '不应出现在日志里的原始文本',
+        master_task_audit_form: {
+          progress_text: { value: '' },
+          task_note: { value: '也不应出现的备注文本' }
+        }
+      })),
+      /任务进展不能为空/
+    );
+  } finally {
+    console.error = previousError;
+  }
+
+  const serialized = records.join('\n');
+  assert.match(serialized, /\[Master Task Audit\] validation failed/);
+  assert.match(serialized, /raw_form_value_shape/);
+  assert.match(serialized, /parsed_form_presence/);
+  assert.match(serialized, /raw_secret_field/);
+  assert.match(serialized, /master_task_audit_form/);
+  assert.equal(serialized.includes('不应出现在日志里的原始文本'), false);
+  assert.equal(serialized.includes('也不应出现的备注文本'), false);
+}
+
 async function testConfirmUpdateFailureKeepsAuditStateSentUntilCanonicalWriteSucceeds() {
   const auditLog = await createAuditLog();
   const payload = payloadFor(auditLog, 'master_task_confirm_update', {
@@ -606,6 +642,7 @@ await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();
 await testConfirmUpdateRejectsCompletedStatusWithoutValidCompletionDateBeforeWriting();
 await testConfirmUpdateRejectsMissingCanonicalStatusBeforeWriting();
 await testConfirmUpdateRejectsMissingProgressBeforeWriting();
+await testConfirmUpdateValidationLogRedactsFormValues();
 await testConfirmUpdateFailureKeepsAuditStateSentUntilCanonicalWriteSucceeds();
 await testConfirmUpdateWrongActorAndReplayDoNotWriteCanonicalValues();
 await testWrongActorIsRejected();
