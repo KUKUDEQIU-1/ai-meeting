@@ -38,6 +38,31 @@ function testInProgressAuditCardContainsEditableProgressForm() {
   assert.match(text, /"audit_log_id":101/);
 }
 
+function testForceUniqueAuditCardKeepsCanonicalRecordInCallbacks() {
+  const card = buildMasterTaskInProgressAuditCard({
+    audit: {
+      id: 1084,
+      record_id: 'recvoXnJJyPoFM',
+      audit_date: '2026-08-03',
+      audit_type: 'in_progress_missing_update__test__644188',
+      task_name: 'ai会议助手 [TEST-644188 02:37:24]',
+      assignee_name: '简学勤',
+      progress_text: '已完成收尾，实测中'
+    }
+  });
+  const confirmButton = formControl(card, 'master_task_confirm_update');
+  const noUpdateButton = formControl(card, 'master_task_no_update');
+
+  const confirmValue = confirmButton.behaviors[0].value;
+  const noUpdateValue = noUpdateButton.behaviors[0].value;
+
+  assert.equal(confirmValue.audit_record_id, 'recvoXnJJyPoFM');
+  assert.equal(confirmValue.audit_record_id.includes('__test__'), false);
+  assert.equal(confirmValue.audit_type, 'in_progress_missing_update__test__644188');
+  assert.equal(noUpdateValue.audit_record_id, 'recvoXnJJyPoFM');
+  assert.equal(noUpdateValue.audit_type, 'in_progress_missing_update__test__644188');
+}
+
 function testInProgressAuditCardUsesCanonicalEditFieldDefaults() {
   const card = buildMasterTaskInProgressAuditCard({
     audit: {
@@ -199,6 +224,7 @@ function testBlankCompletionDateOmitsInitialDate() {
 }
 
 testInProgressAuditCardContainsEditableProgressForm();
+testForceUniqueAuditCardKeepsCanonicalRecordInCallbacks();
 testInProgressAuditCardUsesCanonicalEditFieldDefaults();
 testPausedAuditCardContainsReminderOnly();
 testTerminalCardsRenderDoneState();

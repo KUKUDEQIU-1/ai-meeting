@@ -193,6 +193,45 @@ async function testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedV
   assert.equal(stored.submitted_note, '动作提交备注-739');
 }
 
+async function testForceUniqueAuditLogConfirmationUsesCanonicalRecordId() {
+  const auditLog = await upsertMasterTaskAuditLog({
+    recordId: 'recvoXnJJyPoFM',
+    taskName: 'ai会议助手 [TEST-644188 02:37:24]',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveIdType: 'open_id',
+    receiveId: 'ou_audit_actor',
+    taskStatus: '进行中',
+    auditDate: '2026-08-03',
+    auditType: 'in_progress_missing_update__test__644188',
+    actionTaken: 'sent',
+    cardMessageId: `om_force_unique_${Date.now()}`
+  });
+  const submittedValues = {
+    task_status: '进行中',
+    completion_date: '2026-08-03',
+    progress_text: '唯一测试卡确认进展',
+    task_note: '唯一测试卡确认备注'
+  };
+  const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', submittedValues));
+  let updatedPayload = null;
+
+  await processPreparedFeishuCardAction(prepared, {
+    updateProgress: async (payload) => {
+      updatedPayload = payload;
+      return { status: 'updated' };
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.equal(updatedPayload.recordId, 'recvoXnJJyPoFM');
+  assert.equal(updatedPayload.recordId.includes('__test__'), false);
+  assert.equal(stored.record_id, 'recvoXnJJyPoFM');
+  assert.equal(stored.audit_type, 'in_progress_missing_update__test__644188');
+  assert.equal(stored.action_taken, 'confirmed_updated');
+}
+
 async function testConfirmUpdatePatchesTerminalMasterAuditCardPayload() {
   const previousFetch = globalThis.fetch;
   const previousAppId = process.env.FEISHU_APP_ID;
@@ -561,6 +600,7 @@ await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
 await testConfirmUpdateKeepsSuccessWhenTerminalCardPatchFails();
 await testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues();
+await testForceUniqueAuditLogConfirmationUsesCanonicalRecordId();
 await testConfirmUpdatePatchesTerminalMasterAuditCardPayload();
 await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();
 await testConfirmUpdateRejectsCompletedStatusWithoutValidCompletionDateBeforeWriting();

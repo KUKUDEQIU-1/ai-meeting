@@ -51,6 +51,55 @@ async function testUpsertUsesOneRowPerRecordDateAndType() {
   assert.equal(row.card_message_id, 'om_audit_card_1');
 }
 
+async function testForcedAuditTypesCreateDistinctRowsForCanonicalRecord() {
+  const recordId = `record_force_unique_${Date.now()}`;
+  const auditDate = '2026-08-03';
+
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: 'ai会议助手',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_audit_actor',
+    taskStatus: '进行中',
+    auditDate,
+    auditType: 'in_progress_missing_update',
+    actionTaken: 'sent'
+  });
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: 'ai会议助手 [TEST-644188]',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_audit_actor',
+    taskStatus: '进行中',
+    auditDate,
+    auditType: 'in_progress_missing_update__test__644188',
+    actionTaken: 'pending'
+  });
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: 'ai会议助手 [TEST-644188 updated]',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_audit_actor',
+    taskStatus: '进行中',
+    auditDate,
+    auditType: 'in_progress_missing_update__test__644188',
+    actionTaken: 'failed'
+  });
+
+  const rows = (await listMasterTaskAuditLogs(auditDate)).filter((item) => item.record_id === recordId);
+  const normal = await getMasterTaskAuditLog(recordId, auditDate, 'in_progress_missing_update');
+  const forced = await getMasterTaskAuditLog(recordId, auditDate, 'in_progress_missing_update__test__644188');
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows.every((row) => row.record_id === recordId), true);
+  assert.equal(normal.action_taken, 'sent');
+  assert.equal(forced.action_taken, 'failed');
+  assert.equal(forced.task_name, 'ai会议助手 [TEST-644188 updated]');
+}
+
 async function testMarkSentActionAndCallbackLookups() {
   const recordId = `record_sent_${Date.now()}`;
   const auditDate = '2026-07-24';
@@ -157,6 +206,7 @@ async function testUpdatedActionPersistsCanonicalSubmittedValues() {
 
 await initDatabase();
 await testUpsertUsesOneRowPerRecordDateAndType();
+await testForcedAuditTypesCreateDistinctRowsForCanonicalRecord();
 await testMarkSentActionAndCallbackLookups();
 await testFailedActionIsRetryableAndUpdatedActionPersistsText();
 await testUpdatedActionPersistsCanonicalSubmittedValues();
