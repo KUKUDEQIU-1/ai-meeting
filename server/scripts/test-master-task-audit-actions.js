@@ -217,6 +217,38 @@ async function testConfirmUpdateAcceptsFeishuDatePickerTimestampString() {
   assert.equal(stored.submitted_completion_date, '2026-08-01');
 }
 
+async function testConfirmUpdateAcceptsCommonFeishuDateStringFormats() {
+  const cases = [
+    ['slash', '2026/8/1'],
+    ['chinese', '2026年8月1日'],
+    ['compact', '20260801'],
+    ['iso', '2026-08-01T09:30:00+08:00']
+  ];
+
+  for (const [label, completionDate] of cases) {
+    const auditLog = await createAuditLog();
+    const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', {
+      task_status: '已完成',
+      completion_date: completionDate,
+      progress_text: `日期格式 ${label} 进展`,
+      task_note: ''
+    }));
+    let updatedPayload = null;
+
+    await processPreparedFeishuCardAction(prepared, {
+      updateProgress: async (payload) => {
+        updatedPayload = payload;
+        return { status: 'updated' };
+      },
+      updateCard: async () => ({ status: 'updated' })
+    });
+    const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+    assert.equal(updatedPayload.completionDate, '2026-08-01');
+    assert.equal(stored.submitted_completion_date, '2026-08-01');
+  }
+}
+
 async function testForceUniqueAuditLogConfirmationUsesCanonicalRecordId() {
   const auditLog = await upsertMasterTaskAuditLog({
     recordId: 'recvoXnJJyPoFM',
@@ -407,6 +439,7 @@ async function testConfirmUpdateValidationLogRedactsFormValues() {
   assert.match(serialized, /\[Master Task Audit\] validation failed/);
   assert.match(serialized, /raw_form_value_shape/);
   assert.match(serialized, /parsed_form_presence/);
+  assert.match(serialized, /completion_date_shape/);
   assert.match(serialized, /raw_secret_field/);
   assert.match(serialized, /master_task_audit_form/);
   assert.equal(serialized.includes('不应出现在日志里的原始文本'), false);
@@ -661,6 +694,7 @@ await testConfirmUpdateWritesProgressText();
 await testConfirmUpdateKeepsSuccessWhenTerminalCardPatchFails();
 await testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues();
 await testConfirmUpdateAcceptsFeishuDatePickerTimestampString();
+await testConfirmUpdateAcceptsCommonFeishuDateStringFormats();
 await testForceUniqueAuditLogConfirmationUsesCanonicalRecordId();
 await testConfirmUpdatePatchesTerminalMasterAuditCardPayload();
 await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();

@@ -55,6 +55,15 @@ function dateOnlyFromDate(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+function dateOnlyFromParts(year, month, day) {
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return '';
+  }
+
+  return dateOnlyFromDate(date);
+}
+
 function dateFromTimestampText(text) {
   if (!/^\d{10,13}$/.test(text)) return null;
 
@@ -66,6 +75,28 @@ function dateFromTimestampText(text) {
   return date;
 }
 
+function dateOnlyFromText(text) {
+  const explicitDateMatch = /^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?(?:\D.*)?$/.exec(text);
+  if (explicitDateMatch) {
+    const [, year, month, day] = explicitDateMatch;
+    return dateOnlyFromParts(Number(year), Number(month), Number(day));
+  }
+
+  const compactDateMatch = /^(\d{4})(\d{2})(\d{2})$/.exec(text);
+  if (compactDateMatch) {
+    const [, year, month, day] = compactDateMatch;
+    return dateOnlyFromParts(Number(year), Number(month), Number(day));
+  }
+
+  const timestampDate = dateFromTimestampText(text);
+  if (timestampDate) return dateOnlyFromDate(timestampDate);
+
+  const parsedDate = new Date(text.replace(' ', 'T'));
+  if (!Number.isNaN(parsedDate.getTime())) return dateOnlyFromDate(parsedDate);
+
+  return '';
+}
+
 function normalizeCompletionDate(value, taskStatus) {
   const text = String(value || '').trim();
 
@@ -75,23 +106,9 @@ function normalizeCompletionDate(value, taskStatus) {
 
   if (!text) reject('完成日期不能为空', 400);
 
-  const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-  if (dateOnlyMatch) {
-    const [, year, month, day] = dateOnlyMatch;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
-    if (date.getFullYear() !== Number(year) || date.getMonth() !== Number(month) - 1 || date.getDate() !== Number(day)) {
-      reject('完成日期无效', 400);
-    }
-    return text;
-  }
-
-  const timestampDate = dateFromTimestampText(text);
-  if (timestampDate) return dateOnlyFromDate(timestampDate);
-
-  const date = new Date(text.replace(' ', 'T'));
-  if (Number.isNaN(date.getTime())) reject('完成日期无效', 400);
-
-  return dateOnlyFromDate(date);
+  const dateOnly = dateOnlyFromText(text);
+  if (!dateOnly) reject('完成日期无效', 400);
+  return dateOnly;
 }
 
 function hasCanonicalEditValues(formValues) {
@@ -161,13 +178,28 @@ function parsedFormPresence(formValues) {
   };
 }
 
+function completionDateShape(value) {
+  const text = String(value || '').trim();
+  return {
+    present: Boolean(text),
+    length: text.length,
+    digits_only: /^\d+$/.test(text),
+    has_dash: text.includes('-'),
+    has_slash: text.includes('/'),
+    has_chinese_date_marker: /[年月日]/.test(text),
+    has_time_separator: /[T:]/.test(text),
+    has_timezone_marker: /Z|[+-]\d{2}:?\d{2}$/.test(text)
+  };
+}
+
 function logAuditValidationFailure({ error, parsed, submittedValues }) {
   console.error('[Master Task Audit] validation failed', JSON.stringify({
     ...safeAuditCallbackMetadata(parsed),
     status: error?.status ?? null,
     error_message: error instanceof Error ? error.message : String(error),
     raw_form_value_shape: rawFormValueShape(parsed.raw_form_values || {}),
-    parsed_form_presence: parsedFormPresence(submittedValues || {})
+    parsed_form_presence: parsedFormPresence(submittedValues || {}),
+    completion_date_shape: completionDateShape(submittedValues?.completion_date)
   }, null, 2));
 }
 
