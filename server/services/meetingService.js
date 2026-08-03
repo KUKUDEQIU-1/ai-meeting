@@ -24,7 +24,7 @@ const ACTION_VERBS = [
   '对接', '迁移', '开发', '调整', '排查', '提供', '创建', '更新', '删除', '配置', '审核', '验证',
   '梳理', '汇总', '接入', '优化', '完成', '提交', '清理', '迭代', '收集', '分析', '建立', '下架',
   '跑通', '跑起', '研究', '获取', '调试', '推送', '维护', '回归', '计算', '交付', '部署', '运营',
-  '替换', '观察', '复盘', '复查', '发布', '发版', '拉取', '同步', '改造', '恢复', '开放', '接好'
+	  '替换', '观察', '复盘', '复查', '发布', '发版', '拉取', '同步', '改造', '恢复', '开放', '接好', '输出'
 ];
 
 const OBJECT_KEYWORDS = [
@@ -53,6 +53,13 @@ const NEW_ACTION_SIGNALS = ['今天', '下午', '明天', '本周', '会后', '�
 const STATUS_ONLY_SIGNALS = ['能看到', '表现', '带来', '数量', '尚未', '暂时', '停止', '停投', '偏低'];
 const CONTEXT_TASK_ROLES = new Set(['context', 'progress', 'discarded', 'discussion_only']);
 const CONTEXT_ACTIONABILITY = new Set(['context_only', 'status_only', 'generic_follow_up', 'unclear']);
+const VALIDATOR_METADATA_FIELDS = [
+  'discard_category',
+  'evidence_check',
+  'missing_fields',
+  'evidence_signal_types',
+  'uncertainty_reason'
+];
 
 function getTaskName(task) {
   return task.task_name || task.title || task.task || task.name || '';
@@ -152,6 +159,48 @@ function evidenceLooksActionable(evidence) {
 function containsAny(value, signals) {
   const text = String(value || '');
   return signals.some((signal) => text.includes(signal));
+}
+
+function pickMetadata(source, fields) {
+  return fields.reduce((metadata, field) => {
+    if (source?.[field] !== undefined) {
+      metadata[field] = source[field];
+    }
+
+    return metadata;
+  }, {});
+}
+
+function removalRecord(task, reason, extras = {}) {
+  return {
+    task: getTaskName(task) || '未命名任务',
+    reason,
+    ...pickMetadata(task, VALIDATOR_METADATA_FIELDS),
+    ...extras
+  };
+}
+
+function validatorTask(candidate, decision, status) {
+  return {
+    ...candidate,
+    ...pickMetadata(decision, VALIDATOR_METADATA_FIELDS),
+    validator_status: status,
+    validator_reason: decision.reason || ''
+  };
+}
+
+function uncertainCanKeep(scored, task) {
+  const evidenceSignalTypes = Array.isArray(task.evidence_signal_types) ? task.evidence_signal_types : [];
+  const hasStructuredDeliverySignal = evidenceSignalTypes.some((signal) => (
+    ['delivery_signal', 'implicit_delivery_signal', 'next_step_signal', 'new_delivery_signal'].includes(signal)
+  ));
+
+  return Boolean(task.actionable_uncertain)
+    && scored.hasEvidence
+    && (scored.hasAction || hasStructuredDeliverySignal)
+    && scored.hasObject
+    && scored.evidenceActionable
+    && !isVagueTaskName(scored.taskName);
 }
 
 function hasTodayNewActionSignal(task) {
@@ -413,13 +462,11 @@ export function filterActionableTasks(tasks = []) {
 	for (const task of tasks) {
 	  const contextReason = semanticContextReason(task);
 
-	  if (contextReason) {
-	    removed.push({
-	      task: getTaskName(task) || '未命名任务',
-	      reason: contextReason,
-	      actionable_score: 0,
-	      task_type: task.task_type || task.item_type || 'discussion_only'
-	    });
+		  if (contextReason) {
+		    removed.push(removalRecord(task, contextReason, {
+		      actionable_score: 0,
+		      task_type: task.task_type || task.item_type || 'discussion_only'
+		    }));
 	    console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=${contextReason}`);
 	    continue;
 	  }
@@ -427,23 +474,19 @@ export function filterActionableTasks(tasks = []) {
 	  if (looksLikeProgressUpdate(task)) {
       const progress = taskToProgressUpdate(task, task.item_type || 'existing_task_progress', '进展/完成/历史延续表述，不写入今日任务表');
       progressUpdates.push(progress);
-      removed.push({
-        task: getTaskName(task) || '未命名任务',
-        reason: 'progress_update',
-        actionable_score: 0,
-        task_type: task.task_type || task.item_type || 'progress_update'
-      });
+	      removed.push(removalRecord(task, 'progress_update', {
+	        actionable_score: 0,
+	        task_type: task.task_type || task.item_type || 'progress_update'
+	      }));
       console.log(`[Task Filter] suppress progress task=${getTaskName(task) || '未命名任务'} reason=progress_update`);
       continue;
     }
 
     if (isGenericContinuationTask(task)) {
-      removed.push({
-        task: getTaskName(task) || '未命名任务',
-        reason: 'generic_continuation',
-        actionable_score: 0,
-        task_type: task.task_type || task.item_type || 'action_item'
-      });
+	      removed.push(removalRecord(task, 'generic_continuation', {
+	        actionable_score: 0,
+	        task_type: task.task_type || task.item_type || 'action_item'
+	      }));
       console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=generic_continuation`);
       continue;
     }
@@ -451,12 +494,11 @@ export function filterActionableTasks(tasks = []) {
     const nameQuality = improveAndValidateTaskName(task);
 
     if (!nameQuality.keep) {
-      removed.push({
-        task: nameQuality.task_name || getTaskName(task) || '未命名任务',
-        reason: nameQuality.reason,
-        actionable_score: 0,
-        task_type: task.task_type || task.item_type || 'action_item'
-      });
+	      removed.push(removalRecord(task, nameQuality.reason, {
+	        task: nameQuality.task_name || getTaskName(task) || '未命名任务',
+	        actionable_score: 0,
+	        task_type: task.task_type || task.item_type || 'action_item'
+	      }));
       console.log(`[Task Filter] remove task=${getTaskName(task) || '未命名任务'} reason=${nameQuality.reason}`);
       continue;
     }
@@ -471,21 +513,21 @@ export function filterActionableTasks(tasks = []) {
       : task;
     const scored = scoreTask(qualityTask);
     const threshold = scored.taskType === 'follow_up' ? 70 : 55;
-    const canKeep = scored.taskType === 'action_item'
-      ? scored.score >= threshold && scored.hasAction && scored.hasObject && scored.hasEvidence && scored.evidenceActionable && !isVagueTaskName(scored.taskName)
-      : scored.taskType === 'follow_up' && scored.score >= threshold && scored.hasAction && scored.hasObject && scored.hasEvidence && scored.evidenceActionable && !isVagueTaskName(scored.taskName);
+	    const canKeepByScore = scored.taskType === 'action_item'
+	      ? scored.score >= threshold && scored.hasAction && scored.hasObject && scored.hasEvidence && scored.evidenceActionable && !isVagueTaskName(scored.taskName)
+	      : scored.taskType === 'follow_up' && scored.score >= threshold && scored.hasAction && scored.hasObject && scored.hasEvidence && scored.evidenceActionable && !isVagueTaskName(scored.taskName);
+	    const canKeep = canKeepByScore || uncertainCanKeep(scored, qualityTask);
     const decision = canKeep ? 'kept' : 'removed';
     const reason = canKeep ? 'clear_action_item' : removalReason(scored);
 
     console.log(`[Task Filter] score task=${scored.taskName || '未命名任务'} score=${scored.score} type=${scored.taskType} decision=${decision} reason=${reason}`);
 
     if (!canKeep) {
-      removed.push({
-        task: scored.taskName || '未命名任务',
-        reason,
-        actionable_score: scored.score,
-        task_type: scored.taskType
-      });
+	      removed.push(removalRecord(qualityTask, reason, {
+	        task: scored.taskName || '未命名任务',
+	        actionable_score: scored.score,
+	        task_type: scored.taskType
+	      }));
       continue;
     }
 
@@ -500,17 +542,17 @@ export function filterActionableTasks(tasks = []) {
       assignee_source: qualityTask.assignee_source || (scored.assignee !== '待确认' ? 'speaker' : 'unclear'),
       source_speaker: qualityTask.source_speaker || '',
       source_time: qualityTask.source_time || '',
-      needs_confirmation: scored.taskType === 'follow_up' || Boolean(task.needs_confirmation) || Boolean(nameQuality.needs_confirmation) || scored.deadlineNeedsConfirmation
-    });
+	      needs_confirmation: scored.taskType === 'follow_up' || Boolean(task.needs_confirmation) || Boolean(nameQuality.needs_confirmation) || scored.deadlineNeedsConfirmation
+	    });
   }
 
   const dedupeResult = dedupeSimilarTasks(filtered);
   const dedupedTasks = dedupeResult.tasks;
-  const mergedRemoved = dedupeResult.merged.map((item) => ({
-    task: item.task,
-    reason: item.reason,
-    merged_into: item.into
-  }));
+	  const mergedRemoved = dedupeResult.merged.map((item) => ({
+	    task: item.task,
+	    reason: item.reason,
+	    merged_into: item.into
+	  }));
   const allRemoved = [...removed, ...mergedRemoved];
   const needsConfirmationCount = dedupedTasks.filter((task) => task.needs_confirmation).length;
 
@@ -566,13 +608,18 @@ function normalizeValidatorDecisions(validationResult) {
       return null;
     }
 
-    decisions.set(candidateId, {
-      candidate_id: candidateId,
-      action,
-      corrected_assignee: String(item.corrected_assignee || '').trim(),
-      merge_into_candidate_id: String(item.merge_into_candidate_id || '').trim(),
-      reason: String(item.reason || '').trim()
-    });
+	    decisions.set(candidateId, {
+	      candidate_id: candidateId,
+	      action,
+	      corrected_assignee: String(item.corrected_assignee || '').trim(),
+	      merge_into_candidate_id: String(item.merge_into_candidate_id || '').trim(),
+	      reason: String(item.reason || '').trim(),
+	      discard_category: String(item.discard_category || '').trim(),
+	      evidence_check: item.evidence_check && typeof item.evidence_check === 'object' ? item.evidence_check : null,
+	      missing_fields: Array.isArray(item.missing_fields) ? item.missing_fields.map((field) => String(field || '').trim()).filter(Boolean) : [],
+	      evidence_signal_types: Array.isArray(item.evidence_signal_types) ? item.evidence_signal_types.map((field) => String(field || '').trim()).filter(Boolean) : [],
+	      uncertainty_reason: String(item.uncertainty_reason || '').trim()
+	    });
   }
 
   return decisions;
@@ -587,58 +634,59 @@ async function validateCandidateTasks(aiInput, candidates, validateTasks) {
     const validationResult = await validateTasks({ meetingText: aiInput, candidates });
     const decisions = normalizeValidatorDecisions(validationResult);
 
-    if (!decisions) {
-      console.warn('[Task Validator] malformed response, fail-open keep all candidates');
-      return { tasks: candidates, removed: [] };
-    }
+	    if (!decisions) {
+	      console.warn('[Task Validator] malformed response, fail-open keep all candidates');
+	      return { tasks: candidates.map((candidate) => ({ ...candidate, validator_status: 'malformed_fail_open' })), removed: [] };
+	    }
 
-    return applyValidatorDecisions(candidates, decisions);
-  } catch (error) {
-    console.warn(`[Task Validator] skipped error=${error.message}`);
-    return { tasks: candidates, removed: [] };
-  }
+	    return applyValidatorDecisions(candidates, decisions);
+	  } catch (error) {
+	    console.warn(`[Task Validator] skipped error=${error.message}`);
+	    return { tasks: candidates.map((candidate) => ({ ...candidate, validator_status: 'error_fail_open' })), removed: [] };
+	  }
 }
 
 function applyValidatorDecisions(candidates, decisions) {
   const tasks = [];
   const removed = [];
 
-  for (const candidate of candidates) {
-    const decision = decisions.get(candidate.candidate_id) || { action: 'keep', reason: 'validator_missing_decision' };
-    const reason = decision.reason || decision.action;
+	  for (const candidate of candidates) {
+	    const decision = decisions.get(candidate.candidate_id) || { action: 'keep', reason: 'validator_missing_decision' };
+	    const reason = decision.reason || decision.action;
 
-    if (decision.action === 'discard') {
-      removed.push({
-        task: getTaskName(candidate) || '未命名任务',
-        reason: `validator_discard:${reason}`,
-        candidate_id: candidate.candidate_id
-      });
-      continue;
-    }
+	    if (decision.action === 'discard') {
+	      removed.push(removalRecord(candidate, `validator_discard:${reason}`, {
+	        candidate_id: candidate.candidate_id,
+	        ...pickMetadata(decision, VALIDATOR_METADATA_FIELDS)
+	      }));
+	      continue;
+	    }
 
-    if (decision.action === 'merge') {
-      removed.push({
-        task: getTaskName(candidate) || '未命名任务',
-        reason: `validator_merge:${reason}`,
-        candidate_id: candidate.candidate_id,
-        merged_into: decision.merge_into_candidate_id
-      });
-      continue;
-    }
+	    if (decision.action === 'merge') {
+	      removed.push(removalRecord(candidate, `validator_merge:${reason}`, {
+	        candidate_id: candidate.candidate_id,
+	        merged_into: decision.merge_into_candidate_id,
+	        ...pickMetadata(decision, VALIDATOR_METADATA_FIELDS)
+	      }));
+	      continue;
+	    }
 
-    if (decision.corrected_assignee) {
-      tasks.push({
-        ...candidate,
-        assignee: decision.corrected_assignee,
-        owner: decision.corrected_assignee,
-        assignee_source: 'validator_corrected',
-        needs_confirmation: Boolean(candidate.needs_confirmation)
-      });
-      continue;
-    }
+	    const status = reason === 'validator_missing_decision' ? 'missing_decision_fail_open' : 'kept';
+	    const keptCandidate = validatorTask(candidate, decision, status);
 
-    tasks.push(candidate);
-  }
+	    if (decision.corrected_assignee) {
+	      tasks.push({
+	        ...keptCandidate,
+	        assignee: decision.corrected_assignee,
+	        owner: decision.corrected_assignee,
+	        assignee_source: 'validator_corrected',
+	        needs_confirmation: Boolean(candidate.needs_confirmation)
+	      });
+	      continue;
+	    }
+
+	    tasks.push(keptCandidate);
+	  }
 
   return { tasks, removed };
 }
