@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getTenantAccessToken, listMasterTaskAuditRecords } from './feishuBitableClient.js';
-import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
+import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, classifyTaskCardDeliveryState, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
 import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
 
@@ -609,8 +609,9 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
   const startedAt = performance.now();
   const sendKey = `${draft.id}:${assignee.assignee_key}:${cardKind}`;
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
+  const deliveryState = classifyTaskCardDeliveryState(existingState, { explicit: true });
 
-  if (existingState?.delivery_status === 'sent' && existingState.card_message_id && options.forceResend !== true) {
+  if (deliveryState.status === 'already_sent' && options.forceResend !== true) {
     emitDeliveryDiagnostics(diagnosticsLogger, {
       phase: 'delivery_send',
       status: 'skipped',
@@ -676,13 +677,15 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
   }
 }
 
-function selectedFailedStates(states, assigneeKeys, cardKind) {
+function selectedRecoverableStates(states, assigneeKeys, cardKind) {
   const requested = (Array.isArray(assigneeKeys) ? assigneeKeys : []).map(normalizeAssigneeKey).filter(Boolean);
   const stateByKey = new Map((Array.isArray(states) ? states : [])
     .filter((state) => state.card_kind === cardKind)
     .map((state) => [normalizeAssigneeKey(state.assignee_key || state.assignee_name), state]));
 
-  return requested.map((assigneeKey) => stateByKey.get(assigneeKey)).filter(Boolean);
+  return requested
+    .map((assigneeKey) => stateByKey.get(assigneeKey))
+    .filter((state) => state && classifyTaskCardDeliveryState(state, { explicit: true }).should_send);
 }
 
 export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKind = 'tasks', execute = false }, deps = {}) {
@@ -698,7 +701,7 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
   const postMessage = deps.postMessage || sendInteractiveFeishuMessage;
   const diagnosticsLogger = deps.diagnosticsLogger || null;
   const states = await listDraftAssigneeStates(draft.id);
-  const selectedStates = selectedFailedStates(states, assigneeKeys, cardKind);
+  const selectedStates = selectedRecoverableStates(states, assigneeKeys, cardKind);
   const memberResult = await listGroupMembers();
   const members = memberResult?.status === 'success' ? memberResult.members : [];
   const configuredMap = deps.assigneeMap || parseAssigneeMap();
@@ -710,10 +713,7 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
   for (const state of selectedStates) {
     const assigneeKey = normalizeAssigneeKey(state.assignee_key || state.assignee_name);
 
-    if (state.delivery_status !== 'failed') {
-      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'skipped', reason: state.delivery_status === 'sent' ? 'already_sent' : 'not_failed' });
-      continue;
-    }
+    const deliveryState = classifyTaskCardDeliveryState(state, { explicit: true });
 
     const resolved = resolveAssigneeRecipient(assigneeKey, memberMap);
     if (!resolved) {
@@ -730,7 +730,7 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
     };
 
     if (!execute) {
-      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'dry_run', resolved: true });
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'dry_run', reason: deliveryState.reason, resolved: true });
       continue;
     }
 
@@ -743,7 +743,8 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
   for (const state of states) {
     const assigneeKey = normalizeAssigneeKey(state.assignee_key || state.assignee_name);
     if (requested.has(assigneeKey) && state.card_kind === cardKind && !selectedKeys.has(assigneeKey)) {
-      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'skipped', reason: state.delivery_status === 'sent' ? 'already_sent' : 'not_failed' });
+      const deliveryState = classifyTaskCardDeliveryState(state, { explicit: true });
+      results.push({ assignee_key: assigneeKey, card_kind: state.card_kind, status: 'skipped', reason: deliveryState.reason === 'sent_with_message_id' ? 'already_sent' : deliveryState.reason });
     }
   }
 

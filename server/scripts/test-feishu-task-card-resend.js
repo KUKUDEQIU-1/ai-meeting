@@ -12,6 +12,7 @@ const OPEN_IDS = {
   hong: 'ou_test_hong_draft_130',
   li: 'ou_test_li_draft_130',
   hu: 'ou_test_hu_draft_130',
+  missing: 'ou_test_missing_message_draft_130',
   lihao: 'ou_test_lihao_sent_draft_130',
   jian: 'ou_test_jian_sent_draft_130'
 };
@@ -48,6 +49,7 @@ async function createDraft130LikeState() {
       taskFor('洪伟填', 'failed_hong'),
       taskFor('李嘉华', 'failed_li'),
       taskFor('胡涌昌', 'failed_hu'),
+      taskFor('缺失消息', 'missing_message'),
       taskFor('待确认', 'unmapped_pending')
     ],
     existingMatches: [],
@@ -68,6 +70,7 @@ async function createDraft130LikeState() {
     ['洪伟填', '', 'failed', '', 'missing member before resend'],
     ['李嘉华', '', 'failed', '', 'missing member before resend'],
     ['胡涌昌', '', 'failed', '', 'missing member before resend'],
+    ['缺失消息', OPEN_IDS.missing, 'sent', '', 'sent without message id'],
     ['待确认', '', 'failed', '', 'unmapped assignee']
   ]) {
     await upsertDraftAssigneeState({
@@ -82,6 +85,57 @@ async function createDraft130LikeState() {
   }
 
   return draft;
+}
+
+async function testResendRecoversSentStateMissingMessageId() {
+  const draft = await createDraft130LikeState();
+  const sentMessages = [];
+  const result = await taskCardService.resendFailedDraftTaskCards({
+    draftId: draft.id,
+    assigneeKeys: ['缺失消息', '简学勤'],
+    execute: true
+  }, {
+    listGroupMembers: async () => ({ status: 'success', members: [{ name: '缺失消息', open_id: OPEN_IDS.missing }, { name: '简学勤', open_id: OPEN_IDS.jian }] }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId }) => {
+      sentMessages.push(receiveId);
+      return `om_recovered_${receiveId}`;
+    }
+  });
+  const states = await listDraftAssigneeStates(draft.id);
+  const stateByKey = new Map(states.map((state) => [state.assignee_key, state]));
+
+  assert.deepEqual(sentMessages, [OPEN_IDS.missing]);
+  assert.equal(result.sent_count, 1);
+  assert.equal(result.skipped_count, 1);
+  assert.equal(stateByKey.get('缺失消息').delivery_status, 'sent');
+  assert.equal(stateByKey.get('缺失消息').card_message_id, `om_recovered_${OPEN_IDS.missing}`);
+  assert.equal(stateByKey.get('简学勤').card_message_id, 'om_sent_jian');
+}
+
+async function testResendDryRunDoesNotSendRecoverableState() {
+  const draft = await createDraft130LikeState();
+  let sendCount = 0;
+  const result = await taskCardService.resendFailedDraftTaskCards({
+    draftId: draft.id,
+    assigneeKeys: ['缺失消息'],
+    execute: false
+  }, {
+    listGroupMembers: async () => ({ status: 'success', members: [{ name: '缺失消息', open_id: OPEN_IDS.missing }] }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async () => {
+      sendCount += 1;
+      return 'om_should_not_send';
+    }
+  });
+  const states = await listDraftAssigneeStates(draft.id);
+  const missingState = states.find((state) => state.assignee_key === '缺失消息');
+
+  assert.equal(sendCount, 0);
+  assert.equal(result.dry_run_count, 1);
+  assert.equal(result.results[0].status, 'dry_run');
+  assert.equal(result.results[0].reason, 'missing_message_id');
+  assert.equal(missingState.card_message_id, '');
 }
 
 async function testResendTargetsOnlyRequestedFailedAssignees() {
@@ -149,8 +203,8 @@ async function testResendFailsClosedWhenRequestedAssigneeIsAmbiguous() {
     listGroupMembers: async () => ({
       status: 'success',
       members: [
-        { name: '李嘉华.agent', open_id: OPEN_IDS.li },
-        { name: '李嘉华.ops', open_id: 'ou_test_li_ops' }
+        { name: '李嘉华研发', open_id: OPEN_IDS.li },
+        { name: '李嘉华运营', open_id: 'ou_test_li_ops' }
       ]
     }),
     listMasterTaskAuditRecords: async () => [],
@@ -246,6 +300,8 @@ async function testForceResendRequiresExplicitForceAndExecute() {
 async function main() {
   await initDatabase();
   await testResendTargetsOnlyRequestedFailedAssignees();
+  await testResendRecoversSentStateMissingMessageId();
+  await testResendDryRunDoesNotSendRecoverableState();
   await testResendFailsClosedWhenRequestedAssigneeIsAmbiguous();
   await testForceResendSentTaskCardReplacesMessageId();
   await testForceResendRequiresExplicitForceAndExecute();

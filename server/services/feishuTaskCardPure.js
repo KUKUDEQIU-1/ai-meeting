@@ -53,6 +53,26 @@ export function normalizeAssigneeKey(value) {
   return text || '待确认';
 }
 
+export function classifyTaskCardDeliveryState(state, { explicit = false } = {}) {
+  const deliveryStatus = String(state?.delivery_status || '').trim();
+  const messageId = String(state?.card_message_id || '').trim();
+
+  if (deliveryStatus === 'sent' && messageId) {
+    return { status: 'already_sent', reason: 'sent_with_message_id', should_send: false };
+  }
+  if (deliveryStatus === 'sent' && !messageId) {
+    return { status: explicit ? 'retryable' : 'not_selected', reason: 'missing_message_id', should_send: Boolean(explicit) };
+  }
+  if (deliveryStatus === 'failed') {
+    return { status: explicit ? 'retryable' : 'not_selected', reason: 'failed', should_send: Boolean(explicit) };
+  }
+  if (deliveryStatus === 'pending') {
+    return { status: 'in_flight', reason: 'pending', should_send: false };
+  }
+
+  return { status: explicit ? 'retryable' : 'not_selected', reason: deliveryStatus || 'missing_state', should_send: Boolean(explicit) };
+}
+
 export function itemScopeIncludes(itemScope, itemId) {
   const scope = String(itemScope || '').trim();
   if (!scope) return true;
