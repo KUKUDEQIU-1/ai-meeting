@@ -168,10 +168,87 @@ async function testResendFailsClosedWhenRequestedAssigneeIsAmbiguous() {
   assert.equal(result.results[0].error, 'current_member_not_found');
 }
 
+async function testForceResendSentTaskCardReplacesMessageId() {
+  assert.equal(typeof taskCardService.forceResendDraftTaskCard, 'function', 'service must export forceResendDraftTaskCard for maintenance sent-card recovery');
+
+  const draft = await createDraft130LikeState();
+  const beforeDraft = await getMeetingTaskDraftById(draft.id);
+  const sentMessages = [];
+  const result = await taskCardService.forceResendDraftTaskCard({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    cardKind: 'tasks',
+    force: true,
+    execute: true
+  }, {
+    listGroupMembers: async () => ({
+      status: 'success',
+      members: [{ name: '简学勤', open_id: OPEN_IDS.jian }]
+    }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, cardText: JSON.stringify(card) });
+      return `om_force_${receiveId}`;
+    }
+  });
+  const afterDraft = await getMeetingTaskDraftById(draft.id);
+  const states = await listDraftAssigneeStates(draft.id);
+  const stateByKey = new Map(states.map((state) => [state.assignee_key, state]));
+
+  assert.equal(result.status, 'success');
+  assert.equal(result.sent_count, 1);
+  assert.equal(result.results[0].status, 'sent');
+  assert.deepEqual(sentMessages.map((call) => call.receiveId), [OPEN_IDS.jian]);
+  assert.match(sentMessages[0].cardText, /简学勤 今日明确任务/);
+  assert.equal(stateByKey.get('简学勤').delivery_status, 'sent');
+  assert.equal(stateByKey.get('简学勤').receive_id, OPEN_IDS.jian);
+  assert.equal(stateByKey.get('简学勤').card_message_id, `om_force_${OPEN_IDS.jian}`);
+  assert.notEqual(stateByKey.get('简学勤').card_message_id, 'om_sent_jian');
+  assert.equal(stateByKey.get('利浩文').card_message_id, 'om_sent_lihao');
+  assert.deepEqual(afterDraft.draft_tasks, beforeDraft.draft_tasks);
+  assert.deepEqual(afterDraft.progress_updates, beforeDraft.progress_updates);
+}
+
+async function testForceResendRequiresExplicitForceAndExecute() {
+  const draft = await createDraft130LikeState();
+  let sendCount = 0;
+
+  for (const options of [
+    { force: false, execute: true },
+    { force: true, execute: false },
+    { execute: true },
+    { force: true }
+  ]) {
+    const result = await taskCardService.forceResendDraftTaskCard({
+      draftId: draft.id,
+      assigneeKey: '简学勤',
+      cardKind: 'tasks',
+      ...options
+    }, {
+      listGroupMembers: async () => ({ status: 'success', members: [{ name: '简学勤', open_id: OPEN_IDS.jian }] }),
+      listMasterTaskAuditRecords: async () => [],
+      postMessage: async () => {
+        sendCount += 1;
+        return 'om_should_not_send';
+      }
+    });
+
+    assert.equal(result.sent_count, 0);
+    assert.equal(result.results[0].status, 'skipped');
+  }
+
+  const states = await listDraftAssigneeStates(draft.id);
+  const jianState = states.find((state) => state.assignee_key === '简学勤');
+  assert.equal(sendCount, 0);
+  assert.equal(jianState.card_message_id, 'om_sent_jian');
+}
+
 async function main() {
   await initDatabase();
   await testResendTargetsOnlyRequestedFailedAssignees();
   await testResendFailsClosedWhenRequestedAssigneeIsAmbiguous();
+  await testForceResendSentTaskCardReplacesMessageId();
+  await testForceResendRequiresExplicitForceAndExecute();
 
   console.log('feishu task card resend tests passed');
 }

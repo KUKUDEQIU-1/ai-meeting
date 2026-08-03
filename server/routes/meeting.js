@@ -9,7 +9,7 @@ import { upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
-import { resendFailedDraftTaskCards, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
+import { forceResendDraftTaskCard, resendFailedDraftTaskCards, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 import { requireMaintenanceToken } from '../middleware/maintenanceAuth.js';
 
 const router = express.Router();
@@ -387,6 +387,36 @@ router.post('/resend-failed-draft-task-cards', requireMaintenanceToken, async (r
 
     const result = await resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKind, execute });
     res.json({ success: result.status === 'success', draft_id: draftId, execute, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/force-resend-draft-task-card', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const draftId = Number(req.body?.draft_id || req.body?.draftId || 0);
+    const assigneeKey = String(req.body?.assignee_key || req.body?.assigneeKey || '').trim();
+    const cardKind = String(req.body?.card_kind || req.body?.cardKind || 'tasks').trim() || 'tasks';
+    const force = req.body?.force === true;
+    const execute = req.body?.execute === true;
+
+    if (!Number.isFinite(draftId) || draftId <= 0) {
+      res.status(400).json({ success: false, message: 'draft_id 必须是正整数' });
+      return;
+    }
+
+    if (!assigneeKey) {
+      res.status(400).json({ success: false, message: 'assignee_key 不能为空' });
+      return;
+    }
+
+    if (!force || !execute) {
+      res.status(400).json({ success: false, message: 'force 和 execute 必须显式为 true' });
+      return;
+    }
+
+    const result = await forceResendDraftTaskCard({ draftId, assigneeKey, cardKind, force, execute });
+    res.json({ success: result.status === 'success', draft_id: draftId, assignee_key: assigneeKey, card_kind: cardKind, force, execute, ...result });
   } catch (error) {
     next(error);
   }

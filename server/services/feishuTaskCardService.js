@@ -602,12 +602,12 @@ async function persistUnmappedAssignees(draftId, failures, cardKind) {
   }
 }
 
-async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInteractiveFeishuMessage, oldTaskOptions = [], diagnosticsLogger = null) {
+async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInteractiveFeishuMessage, oldTaskOptions = [], diagnosticsLogger = null, options = {}) {
   const startedAt = performance.now();
   const sendKey = `${draft.id}:${assignee.assignee_key}:${cardKind}`;
   const existingState = await getDraftAssigneeState(draft.id, assignee.assignee_key, cardKind);
 
-  if (existingState?.delivery_status === 'sent' && existingState.card_message_id) {
+  if (existingState?.delivery_status === 'sent' && existingState.card_message_id && options.forceResend !== true) {
     emitDeliveryDiagnostics(diagnosticsLogger, {
       phase: 'delivery_send',
       status: 'skipped',
@@ -750,6 +750,64 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
     skipped_count: results.filter((item) => item.status === 'skipped').length,
     failed_count: results.filter((item) => item.status === 'failed').length,
     dry_run_count: results.filter((item) => item.status === 'dry_run').length,
+    results
+  };
+}
+
+export async function forceResendDraftTaskCard({ draftId, assigneeKey, cardKind = 'tasks', execute = false, force = false }, deps = {}) {
+  const draft = await getMeetingTaskDraftById(draftId);
+
+  if (!draft) {
+    const error = new Error('draft 不存在');
+    error.status = 404;
+    throw error;
+  }
+
+  const normalizedAssigneeKey = normalizeAssigneeKey(assigneeKey);
+  const states = await listDraftAssigneeStates(draft.id);
+  const state = states.find((item) => item.card_kind === cardKind && normalizeAssigneeKey(item.assignee_key || item.assignee_name) === normalizedAssigneeKey);
+
+  if (!state) {
+    return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ assignee_key: normalizedAssigneeKey, card_kind: cardKind, status: 'failed', error: 'card_state_not_found' }] };
+  }
+
+  if (force !== true || execute !== true) {
+    return { status: 'skipped', sent_count: 0, skipped_count: 1, failed_count: 0, results: [{ assignee_key: normalizedAssigneeKey, card_kind: cardKind, status: 'skipped', reason: 'force_and_execute_required' }] };
+  }
+
+  if (state.delivery_status !== 'sent' || !state.card_message_id) {
+    return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ assignee_key: normalizedAssigneeKey, card_kind: cardKind, status: 'failed', error: 'sent_card_required' }] };
+  }
+
+  const listGroupMembers = deps.listGroupMembers || listConfiguredFeishuGroupMembers;
+  const memberResult = await listGroupMembers();
+  const members = memberResult?.status === 'success' ? memberResult.members : [];
+  const configuredMap = deps.assigneeMap || parseAssigneeMap();
+  const memberMap = mergeAssigneeRecipientMaps(configuredMap, assigneeMembersToMap(members));
+  const resolved = resolveAssigneeRecipient(normalizedAssigneeKey, memberMap);
+
+  if (!resolved) {
+    return { status: 'failed', sent_count: 0, skipped_count: 0, failed_count: 1, results: [{ assignee_key: normalizedAssigneeKey, card_kind: cardKind, status: 'failed', error: 'current_member_not_found' }] };
+  }
+
+  const assignee = {
+    assignee_key: normalizedAssigneeKey,
+    assignee_name: state.assignee_name || normalizedAssigneeKey,
+    receive_id_type: 'open_id',
+    receive_id: resolved.receive_id,
+    tasks: itemsForAssignee(cardKind === 'progress' ? draft.progress_updates || [] : draft.draft_tasks || [], normalizedAssigneeKey)
+  };
+  const oldTaskOptions = cardKind === 'tasks'
+    ? await loadOldTaskOptionsForAssignee(normalizedAssigneeKey, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords)
+    : [];
+  const result = await sendAssigneeCard(draft, assignee, cardKind, deps.postMessage || sendInteractiveFeishuMessage, oldTaskOptions, deps.diagnosticsLogger || null, { forceResend: true });
+  const results = [{ card_kind: cardKind, ...result }];
+
+  return {
+    status: result.status === 'sent' ? 'success' : 'failed',
+    sent_count: result.status === 'sent' ? 1 : 0,
+    skipped_count: result.status === 'skipped' ? 1 : 0,
+    failed_count: result.status === 'failed' ? 1 : 0,
     results
   };
 }
