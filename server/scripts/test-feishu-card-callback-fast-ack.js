@@ -50,7 +50,6 @@ async function testFastAckDispatchDoesNotAwaitSlowHandler() {
 
 async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
   let resolvePrepare;
-  let resolvePrepareAckTimeout;
   let processCount = 0;
   let responseCount = 0;
   let nextError = null;
@@ -60,9 +59,6 @@ async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
   };
   const preparedAfterAck = new Promise((resolve) => {
     resolvePrepare = resolve;
-  });
-  const prepareAckTimeout = new Promise((resolve) => {
-    resolvePrepareAckTimeout = resolve;
   });
   process.on('unhandledRejection', onUnhandledRejection);
 
@@ -74,8 +70,6 @@ async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
         processCount += 1;
         resolve();
       },
-      prepareAckTimeoutMs: 1,
-      prepareAckTimeout: async () => prepareAckTimeout,
       dispatchFeishuCardAction: (_response, task) => {
         task().catch((error) => {
           nextError = error;
@@ -104,7 +98,6 @@ async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
       nextError = error;
     });
 
-    resolvePrepareAckTimeout();
     setImmediate(() => {
       assert.equal(res.statusCode, 200);
       assert.equal(responseCount, 1);

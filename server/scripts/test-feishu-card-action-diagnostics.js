@@ -42,14 +42,13 @@ function createResponse() {
   };
 }
 
-async function runHandler({ body, prepareCardAction, processPreparedCardAction, dispatchFeishuCardAction, prepareAckTimeout, logger }) {
+async function runHandler({ body, prepareCardAction, processPreparedCardAction, dispatchFeishuCardAction, logger }) {
   const res = createResponse();
   let nextError;
   const handler = createFeishuCardActionHandler({
     prepareCardAction,
     processPreparedCardAction,
     dispatchFeishuCardAction,
-    prepareAckTimeout,
     diagnosticsLogger: logger
   });
 
@@ -128,6 +127,11 @@ function assertDiagnosticRecord(records, expected) {
   assertNoSensitiveInput(record);
 }
 
+function assertProcessingAck(res) {
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+}
+
 async function testInvalidTokenDiagnostic() {
   const previous = process.env.FEISHU_EVENT_VERIFICATION_TOKEN;
   const logger = captureLogger();
@@ -151,7 +155,7 @@ async function testInvalidTokenDiagnostic() {
 
 async function testPrepareStageStatusDiagnostic(status, failureClass) {
   const logger = captureLogger();
-  const { nextError } = await runHandler({
+  const { res, nextError } = await runHandler({
     body: payload(),
     prepareCardAction: async () => {
       throw errorWithStatus(status);
@@ -159,8 +163,13 @@ async function testPrepareStageStatusDiagnostic(status, failureClass) {
     logger
   });
 
-  assert.equal(nextError.status, status);
-  assertDiagnosticRecord(logger.records, { phase: 'prepare', failure_class: failureClass, status });
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+
+  assert.equal(nextError, undefined);
+  assertProcessingAck(res);
+  assertDiagnosticRecord(logger.records, { phase: 'prepare_async', failure_class: failureClass, status });
 }
 
 async function testAsyncProcessingFailureDiagnostic() {
@@ -180,7 +189,7 @@ async function testAsyncProcessingFailureDiagnostic() {
     logger
   });
 
-  assert.deepEqual(res.body, prepared.response);
+  assertProcessingAck(res);
   assert.equal(dispatched.length, 1);
   await assert.rejects(dispatched[0], /diagnostic status 500/);
   assertDiagnosticRecord(logger.records, { phase: 'process_async', failure_class: 'processing_failed', status: 500 });
@@ -190,23 +199,17 @@ async function testAsyncProcessingFailureDiagnostic() {
 async function testAsyncPrepareFailureDiagnostic() {
   const logger = captureLogger();
   let rejectPrepare;
-  let resolvePrepareAckTimeout;
   const handlerResult = runHandler({
     body: payload(),
     prepareCardAction: async () => new Promise((_resolve, reject) => {
       rejectPrepare = reject;
     }),
-    prepareAckTimeout: async () => new Promise((resolveTimeout) => {
-      resolvePrepareAckTimeout = resolveTimeout;
-    }),
     logger
   });
 
-  resolvePrepareAckTimeout();
   const { res, nextError } = await handlerResult;
   assert.equal(nextError, undefined);
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+  assertProcessingAck(res);
   rejectPrepare(errorWithStatus(404));
   await new Promise((resolve) => {
     setImmediate(resolve);
