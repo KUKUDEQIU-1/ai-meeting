@@ -966,7 +966,7 @@ async function testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping() {
       tableId: 'tbl_master_audit_contract',
       tenantAccessToken: 'tenant_master_audit_contract',
       recordId: 'rec_master_audit_contract',
-      taskStatus: '已完成-映射-468',
+      taskStatus: '已完成',
       completionDate: '2026-08-29',
       progressText: '映射进展-579',
       taskNote: '映射备注-680'
@@ -977,11 +977,61 @@ async function testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping() {
 
   const updateCall = calls.find((call) => call.options.method === 'PUT');
   const fields = JSON.parse(updateCall.options.body).fields;
-  assert.equal(fields.需求状态, '已完成-映射-468');
-  assert.equal('进度评估' in fields, false);
+  assert.equal(fields.需求状态, '已完成');
+  assert.equal(fields.进度评估, 1);
   assert.equal(fields.完成日期, new Date(2026, 7, 29).getTime());
   assert.equal(fields.任务进展描述, '映射进展-579');
   assert.equal(fields.备注, '映射备注-680');
+}
+
+async function testMasterTaskAuditUpdateRejectsInvalidStatusBeforeBitablePut() {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+
+    if (String(url).endsWith('/fields')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 0,
+          data: {
+            items: [
+              { field_name: '事务需求名称' },
+              { field_name: '跟进人' },
+              { field_name: '需求状态' },
+              { field_name: '进度评估' },
+              { field_name: '完成日期' },
+              { field_name: '任务进展描述' },
+              { field_name: '备注' }
+            ]
+          }
+        })
+      };
+    }
+
+    throw new Error(`unexpected request ${url}`);
+  };
+
+  try {
+    await assert.rejects(
+      updateMasterTaskProgress({
+        appToken: 'app_master_audit_contract',
+        tableId: 'tbl_master_audit_contract',
+        tenantAccessToken: 'tenant_master_audit_contract',
+        recordId: 'rec_master_audit_contract',
+        taskStatus: '已完成-映射-468',
+        completionDate: '2026-08-29',
+        progressText: '映射进展-579',
+        taskNote: '映射备注-680'
+      }),
+      /任务状态无效/
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  assert.equal(calls.some((call) => call.options.method === 'PUT'), false);
 }
 
 function testConfirmedManualProgressBuildsBitableProgressFields() {
@@ -4885,6 +4935,7 @@ testSpeakerCoverageSkipsExplanationOnlySegments();
 testSpeakerCoverageAggregatesReliableConcreteSegmentsBeforeFallback();
 testNotifyTextIncludesTaskCountsByAssignee();
 await testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping();
+await testMasterTaskAuditUpdateRejectsInvalidStatusBeforeBitablePut();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDraftNormalizationPreservesSemanticTaskFields();

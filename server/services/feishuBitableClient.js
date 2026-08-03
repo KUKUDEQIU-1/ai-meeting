@@ -19,6 +19,15 @@ export const MASTER_TASK_TABLE_REQUIRED_FIELDS = ['事务需求名称', '开始�
 const FOLLOWER_FIELD_NAME = '跟进人';
 const MASTER_TASK_AUDIT_FIELDS_CACHE_TTL_MS = 30_000;
 const MASTER_TASK_AUDIT_RECORDS_CACHE_TTL_MS = 5_000;
+const MASTER_TASK_STATUSES = new Set([
+  '已完成',
+  '进行中',
+  '待开始',
+  '未开始',
+  '搁置',
+  '已取消',
+  '需求建议集-基础需求（未澄清）'
+]);
 const masterTaskAuditFieldsCache = new Map();
 const masterTaskAuditRecordsCache = new Map();
 
@@ -1067,6 +1076,18 @@ function progressValueForMasterTaskStatus(status) {
   return undefined;
 }
 
+function normalizeMasterTaskStatusForUpdate(value) {
+  const status = String(value || '').trim();
+
+  if (status && !MASTER_TASK_STATUSES.has(status)) {
+    const error = new Error('任务状态无效');
+    error.status = 400;
+    throw error;
+  }
+
+  return status;
+}
+
 function normalizeDateOnlyTimestamp(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -1086,7 +1107,7 @@ function normalizeDateOnlyText(value) {
 
 function buildMasterTaskUpdateFields({ fieldNames, taskStatus, completionDate, progressText, taskNote }) {
   const fields = {};
-  const status = String(taskStatus || '').trim();
+  const status = normalizeMasterTaskStatusForUpdate(taskStatus);
   const date = normalizeDateOnlyTimestamp(completionDate);
   const progress = String(progressText || '').trim();
   const note = String(taskNote || '').trim();
@@ -1213,6 +1234,8 @@ export async function updateBitableRecord({ appToken, tableId, tenantAccessToken
     logFeishuFailure({ requestUrl: url, method: 'PUT', tableId, data });
     const error = new Error(`飞书记录更新失败：${data.msg || response.statusText}`);
     error.status = 502;
+    error.phase = 'bitable_put';
+    error.failureClass = 'feishu_bitable_update_failed';
     error.feishuResponse = data;
     throw error;
   }

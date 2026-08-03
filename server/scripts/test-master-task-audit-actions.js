@@ -3,6 +3,15 @@ import { initDatabase } from '../db/database.js';
 import { prepareFeishuCardAction, processPreparedFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 import { getMasterTaskAuditLog, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
 
+function response(body, ok = true, status = 200) {
+  return {
+    ok,
+    status,
+    statusText: ok ? 'OK' : 'Error',
+    json: async () => body
+  };
+}
+
 async function createAuditLog(auditType = 'in_progress_missing_update') {
   const suffix = Date.now();
   return upsertMasterTaskAuditLog({
@@ -182,6 +191,62 @@ async function testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedV
   assert.equal(stored.submitted_completion_date, '2026-08-20');
   assert.equal(stored.submitted_progress_text, '动作提交进展-628');
   assert.equal(stored.submitted_note, '动作提交备注-739');
+}
+
+async function testConfirmUpdatePatchesTerminalMasterAuditCardPayload() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const auditLog = await createAuditLog();
+  const requests = [];
+
+  process.env.FEISHU_APP_ID = 'app_audit_patch';
+  process.env.FEISHU_APP_SECRET = 'secret_audit_patch';
+  globalThis.fetch = async (url, init = {}) => {
+    const href = String(url);
+    requests.push({ href, init });
+
+    if (href.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+      return response({ code: 0, tenant_access_token: 'tenant_audit_patch' });
+    }
+    if (href.includes('/open-apis/im/v1/messages/')) {
+      return response({ code: 0, data: {} });
+    }
+
+    throw new Error(`unexpected request ${href}`);
+  };
+
+  try {
+    const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'master_task_confirm_update', {
+      progress_text: '今天已补充新的巡检进展'
+    }));
+
+    const responseBody = await processPreparedFeishuCardAction(prepared, {
+      updateProgress: async () => ({ status: 'updated' })
+    });
+    const patchRequest = requests.find((request) => request.init.method === 'PATCH');
+    const patchBody = JSON.parse(patchRequest.init.body);
+    const patchedCard = JSON.parse(patchBody.content);
+    const serializedCard = JSON.stringify(patchedCard);
+
+    assert.equal(responseBody.toast.content, '任务进展已更新');
+    assert.ok(patchRequest.href.includes(encodeURIComponent(auditLog.card_message_id)));
+    assert.equal(typeof patchBody.content, 'string');
+    assert.equal(patchedCard.schema, '2.0');
+    assert.equal(patchedCard.config.update_multi, true);
+    assert.equal(patchedCard.header.template, 'green');
+    assert.equal(patchedCard.header.title.content, '任务进展已处理');
+    assert.match(serializedCard, /本次巡检提醒已处理/);
+    assert.equal(serializedCard.includes('master_task_confirm_update'), false);
+    assert.equal(serializedCard.includes('master_task_no_update'), false);
+    assert.equal(serializedCard.includes('master_task_audit_form'), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousAppId === undefined) delete process.env.FEISHU_APP_ID;
+    else process.env.FEISHU_APP_ID = previousAppId;
+    if (previousAppSecret === undefined) delete process.env.FEISHU_APP_SECRET;
+    else process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
 }
 
 async function testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting() {
@@ -496,6 +561,7 @@ await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
 await testConfirmUpdateKeepsSuccessWhenTerminalCardPatchFails();
 await testConfirmUpdateSubmitsCanonicalEditPayloadAndPersistsSubmittedValues();
+await testConfirmUpdatePatchesTerminalMasterAuditCardPayload();
 await testConfirmUpdateRejectsInvalidCanonicalStatusBeforeWriting();
 await testConfirmUpdateRejectsCompletedStatusWithoutValidCompletionDateBeforeWriting();
 await testConfirmUpdateRejectsMissingCanonicalStatusBeforeWriting();
