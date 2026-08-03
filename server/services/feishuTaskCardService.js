@@ -461,8 +461,9 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
   const tasks = draft.draft_tasks || [];
   const reviewerTasks = tasks.filter(isGetNoteReviewerTask);
   const ownerTasks = tasks.filter((task) => !isGetNoteReviewerTask(task));
+  const reviewOnlyEmptyDraft = tasks.length === 0;
 
-  if (!reviewerTasks.length) {
+  if (!reviewerTasks.length && !reviewOnlyEmptyDraft) {
     const ownerResult = ownerTasks.length
       ? await dispatchDraftTaskCards(draftWithTasks(draft, ownerTasks), deps)
       : null;
@@ -540,7 +541,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
     const cardChunks = chunks.length ? chunks : [[]];
     for (const [index, tasks] of cardChunks.entries()) {
       const prepareStartedAt = performance.now();
-      const card = buildGetNoteTaskReviewCard({ draft: reviewerDraft, assignee, tasks, terminal: pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
+      const card = buildGetNoteTaskReviewCard({ draft: reviewerDraft, assignee, tasks, terminal: !reviewOnlyEmptyDraft && pendingTasks.length === 0, oldTaskOptionsByItemId, assigneeOptions });
       const prepareMs = elapsedMs(prepareStartedAt);
       emitDeliveryDiagnostics(diagnosticsLogger, {
         phase: 'delivery_send',
@@ -560,6 +561,7 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
         itemId: tasks.map((task) => task.item_id || '').filter(Boolean).join(','),
         cardMessageId: messageId
       });
+      await updateDraftAssigneeDelivery({ draftId: reviewerDraft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
       emitDeliveryDiagnostics(diagnosticsLogger, {
         phase: 'delivery_send',
         status: 'sent',
@@ -573,7 +575,6 @@ export async function dispatchGetNoteTaskCard(draft, deps = {}) {
       });
       results.push({ status: 'sent', message_id: messageId, item_ids: tasks.map((task) => task.item_id || '') });
     }
-    await updateDraftAssigneeDelivery({ draftId: reviewerDraft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent' });
     return mergeDispatchResults([ownerResult, { status: 'success', sent_count: results.length, skipped_count: 0, failed_count: 0, results }]);
   } catch (error) {
     await updateDraftAssigneeDelivery({ draftId: reviewerDraft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });

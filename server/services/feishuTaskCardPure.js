@@ -442,7 +442,51 @@ function handledTaskSummary(task, itemId) {
   return title ? labelElement(`**事项 ${truncateText(itemId, 16)}｜${title}：** ${truncateText(taskNameOf(task), 60)}${detail}`) : null;
 }
 
+function getDraftDiagnostics(draft) {
+  const parsed = typeof draft?.draft_json === 'string'
+    ? JSON.parse(draft.draft_json)
+    : draft?.draft_json || {};
+  const removedItems = parsed.removed_tasks || parsed.discarded_items || draft?.discarded_items || [];
+
+  return {
+    removed_count: Array.isArray(removedItems) ? removedItems.length : 0,
+    progress_updates_count: Array.isArray(parsed.progress_updates || draft?.progress_updates) ? (parsed.progress_updates || draft?.progress_updates).length : 0
+  };
+}
+
+function buildEmptyGetNoteReviewCard({ draft }) {
+  const diagnostics = getDraftDiagnostics(draft);
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'yellow',
+      title: { tag: 'plain_text', content: 'GetNote 待人工复核' }
+    },
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content: [
+            `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}`,
+            `**来源：** ${truncateText(draft?.meeting_source || 'Get笔记', 40)}`,
+            '',
+            'AI 提取、过滤和历史任务抑制后没有可直接确认的新任务，请人工复核原始 GetNote 内容。',
+            '',
+            `**诊断：** 待确认任务 0；移除/丢弃 ${diagnostics.removed_count}；进展 ${diagnostics.progress_updates_count}。`
+          ].join('\n')
+        }
+      ]
+    }
+  };
+}
+
 export function buildGetNoteTaskReviewCard({ draft, assignee, tasks, oldTaskOptions = [], oldTaskOptionsByItemId = null, assigneeOptions = [], terminal = false }) {
+  if (!terminal && (!tasks || tasks.length === 0)) {
+    return buildEmptyGetNoteReviewCard({ draft });
+  }
+
   return buildAssigneeTaskCard({
     draft,
     assignee,

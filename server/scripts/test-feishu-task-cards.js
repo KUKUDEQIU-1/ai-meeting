@@ -2201,6 +2201,65 @@ async function testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard() {
   assert.equal(reviewerState.delivery_status, 'sent');
 }
 
+async function testGetNoteDispatchEmptyDraftSendsReviewOnlyCard() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-empty-review-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 空任务审核测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [],
+    tableId: 'table_getnote_empty_review',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+  const deps = {
+    dispatchMode: 'local',
+    receiveId: 'ou_getnote_reviewer',
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_getnote_empty_${draft.id}_${sentMessages.length}`;
+    }
+  };
+
+  const first = await dispatchGetNoteTaskCard(draft, deps);
+  const skipped = await dispatchGetNoteTaskCard(draft, deps);
+  const reviewerState = await getDraftAssigneeState(draft.id, 'getnote_reviewer', 'getnote_tasks');
+  const messages = await listDraftCardMessages(draft.id, 'getnote_reviewer', 'getnote_tasks');
+  const cardText = JSON.stringify(sentMessages[0].card);
+
+  assert.equal(first.status, 'success');
+  assert.equal(first.sent_count, 1);
+  assert.equal(first.results[0].item_ids.length, 0);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].receiveId, 'ou_getnote_reviewer');
+  assert.equal(reviewerState.delivery_status, 'sent');
+  assert.equal(reviewerState.card_message_id, `om_getnote_empty_${draft.id}_1`);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].item_id, '');
+  assert.equal(messages[0].card_message_id, `om_getnote_empty_${draft.id}_1`);
+  assert.match(cardText, /GetNote 空任务审核测试/);
+  assert.doesNotMatch(cardText, /伪任务/);
+  assert.doesNotMatch(cardText, /task_name_/);
+  assert.doesNotMatch(cardText, /confirm_/);
+  assert.doesNotMatch(cardText, /mark_task_as_new/);
+  assert.equal(skipped.sent_count, 0);
+  assert.equal(skipped.skipped_count, 1);
+  assert.equal(skipped.results[0].reason, 'already_sent');
+
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET delivery_status = 'failed', card_message_id = '', delivery_error = 'temporary delivery failure'
+     WHERE draft_id = ? AND assignee_key = ? AND card_kind = ?`,
+    [draft.id, 'getnote_reviewer', 'getnote_tasks']
+  );
+  const recovered = await dispatchGetNoteTaskCard(draft, deps);
+
+  assert.equal(recovered.sent_count, 1);
+  assert.equal(sentMessages.length, 2);
+}
+
 async function testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -5274,6 +5333,7 @@ await testGetNoteSplitCompactRefreshKeepsClickedMessageScopeWithoutMessageId();
 await testGetNoteDispatchForceDoesNotResendExistingSentCard();
 await testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard();
 await testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard();
+await testGetNoteDispatchEmptyDraftSendsReviewOnlyCard();
 await testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees();
 await testGetNoteMixedDispatchRequiresReviewerBeforeOwnerSend();
 await testGetNoteMixedDispatchReportsReviewerSendFailure();
