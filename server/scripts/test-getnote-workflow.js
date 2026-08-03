@@ -3,6 +3,7 @@ import { all, get, initDatabase, run } from '../db/database.js';
 import { parseAssigneeMap } from '../services/feishuTaskCardPure.js';
 import { extractGetNoteContentWithMeta } from '../services/getnoteClient.js';
 import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle } from '../services/getnoteImportService.js';
+import { listDraftCardMessages } from '../services/taskDraftService.js';
 
 function note(noteId, content) {
   return {
@@ -244,6 +245,81 @@ async function testImportSplitsKnownAndUnknownGetNoteTasks() {
   ]);
 }
 
+async function testImportZeroEffectiveTasksCreatesReviewOnlyDraft() {
+  const content = '今天大家只同步了背景信息，没有安排新的可执行事项。';
+  const noteId = `getnote_workflow_zero_${Date.now()}`;
+  const sentCards = [];
+  const options = workflowOptions(noteId, content, sentCards);
+  options.analyzeMeetingText = async () => ({
+    summary: '只同步背景信息。',
+    tasks: [],
+    progress_updates: [],
+    discarded_items: [],
+    raw_tasks_count: 1,
+    after_filter_count: 0,
+    after_dedupe_count: 0,
+    needs_confirmation_count: 0,
+    removed_tasks: [{ task_name: '同步背景信息', reason: '非可执行事项', stage: 'filter' }],
+    removed_reasons: { not_actionable: 1 }
+  });
+
+  const first = await importGetNoteMeeting(noteId, options);
+  const unchangedOptions = workflowOptions(noteId, content, sentCards);
+  const unchanged = await importGetNoteMeeting(noteId, unchangedOptions);
+  const draft = await get('SELECT * FROM meeting_task_drafts WHERE source_type = ? AND source_id = ?', ['getnote', noteId]);
+  const record = await get('SELECT * FROM getnote_sync_records WHERE note_id = ?', [noteId]);
+  const states = await all('SELECT * FROM meeting_task_draft_assignees WHERE draft_id = ?', [draft.id]);
+  const messages = await listDraftCardMessages(draft.id, 'getnote_reviewer', 'getnote_tasks');
+  const draftJson = JSON.parse(draft.draft_json);
+  const analysisJson = JSON.parse(record.analysis_json);
+  const cardText = JSON.stringify(sentCards[0].card);
+
+  assert.equal(first.status, 'pending_confirmation');
+  assert.equal(first.reason, 'no_effective_tasks');
+  assert.equal(first.review_required, true);
+  assert.equal(first.final_tasks_count, 0);
+  assert.equal(first.today_tasks_count, 0);
+  assert.equal(first.tasks_count, 0);
+  assert.equal(first.needs_confirmation_count, 0);
+  assert.deepEqual(draftJson, []);
+  assert.equal(record.status, 'pending_confirmation');
+  assert.notEqual(record.error_message, 'GetNote 未提取到可确认的新任务');
+  assert.deepEqual(analysisJson.tasks, []);
+  assert.deepEqual(analysisJson.removed_tasks, [{ task_name: '同步背景信息', reason: '非可执行事项', stage: 'filter' }]);
+  assert.equal(analysisJson.removed_reasons.not_actionable, 1);
+  assert.equal(record.content_hash, first.content_hash);
+  assert.equal(sentCards.length, 1);
+  assert.equal(sentCards[0].receiveId, 'ou_wei_tian');
+  assert.doesNotMatch(cardText, /task_name_/);
+  assert.doesNotMatch(cardText, /confirm_/);
+  assert.equal(states.length, 1);
+  assert.equal(states[0].assignee_key, 'getnote_reviewer');
+  assert.equal(states[0].card_kind, 'getnote_tasks');
+  assert.equal(messages.length, 1);
+  assert.equal(unchanged.status, 'skipped');
+  assert.equal(unchanged.reason, 'content_unchanged');
+  assert.equal(sentCards.length, 1);
+
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET delivery_status = 'failed', card_message_id = '', delivery_error = 'temporary delivery failure'
+     WHERE draft_id = ?`,
+    [draft.id]
+  );
+  await run(
+    `UPDATE meeting_task_draft_card_messages
+     SET delivery_status = 'failed', card_message_id = '', delivery_error = 'temporary delivery failure'
+     WHERE draft_id = ?`,
+    [draft.id]
+  );
+  const recoveryOptions = workflowOptions(noteId, content, sentCards);
+  const recovered = await importGetNoteMeeting(noteId, recoveryOptions);
+
+  assert.equal(recovered.status, 'skipped');
+  assert.equal(recovered.reason, 'delivery_recovered');
+  assert.equal(sentCards.length, 2);
+}
+
 async function testForceCardResendReplacesExistingGetNoteCard() {
   const content = '张三今天修复 GetNote 确认卡片并接入总表。';
   const noteId = `getnote_workflow_replace_${Date.now()}`;
@@ -303,6 +379,7 @@ await testImportCreatesPendingDraftAndSkipsUnchangedContent();
 await testImportRecoversUnchangedDraftWithoutSentDelivery();
 await testImportRecoveryRespectsActiveDispatchLock();
 await testImportSplitsKnownAndUnknownGetNoteTasks();
+await testImportZeroEffectiveTasksCreatesReviewOnlyDraft();
 await testForceCardResendReplacesExistingGetNoteCard();
 
 console.log('getnote workflow tests passed');

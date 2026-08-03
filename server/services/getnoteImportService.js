@@ -678,9 +678,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       .filter(Boolean)
       .slice(0, 5)
       .join('；');
-    if (todayTasksCount === 0) {
-      throw new Error('GetNote 未提取到可确认的新任务');
-    }
+    const noEffectiveTasks = todayTasksCount === 0;
 
     console.log(`[GetNote Sync] prepare pending draft today_tasks_count=${todayTasksCount} progress_updates_count=${progressUpdatesCount} history_suppressed_count=${historySuppressedCount}`);
     const meetingMeta = {
@@ -851,6 +849,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       note_id: normalizedNoteId,
       title: meetingTitle,
       status: 'pending_confirmation',
+      ...(noEffectiveTasks ? { reason: 'no_effective_tasks', review_required: true } : {}),
       meeting_title: meetingTitle,
       table_id: meetingTable.table_id,
       table_name: meetingTable.table_name,
