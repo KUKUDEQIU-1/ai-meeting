@@ -11,6 +11,7 @@ import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
 import { forceResendDraftTaskCard, resendFailedDraftTaskCards, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 import { requireMaintenanceToken } from '../middleware/maintenanceAuth.js';
+import { deleteMember, getMember, listMembers, refreshRecentTasksFromConfirmedDrafts, upsertMember } from '../services/memberMemoryService.js';
 
 const router = express.Router();
 
@@ -117,6 +118,55 @@ export function getGetNoteSyncErrorResponse(error, noteId) {
 
 router.use('/feishu-docx-note-sources', feishuDocxNoteSourcesRouter);
 router.use('/sync-feishu-meeting-notes', feishuMeetingNotesSyncRouter);
+
+router.get('/member-memory', requireMaintenanceToken, async (_req, res, next) => {
+  try {
+    res.json({ members: await listMembers() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/member-memory/:memberId', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const member = await getMember(req.params.memberId);
+    if (!member) {
+      res.status(404).json({ message: 'member memory not found' });
+      return;
+    }
+
+    res.json({ member });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/member-memory/:memberId', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const member = await upsertMember(req.params.memberId, req.body || {});
+    res.json({ success: true, member });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/member-memory/:memberId', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const result = await deleteMember(req.params.memberId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/trigger-member-memory-update', requireMaintenanceToken, async (_req, res, next) => {
+  try {
+    const result = await refreshRecentTasksFromConfirmedDrafts();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/draft-card-deliveries/:draftId', async (req, res, next) => {
   try {
@@ -683,6 +733,46 @@ router.post('/maintenance/sync-getnote', requireMaintenanceToken, async (req, re
 
     res.json(getGetNoteSyncResponse(result));
   } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/maintenance/analyze-latest-feishu-wiki-docx', requireMaintenanceToken, async (req, res, next) => {
+  const route = '/api/meeting/maintenance/analyze-latest-feishu-wiki-docx';
+
+  try {
+    const force = req.body?.force === true || req.body?.force === 'true';
+    const reanalyze = req.body?.reanalyze === true || req.body?.reanalyze === 'true';
+    const nodeTokenOrUrl = req.body?.node_url || req.body?.node_token || undefined;
+    const { analyzeLatestFeishuWikiDocx } = await import('../services/feishuWikiDocxImportService.js');
+
+    console.log(`[Feishu Wiki Sync] manual latest trigger start route=${route} force=${force} reanalyze=${reanalyze}`);
+
+    const result = await feishuScanCoordinator.runScan('wiki', () => analyzeLatestFeishuWikiDocx({
+      force,
+      reanalyze,
+      nodeTokenOrUrl
+    }), {
+      route,
+      capability: 'feishu_wiki_docx_import',
+      equivalenceKey: 'wiki-docx-library-active-scan',
+      mode: 'latest_wiki_docx_manual'
+    });
+
+    if (result.status === 'already_running') {
+      console.log(`[Feishu Wiki Sync] manual latest analysis skipped reason=${result.reason}`);
+    }
+
+    res.status(result.status === 'already_running' ? 409 : 200).json({
+      ...result,
+      status: result.status,
+      route,
+      capability: 'feishu_wiki_docx_import',
+      scan_source: 'feishu_wiki_docx_latest_manual',
+      canonical_route: '/api/meeting/sync-feishu-wiki-docx'
+    });
+  } catch (error) {
+    console.log(`[Feishu Wiki Sync] manual latest analysis failed route=${route} error=${error.message}`);
     next(error);
   }
 });
