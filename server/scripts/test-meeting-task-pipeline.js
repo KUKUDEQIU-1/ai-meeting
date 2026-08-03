@@ -313,6 +313,59 @@ function testTaskExtractionNormalizationPreservesSemanticFields() {
   assert.deepEqual(result.today_tasks[0].source_turn_ids, ['turn_7', '8']);
 }
 
+function testTaskExtractionNormalizationAcceptsCandidateTasksAlias() {
+  const result = normalizeTaskExtractionResult({
+    candidate_tasks: [task({
+      task_name: '同步会议助手任务卡片状态',
+      title: '同步会议助手任务卡片状态',
+      actionable_uncertain: true,
+      needs_confirmation: true,
+      missing_fields: ['assignee'],
+      evidence_signal_types: ['delivery_signal'],
+      uncertainty_reason: '原文有交付动作但负责人需要确认'
+    })],
+    progress_updates: [],
+    discarded_items: []
+  });
+
+  assert.deepEqual(Object.keys(result), ['today_tasks', 'progress_updates', 'discarded_items']);
+  assert.equal(result.today_tasks.length, 1);
+  assert.equal(result.today_tasks[0].task_name, '同步会议助手任务卡片状态');
+  assert.equal(result.today_tasks[0].actionable_uncertain, true);
+  assert.equal(result.today_tasks[0].needs_confirmation, true);
+  assert.deepEqual(result.today_tasks[0].missing_fields, ['assignee']);
+  assert.deepEqual(result.today_tasks[0].evidence_signal_types, ['delivery_signal']);
+  assert.equal(result.today_tasks[0].uncertainty_reason, '原文有交付动作但负责人需要确认');
+}
+
+function testTaskExtractionNormalizationPreservesDiscardMetadata() {
+  const result = normalizeTaskExtractionResult({
+    today_tasks: [],
+    discarded_items: [{
+      text: '只是说后面再看看活动数据',
+      item_type: 'unclear_follow_up',
+      reason: '没有明确交付物',
+      discard_category: 'weak_follow_up',
+      evidence_check: {
+        has_transcript_evidence: true,
+        has_action_signal: false,
+        has_usable_object: true
+      },
+      missing_fields: ['action'],
+      uncertainty_reason: '只有弱跟进语气'
+    }]
+  });
+
+  assert.equal(result.discarded_items[0].discard_category, 'weak_follow_up');
+  assert.deepEqual(result.discarded_items[0].evidence_check, {
+    has_transcript_evidence: true,
+    has_action_signal: false,
+    has_usable_object: true
+  });
+  assert.deepEqual(result.discarded_items[0].missing_fields, ['action']);
+  assert.equal(result.discarded_items[0].uncertainty_reason, '只有弱跟进语气');
+}
+
 async function testValidatorFailureFallsOpen() {
   const result = await analyzeWith([task()], null, {
     validateMeetingTasks: async () => {
@@ -329,6 +382,59 @@ async function testMalformedValidatorResponseFallsOpen() {
 
   assert.equal(result.tasks.length, 1);
   assert.equal(result.tasks[0].candidate_id, 'candidate_1');
+  assert.equal(result.tasks[0].validator_status, 'malformed_fail_open');
+}
+
+async function testValidatorStructuredDiscardMetadataIsPreserved() {
+  const result = await analyzeWith([task({
+    actionable_uncertain: true,
+    missing_fields: ['deadline'],
+    evidence_signal_types: ['explicit_assignment']
+  })], {
+    decisions: [{
+      candidate_id: 'candidate_1',
+      action: 'discard',
+      reason: '原文只是历史进展',
+      discard_category: 'progress_update',
+      evidence_check: {
+        has_transcript_evidence: true,
+        has_action_signal: false,
+        has_usable_object: true
+      },
+      missing_fields: ['new_action'],
+      uncertainty_reason: '没有今日新增交付动作'
+    }]
+  });
+
+  assert.equal(result.tasks.length, 0);
+  assert.equal(result.removed_tasks.at(-1).reason, 'validator_discard:原文只是历史进展');
+  assert.equal(result.removed_tasks.at(-1).discard_category, 'progress_update');
+  assert.deepEqual(result.removed_tasks.at(-1).evidence_check, {
+    has_transcript_evidence: true,
+    has_action_signal: false,
+    has_usable_object: true
+  });
+  assert.deepEqual(result.removed_tasks.at(-1).missing_fields, ['new_action']);
+  assert.equal(result.removed_tasks.at(-1).uncertainty_reason, '没有今日新增交付动作');
+}
+
+async function testValidatorMissingDecisionFailOpenMetadataIsPreserved() {
+  const result = await analyzeWith([task({
+    actionable_uncertain: true,
+    needs_confirmation: true,
+    missing_fields: ['assignee'],
+    evidence_signal_types: ['delivery_signal'],
+    uncertainty_reason: '负责人未明确但有发群交付动作'
+  })], { decisions: [] });
+
+  assert.equal(result.tasks.length, 1);
+  assert.equal(result.tasks[0].candidate_id, 'candidate_1');
+  assert.equal(result.tasks[0].validator_status, 'missing_decision_fail_open');
+  assert.equal(result.tasks[0].actionable_uncertain, true);
+  assert.equal(result.tasks[0].needs_confirmation, true);
+  assert.deepEqual(result.tasks[0].missing_fields, ['assignee']);
+  assert.deepEqual(result.tasks[0].evidence_signal_types, ['delivery_signal']);
+  assert.equal(result.tasks[0].uncertainty_reason, '负责人未明确但有发群交付动作');
 }
 
 async function testEmptyCandidatesSkipValidator() {
@@ -405,8 +511,12 @@ await testKeepsMultipleConcreteTasksForOneSpeakerWhileDroppingExplanation();
 await testGetNoteMainlineMergesSupportAndRequiresAssigneeConfirmation();
 await testSemanticMergeKeepsSubActionsAsTaskContext();
 testTaskExtractionNormalizationPreservesSemanticFields();
+testTaskExtractionNormalizationAcceptsCandidateTasksAlias();
+testTaskExtractionNormalizationPreservesDiscardMetadata();
 await testValidatorFailureFallsOpen();
 await testMalformedValidatorResponseFallsOpen();
+await testValidatorStructuredDiscardMetadataIsPreserved();
+await testValidatorMissingDecisionFailOpenMetadataIsPreserved();
 await testEmptyCandidatesSkipValidator();
 await testOutputCompatibility();
 await testFiltersGenericContinuationTask();

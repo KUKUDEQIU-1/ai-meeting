@@ -244,11 +244,17 @@ function normalizeTasks(tasks) {
     return [];
   }
 
-	return tasks.map((item) => {
-	  const attribution = normalizeAssigneeAttribution(item);
-	  const sourceTurnIds = Array.isArray(item.source_turn_ids)
-	    ? item.source_turn_ids.map(normalizeText).filter(Boolean)
-	    : [];
+		return tasks.map((item) => {
+		  const attribution = normalizeAssigneeAttribution(item);
+		  const sourceTurnIds = Array.isArray(item.source_turn_ids)
+		    ? item.source_turn_ids.map(normalizeText).filter(Boolean)
+		    : [];
+		  const missingFields = Array.isArray(item.missing_fields)
+		    ? item.missing_fields.map(normalizeText).filter(Boolean)
+		    : [];
+		  const evidenceSignalTypes = Array.isArray(item.evidence_signal_types)
+		    ? item.evidence_signal_types.map(normalizeText).filter(Boolean)
+		    : [];
 
 	  return {
       task_name: item.task_name || item.title || item.task || item.todo || '未命名任务',
@@ -279,12 +285,20 @@ function normalizeTasks(tasks) {
 	    source_speaker_confidence: item.source_speaker_confidence ?? item.speaker_confidence ?? null,
 	    attribution_warnings: getAttributionWarnings(item),
 	    task_role: normalizeText(item.task_role || 'primary_task'),
-	    task_context: normalizeText(item.task_context),
-	    actionability: normalizeText(item.actionability || 'actionable'),
-	    primary_reason: normalizeText(item.primary_reason),
-	    source_turn_ids: sourceTurnIds
-	  };
-	});
+		    task_context: normalizeText(item.task_context),
+		    actionability: normalizeText(item.actionability || 'actionable'),
+		    primary_reason: normalizeText(item.primary_reason),
+		    source_turn_ids: sourceTurnIds,
+		    actionable_uncertain: Boolean(item.actionable_uncertain),
+		    missing_fields: missingFields,
+		    evidence_signal_types: evidenceSignalTypes,
+		    discard_category: normalizeText(item.discard_category),
+		    uncertainty_reason: normalizeText(item.uncertainty_reason),
+		    validator_status: normalizeText(item.validator_status),
+		    validator_reason: normalizeText(item.validator_reason),
+		    evidence_check: item.evidence_check && typeof item.evidence_check === 'object' ? item.evidence_check : null
+		  };
+		});
 }
 
 function isGetNoteSource(sourceType) {
@@ -375,11 +389,16 @@ function normalizeDiscardedItems(items) {
     return [];
   }
 
-  return items.map((item) => ({
-    text: item.text || item.task_name || item.title || item.task || '',
-    item_type: item.item_type || item.type || 'discussion_only',
-    reason: item.reason || ''
-  }));
+	  return items.map((item) => ({
+	    text: item.text || item.task_name || item.title || item.task || '',
+	    item_type: item.item_type || item.type || 'discussion_only',
+	    reason: item.reason || '',
+	    discard_category: normalizeText(item.discard_category),
+	    evidence_check: item.evidence_check && typeof item.evidence_check === 'object' ? item.evidence_check : null,
+	    missing_fields: Array.isArray(item.missing_fields) ? item.missing_fields.map(normalizeText).filter(Boolean) : [],
+	    evidence_signal_types: Array.isArray(item.evidence_signal_types) ? item.evidence_signal_types.map(normalizeText).filter(Boolean) : [],
+	    uncertainty_reason: normalizeText(item.uncertainty_reason)
+	  }));
 }
 
 function compactTaskForSemanticDedupe(task) {
@@ -440,7 +459,7 @@ function normalizeSemanticDedupeGroups(result, tasks) {
 }
 
 export function normalizeTaskExtractionResult(result) {
-  const sourceType = Array.isArray(result) ? '' : normalizeText(result?.source_type || result?.sourceType || result?.meeting_source || result?.meetingSource);
+	  const sourceType = Array.isArray(result) ? '' : normalizeText(result?.source_type || result?.sourceType || result?.meeting_source || result?.meetingSource);
 
   if (Array.isArray(result)) {
     return {
@@ -450,8 +469,9 @@ export function normalizeTaskExtractionResult(result) {
     };
   }
 
-  return {
-    today_tasks: isGetNoteSource(sourceType) ? normalizeGetNoteTasks(normalizeTasks(result?.today_tasks || result?.tasks || [])) : normalizeTasks(result?.today_tasks || result?.tasks || []),
+	  const rawTasks = result?.today_tasks || result?.candidate_tasks || result?.tasks || [];
+	  return {
+	    today_tasks: isGetNoteSource(sourceType) ? normalizeGetNoteTasks(normalizeTasks(rawTasks)) : normalizeTasks(rawTasks),
     progress_updates: normalizeProgressUpdates(result?.progress_updates || []),
     discarded_items: normalizeDiscardedItems(result?.discarded_items || [])
   };
@@ -642,10 +662,10 @@ export async function generateMeetingTasks(meetingText) {
 3. Get笔记自带 summary 只能作为辅助参考，不能作为唯一依据。
 4. 不要因为 summary 中提到某个结论，就在原文没有依据时生成确定任务。
  5. Stage 1 的 today_tasks 是候选任务池：凡是可能是今天会议中新安排、会后明确要执行、今天明确产生新交付动作的事项，都先进入 today_tasks，交给 Stage 2 再判定 keep/discard/merge。
- 6. 历史任务进展、已完成事项、正在做的汇报、之前安排过但今天没有新动作的事项，若明显不是新增任务则放入 progress_updates；若存在新的交付动作或上下文不确定，可以先作为候选进入 today_tasks，但必须在 reason 中说明不确定点。
-7. 不要臆造负责人、截止时间。负责人不明确时填 "待确认"。截止时间不明确时填 "待确认"。
-8. 每个 today_tasks 和 progress_updates 项都必须给出原文依据短句 evidence_quote；没有原文依据时放入 discarded_items。
- 9. 宁可多保留有原文依据的候选，不要在 Stage 1 过早丢弃边界案例；但普通讨论、无动作弱跟进、无证据臆测仍必须丢弃。
+	 6. 历史任务进展、已完成事项、正在做的汇报、之前安排过但今天没有新动作的事项，若明显不是新增任务则放入 progress_updates；若存在新的交付动作或上下文不确定，可以先作为候选进入 today_tasks，但必须用 actionable_uncertain、needs_confirmation、missing_fields 和 uncertainty_reason 表示不确定点。
+	7. 不要臆造负责人、截止时间。负责人不明确时填 "待确认"。截止时间不明确时填 "待确认"。
+	8. 每个 today_tasks 和 progress_updates 项都必须给出原文依据短句 evidence_quote；没有原文依据时放入 discarded_items。
+	 9. Stage 1 是高召回、有证据的候选池：宁可多保留有原文依据的边界案例，不要因为缺少负责人、截止时间或完整交付对象而过早丢弃；但普通讨论、无动作弱跟进、无证据臆测仍必须丢弃。
 10. task_name 必须让未参会的人一眼看懂“哪个项目/模块/业务对象 + 要交付什么”。
 11. 禁止输出“完成版本12验收”“活动上线”“品类运营”“功能优化”“处理问题”“完成测试”这类泛化短名；如果原文没有足够上下文补全项目/模块/交付结果，放入 discarded_items。
 	 12. 不要把“提到过的动词 + 名词”当作任务；候选至少需要明确交付物、负责人/角色、明确时间信号三者之一，并必须保留 evidence_quote。
@@ -660,8 +680,11 @@ export async function generateMeetingTasks(meetingText) {
 	  21. task_role 必须区分 primary_task/context/progress/discarded：只有 primary_task 可进入 today_tasks；解释原因、背景铺垫、状态描述、观点讨论必须标为 context/progress/discarded 并放入 progress_updates 或 discarded_items，不得生成任务卡。
 	  22. actionability 必须区分 actionable/context_only/status_only/generic_follow_up/unclear：只有 actionable 可创建任务卡；context_only/status_only/generic_follow_up/unclear 不能进入 today_tasks。
 	  23. speaker/assignee 语义：speaker 只是原文发言者；assignee 是执行人；recipient/reviewer/讨论对象/收件人不是执行人，除非原文明说其负责执行。
-	  24. source_turn_ids 填引用的结构化发言 turn_id/id，无法取得时填空数组。
-	  25. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
+		  24. missing_fields 只能记录确实缺失的 assignee/deadline/object/action/evidence 等字段；缺少 assignee/deadline 本身不是丢弃理由，必须保留为待确认候选。
+		  25. evidence_signal_types 标记原文命中的证据类型，例如 explicit_assignment、deadline_signal、delivery_signal、implicit_next_step、historical_context、new_delivery_signal。
+		  26. actionable_uncertain=true 时必须同时 needs_confirmation=true，并填写 uncertainty_reason；不得用它掩盖无证据或无动作的臆测。
+		  27. source_turn_ids 填引用的结构化发言 turn_id/id，无法取得时填空数组。
+		  28. 必须返回合法 JSON 对象，不要返回 Markdown，不要添加额外解释。
 
 分类枚举：
 - today_new_task：今天会议中新安排的任务，或者会后明确开始执行的任务。只有这一类进入 today_tasks。
@@ -685,11 +708,12 @@ export async function generateMeetingTasks(meetingText) {
 - 如果历史任务需求不清、待澄清、还要确认、还没定，suggested_status 填 "需求建议集-基础需求（未澄清）"。
 - 如果无法明确判断状态，suggested_status 填 ""。
 
-满足以下任意条件时，可以进入 Stage 1 today_tasks 候选池：
-- 会议中明确有人安排某人/某角色/某团队会后做某事。
-- 原文明确出现“今天、下午、明天、本周、会后、待会儿、稍后”等执行时间信号，并且有明确动作。
-- 原文明确出现“发到群里、整理出来、确认一下、统计一下、补一下、修一下、上线、提测、对接、拉群沟通、给出方案、输出文档”等新交付动作。
-- 历史任务今天产生了新的明确交付动作，例如“今天下午把错误日志整理出来发群里”。
+	满足以下任意条件时，可以进入 Stage 1 today_tasks 候选池：
+	- 会议中明确有人安排某人/某角色/某团队会后做某事。
+	- 原文明确出现“今天、下午、明天、本周、会后、待会儿、稍后”等执行时间信号，并且有明确动作。
+	- 原文明确出现“发到群里、整理出来、确认一下、统计一下、补一下、修一下、上线、提测、对接、拉群沟通、给出方案、输出文档”等新交付动作。
+	- 历史任务今天产生了新的明确交付动作，例如“今天下午把错误日志整理出来发群里”。
+	- 原文出现隐含交付/下一步信号（如“后面输出一下”“会后同步”“拉群对一下”），只要有可用业务对象和原文证据，也可以作为 actionable_uncertain 候选；缺负责人或缺截止时间只进入 missing_fields。
 
 以下内容通常进入 progress_updates 或 discarded_items；只有同时出现新的具体交付动作时才进入 Stage 1 today_tasks 候选池：
 - “已经做了、已完成、昨天处理了、上周弄了、之前安排过”。
@@ -715,9 +739,13 @@ export async function generateMeetingTasks(meetingText) {
       "task_brief": "一句话说明任务，50字以内",
       "task_description": "执行说明，150字以内，只写执行要求",
       "evidence_quote": "原文依据短句，80字以内",
-      "confidence": 0.8,
-      "needs_confirmation": false,
-      "extraction_type": "explicit",
+	      "confidence": 0.8,
+	      "needs_confirmation": false,
+	      "actionable_uncertain": false,
+	      "missing_fields": ["assignee/deadline/object/action/evidence"],
+	      "evidence_signal_types": ["explicit_assignment/delivery_signal/implicit_next_step/historical_context/new_delivery_signal"],
+	      "uncertainty_reason": "不确定时说明缺什么；确定时空字符串",
+	      "extraction_type": "explicit",
       "task_type": "action_item",
       "item_type": "today_new_task",
       "should_create_task": true,
@@ -746,9 +774,18 @@ export async function generateMeetingTasks(meetingText) {
   "discarded_items": [
     {
       "text": "被丢弃的讨论点或弱跟进",
-      "item_type": "discussion_only/unclear_follow_up",
-      "reason": "丢弃原因"
-    }
+	      "item_type": "discussion_only/unclear_follow_up",
+	      "discard_category": "discussion_only/progress_update/weak_follow_up/no_evidence/no_action/no_clear_object/context_only/generic_continuation",
+	      "evidence_check": {
+	        "has_transcript_evidence": true,
+	        "has_action_signal": false,
+	        "has_usable_object": false
+	      },
+	      "missing_fields": ["action/object/evidence"],
+	      "evidence_signal_types": [],
+	      "uncertainty_reason": "丢弃或待确认原因",
+	      "reason": "丢弃原因"
+	    }
   ]
 }
 
@@ -778,27 +815,38 @@ export async function validateMeetingTasks(input) {
 
   const prompt = `请作为 Stage 2 会议任务验证器，根据完整转写上下文校验 Stage 1 候选任务，并只返回合法 JSON。
 
-目标：
-1. 对每个候选决定 keep、discard 或 merge。
-2. 纠正错误负责人，但 source_speaker 必须保留原始发言人证据，不要把 source_speaker 改成最终 assignee。
-3. 合并同一交付物的重复候选；同一负责人有多个不同交付物时必须分别 keep，不允许按负责人限量。
-4. 不要新增候选之外的任务；只能处理输入 candidates 中的 candidate_id。
+	目标：
+	1. 对每个候选决定 keep、discard 或 merge，并保留结构化证据/不确定性元数据。
+	2. 纠正错误负责人，但 source_speaker 必须保留原始发言人证据，不要把 source_speaker 改成最终 assignee。
+	3. 合并同一交付物的重复候选；同一负责人有多个不同交付物时必须分别 keep，不允许按负责人限量。
+	4. 严禁新增候选之外的任务；只能处理输入 candidates 中的 candidate_id，不得发明新的 candidate_id 或从会议原文二次抽取新任务。
 
 决策规则：
-- keep：原文上下文支持这是今天会议产生的新交付动作或会后明确执行事项。
-- discard：只是讨论、历史进展、已完成事项、弱跟进、无交付物、无原文依据或候选误读上下文。
-- merge：该候选与另一个候选是同一交付物；merge_into_candidate_id 必须指向被保留的候选。
-- corrected_assignee：只有原文明确执行人和候选 assignee 不一致时填写；不确定时留空或填 "待确认" 并说明 reason。
+	- keep：原文上下文支持这是今天会议产生的新交付动作或会后明确执行事项；缺负责人或缺截止时间本身不是 discard 理由，应保留并标记 actionable_uncertain/needs_confirmation/missing_fields。
+	- discard：只是讨论、历史进展、已完成事项、弱跟进、无交付物、无原文依据或候选误读上下文。
+	- merge：该候选与另一个候选是同一交付物；merge_into_candidate_id 必须指向被保留的候选。
+	- corrected_assignee：只有原文明确执行人和候选 assignee 不一致时填写；不确定时留空或填 "待确认" 并说明 reason。
+	- evidence_check 必须描述该候选是否有原文证据、动作信号和可用业务对象；discard_category 必须使用 discussion_only/progress_update/weak_follow_up/no_evidence/no_action/no_clear_object/context_only/generic_continuation/duplicate 之一。
+	- 对 keep 的不确定候选，也要返回 missing_fields、evidence_signal_types、uncertainty_reason；对确定候选可返回空数组/空字符串。
 
 必须返回 JSON 格式：
 {
   "decisions": [
     {
       "candidate_id": "candidate_1",
-      "action": "keep/discard/merge",
-      "corrected_assignee": "负责人或空字符串",
-      "merge_into_candidate_id": "candidate_2 或空字符串",
-      "reason": "基于原文上下文的简短理由"
+	      "action": "keep/discard/merge",
+	      "corrected_assignee": "负责人或空字符串",
+	      "merge_into_candidate_id": "candidate_2 或空字符串",
+	      "discard_category": "仅 discard/merge 必填；keep 可为空",
+	      "evidence_check": {
+	        "has_transcript_evidence": true,
+	        "has_action_signal": true,
+	        "has_usable_object": true
+	      },
+	      "missing_fields": ["assignee/deadline/object/action/evidence"],
+	      "evidence_signal_types": ["explicit_assignment/delivery_signal/implicit_next_step/historical_context/new_delivery_signal"],
+	      "uncertainty_reason": "不确定或丢弃原因补充；确定时空字符串",
+	      "reason": "基于原文上下文的简短理由"
     }
   ]
 }
