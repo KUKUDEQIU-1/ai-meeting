@@ -1,7 +1,7 @@
 import { feishuScanCoordinator } from './feishuScanCoordinator.js';
 import { listMasterTaskAuditRecords } from './feishuBitableClient.js';
-import { sendMasterTaskAuditCard } from './masterTaskAuditCardService.js';
-import { getMasterTaskAuditLog, markMasterTaskAuditFailed, upsertMasterTaskAuditLog } from './masterTaskAuditLogService.js';
+import { sendMasterTaskAuditCard, sendMasterTaskInspectionAdminSummary } from './masterTaskAuditCardService.js';
+import { getMasterTaskAuditLog, listMasterTaskInspectionHistory, markMasterTaskAuditFailed, upsertMasterTaskAuditLog } from './masterTaskAuditLogService.js';
 import { auditMasterTaskTable } from './masterTaskAuditService.js';
 import { syncFeishuWikiDocxNotes } from './feishuWikiDocxImportService.js';
 import { syncRecentGetNotes } from './getnoteImportService.js';
@@ -186,11 +186,13 @@ export function createFeishuResidentWorker({
   const wikiScan = scans.wiki || ((options) => syncFeishuWikiDocxNotes(options));
   const getnoteScan = scans.getnote || ((options) => syncRecentGetNotes(options));
   const runAudit = audit.run || (() => auditMasterTaskTable({
-    listRecords: listMasterTaskAuditRecords,
-    getAuditLog: getMasterTaskAuditLog,
-    createAuditLog: upsertMasterTaskAuditLog,
-    sendCard: sendMasterTaskAuditCard,
-    markFailed: markMasterTaskAuditFailed
+    listRecords: audit.listRecords || (() => listMasterTaskAuditRecords({ inspection: true })),
+    getAuditLog: audit.getAuditLog || getMasterTaskAuditLog,
+    getAuditHistory: audit.getAuditHistory || ((recordId) => listMasterTaskInspectionHistory(recordId, localDateKey(now()))),
+    createAuditLog: audit.createAuditLog || upsertMasterTaskAuditLog,
+    sendCard: audit.sendCard || sendMasterTaskAuditCard,
+    sendAdminSummary: audit.sendAdminSummary || sendMasterTaskInspectionAdminSummary,
+    markFailed: audit.markFailed || markMasterTaskAuditFailed
   }));
   let running = false;
   let stopped = false;

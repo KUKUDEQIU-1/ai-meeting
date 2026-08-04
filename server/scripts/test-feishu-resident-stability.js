@@ -362,6 +362,56 @@ async function testWorkerSkipsAuditOnBeijingWeekend() {
   assert.equal(auditCalls, 0);
 }
 
+async function testWorkerDefaultAuditLaneInjectsHistoryAndAdminSummary() {
+  const calls = [];
+  const worker = createFeishuResidentWorker({
+    env: {
+      FEISHU_RESIDENT_WORKER_ENABLED: 'true',
+      FEISHU_RESIDENT_REQUIRE_TEST_RECIPIENT: 'false',
+      FEISHU_MASTER_TASK_AUDIT_ENABLED: 'true',
+      FEISHU_MASTER_TASK_AUDIT_HOUR: '18',
+      FEISHU_MASTER_TASK_AUDIT_MINUTE: '0'
+    },
+    scans: {
+      wiki: async () => ({ imported: [], skipped: [], failed: [], scan_source: 'feishu_wiki_docx_library' })
+    },
+    audit: {
+      listRecords: async () => [{
+        recordId: 'rec_worker_history',
+        taskName: 'worker history',
+        status: '进行中',
+        taskStatus: '进行中',
+        assigneeName: '简学勤',
+        assigneeKey: '简学勤',
+        progressEvaluation: '50',
+        progressText: '50',
+        startDate: '2026-07-20',
+        completionDate: '2026-07-30'
+      }],
+      getAuditHistory: async (recordId) => {
+        calls.push(`history:${recordId}`);
+        return [
+          { audit_type: 'task_inspection', audit_date: '2026-07-23', submitted_status: '进行中', submitted_progress_evaluation: '50', submitted_start_date: '2026-07-20', submitted_completion_date: '2026-07-30' },
+          { audit_type: 'task_inspection', audit_date: '2026-07-22', submitted_status: '进行中', submitted_progress_evaluation: '50', submitted_start_date: '2026-07-20', submitted_completion_date: '2026-07-30' }
+        ];
+      },
+      getAuditLog: async () => null,
+      createAuditLog: async (payload) => ({ ...payload, id: 51, record_id: payload.recordId, audit_date: payload.auditDate, audit_type: payload.auditType }),
+      sendCard: async () => { calls.push('employee-card'); },
+      sendAdminSummary: async () => { calls.push('admin-summary'); return { status: 'sent', message_id: 'om_admin' }; },
+      markFailed: async () => {}
+    },
+    scheduler: () => ({ cancel() {} }),
+    now: () => new Date('2026-07-24T10:05:00.000Z')
+  });
+
+  await worker.runCycle();
+  const snapshot = worker.snapshot();
+
+  assert.deepEqual(calls, ['history:rec_worker_history', 'employee-card', 'admin-summary']);
+  assert.equal(snapshot.lanes.audit.last_result.remindable, 1);
+}
+
 async function testStopDuringInFlightCycleKeepsStoppedStatusAndSkipsSchedule() {
   let releaseScan;
   let schedules = 0;
@@ -401,6 +451,7 @@ await testWorkerRunsGetNoteScanAfterWikiWhenEnabled();
 await testWorkerReportsGetNoteFailureWithoutBlockingNextCycle();
 await testWorkerRunsAuditOnlyAfterConfiguredTimeAndOncePerDay();
 await testWorkerSkipsAuditOnBeijingWeekend();
+await testWorkerDefaultAuditLaneInjectsHistoryAndAdminSummary();
 await testStopDuringInFlightCycleKeepsStoppedStatusAndSkipsSchedule();
 
 console.log('feishu resident stability tests passed');
