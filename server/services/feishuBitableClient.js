@@ -16,6 +16,7 @@ export const MEETING_TASK_TABLE_SCHEMA = [
 export const MEETING_INDEX_TABLE_SCHEMA = ['会议标题', '会议时间', '会议来源', '任务数', '今日新增任务数', '历史进展数', '历史进展摘要', '过滤事项数', '会议摘要短版', '任务表链接', 'note_id', '同步状态', '内容来源', '内容长度', '是否使用原文', '待确认任务数', '创建时间'];
 export const MASTER_TASK_TABLE_SCHEMA_VERSION = 'master_task_v1';
 export const MASTER_TASK_TABLE_REQUIRED_FIELDS = ['事务需求名称', '开始日期'];
+const MASTER_TASK_INSPECTION_FIELD_NAMES = ['需求状态', '进度评估', '开始日期', '完成日期'];
 const FOLLOWER_FIELD_NAME = '跟进人';
 const MASTER_TASK_AUDIT_FIELDS_CACHE_TTL_MS = 30_000;
 const MASTER_TASK_AUDIT_RECORDS_CACHE_TTL_MS = 5_000;
@@ -1139,6 +1140,17 @@ function buildMasterTaskUpdateFields({ fieldNames, taskStatus, completionDate, p
   return fields;
 }
 
+function buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation, startDate, completionDate }) {
+  const fields = {};
+
+  if (String(taskStatus || '').trim()) fields.需求状态 = normalizeMasterTaskStatusForUpdate(taskStatus);
+  if (String(progressEvaluation || '').trim()) fields.进度评估 = String(progressEvaluation || '').trim();
+  if (String(startDate || '').trim()) fields.开始日期 = normalizeDateOnlyTimestamp(startDate);
+  if (String(completionDate || '').trim()) fields.完成日期 = normalizeDateOnlyTimestamp(completionDate);
+
+  return fields;
+}
+
 export async function validateMasterTaskAuditFields(context = {}) {
   const config = await resolveMasterTaskTableConfig(context);
   const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
@@ -1153,7 +1165,6 @@ export async function validateMasterTaskAuditFields(context = {}) {
     if (!hasProgressField) {
       missingFields.push('任务进展描述|任务进展');
     }
-
     if (missingFields.length > 0) {
       throw new Error(`正式总表巡检字段缺失：${missingFields.join('、')}`);
     }
@@ -1162,18 +1173,48 @@ export async function validateMasterTaskAuditFields(context = {}) {
   });
 }
 
+async function validateMasterTaskInspectionFields(context = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
+  const fields = await listBitableFields({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
+  const names = new Set(fields.map(fieldNameOf).filter(Boolean));
+  const missingFields = ['事务需求名称', '需求状态', '跟进人', ...MASTER_TASK_INSPECTION_FIELD_NAMES].filter((name) => !names.has(name));
+
+  if (missingFields.length) {
+    throw new Error(`正式总表巡检字段缺失：${missingFields.join('、')}`);
+  }
+
+  return { fields, fieldNames: [...names] };
+}
+
+function requireMasterTaskInspectionFields(fieldNames) {
+  const missingFields = MASTER_TASK_INSPECTION_FIELD_NAMES.filter((name) => !fieldNames.has(name));
+  if (missingFields.length) {
+    throw new Error(`正式总表巡检字段缺失：${missingFields.join('、')}`);
+  }
+}
+
 export async function listMasterTaskAuditRecords(context = {}) {
   const config = await resolveMasterTaskTableConfig(context);
   const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
   const cacheKey = masterTaskAuditCacheKey({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
 
   return cachedMasterTaskAuditValue(masterTaskAuditRecordsCache, cacheKey, MASTER_TASK_AUDIT_RECORDS_CACHE_TTL_MS, async () => {
-    await validateMasterTaskAuditFields({ ...context, tenantAccessToken });
+    if (context.inspection) {
+      const auditSchema = await validateMasterTaskInspectionFields({ ...context, tenantAccessToken });
+      requireMasterTaskInspectionFields(new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean)));
+    } else {
+      await validateMasterTaskAuditFields({ ...context, tenantAccessToken });
+    }
     const records = await listBitableRecords({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
 
     return records.map((record) => {
       const status = recordFieldText(record.fields, ['需求状态', '状态']);
-      const progressText = recordFieldText(record.fields, ['任务进展描述', '任务进展']);
+      const progressText = context.inspection
+        ? recordFieldText(record.fields, ['进度评估'])
+        : recordFieldText(record.fields, ['任务进展描述', '任务进展']);
+      const progressEvaluation = recordFieldText(record.fields, ['进度评估']);
+      const startDate = normalizeDateOnlyText(recordFieldText(record.fields, ['开始日期']));
       const completionDate = normalizeDateOnlyText(recordFieldText(record.fields, ['完成日期']));
       const taskNote = recordFieldText(record.fields, ['备注']);
 
@@ -1187,6 +1228,10 @@ export async function listMasterTaskAuditRecords(context = {}) {
         assigneeKey: recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim(),
         progressText,
         progress_text: progressText,
+        progressEvaluation,
+        progress_evaluation: progressEvaluation,
+        startDate,
+        start_date: startDate,
         completionDate,
         completion_date: completionDate,
         taskNote,
@@ -1207,6 +1252,32 @@ export async function updateMasterTaskProgress({ recordId, progressText, taskSta
   const auditSchema = await validateMasterTaskAuditFields({ ...context, tenantAccessToken: token });
   const fieldNames = new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean));
   const fields = buildMasterTaskUpdateFields({ fieldNames, taskStatus, completionDate, progressText, taskNote });
+
+  try {
+    return await updateBitableRecord({
+      appToken: config.appToken,
+      tableId: config.tableId,
+      tenantAccessToken: token,
+      recordId,
+      fields
+    });
+  } finally {
+    invalidateMasterTaskAuditRecordsCache({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken: token });
+  }
+}
+
+export async function updateMasterTaskInspectionFields({ recordId, taskStatus, progressEvaluation, startDate, completionDate, tenantAccessToken, ...context } = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const token = tenantAccessToken || await getTenantAccessToken();
+  const auditSchema = await validateMasterTaskAuditFields({ ...context, tenantAccessToken: token });
+  const fieldNames = new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean));
+  requireMasterTaskInspectionFields(fieldNames);
+
+  const fields = buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation, startDate, completionDate });
+
+  if (Object.keys(fields).length === 0) {
+    throw new Error('任务巡检更新不能为空');
+  }
 
   try {
     return await updateBitableRecord({

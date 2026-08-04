@@ -43,6 +43,20 @@ function payloadFor(auditLog, action, formValue = {}) {
   };
 }
 
+function inspectionPayloadFor(auditLog, formValue = {}) {
+  return {
+    header: { event_id: `evt_inspection_${Date.now()}` },
+    event: {
+      operator: { open_id: 'ou_audit_actor' },
+      context: { open_message_id: auditLog.card_message_id },
+      action: {
+        value: { action: 'task_inspection_submit_update', audit_log_id: auditLog.id, card_kind: 'task_inspection' },
+        form_value: { task_inspection_form: formValue }
+      }
+    }
+  };
+}
+
 function assertHttp200CompatiblePrepared(prepared, auditLog) {
   assert.equal(prepared.shouldProcess, true);
   assert.equal(prepared.auditLog.record_id, auditLog.record_id);
@@ -687,6 +701,95 @@ async function testLegacyCallbackUsesRootActorAndMessageId() {
   assert.equal(prepared.parsed.message_id, auditLog.card_message_id);
 }
 
+async function testTaskInspectionActionWritesOnlyFourInspectionFields() {
+  const auditLog = await createAuditLog('task_inspection');
+  const prepared = await prepareFeishuCardAction(inspectionPayloadFor(auditLog, {
+    task_status: '进行中',
+    progress_evaluation: '75',
+    start_date: '2026-07-20',
+    completion_date: '2026-07-30'
+  }));
+  let updatedPayload = null;
+
+  const response = await processPreparedFeishuCardAction(prepared, {
+    updateInspection: async (payload) => {
+      updatedPayload = payload;
+      return { status: 'updated' };
+    },
+    updateProgress: async () => {
+      throw new Error('legacy progress updater should not be called');
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.equal(response.toast.content, '任务巡检已更新');
+  assert.deepEqual(updatedPayload, {
+    recordId: auditLog.record_id,
+    taskStatus: '进行中',
+    progressEvaluation: '75',
+    startDate: '2026-07-20',
+    completionDate: '2026-07-30'
+  });
+  assert.equal(stored.action_taken, 'confirmed_updated');
+  assert.equal(stored.submitted_status, '进行中');
+  assert.equal(stored.submitted_progress_evaluation, '75');
+  assert.equal(stored.submitted_start_date, '2026-07-20');
+  assert.equal(stored.submitted_completion_date, '2026-07-30');
+  assert.equal(stored.submitted_progress_text || '', '');
+  assert.equal(stored.submitted_note || '', '');
+}
+
+async function testTaskInspectionActionAcceptsPartialApprovedFields() {
+  const auditLog = await createAuditLog('task_inspection');
+  const prepared = await prepareFeishuCardAction(inspectionPayloadFor(auditLog, {
+    progress_evaluation: '75'
+  }));
+  let updatedPayload = null;
+
+  await processPreparedFeishuCardAction(prepared, {
+    updateInspection: async (payload) => {
+      updatedPayload = payload;
+      return { status: 'updated' };
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+
+  assert.deepEqual(updatedPayload, {
+    recordId: auditLog.record_id,
+    taskStatus: undefined,
+    progressEvaluation: '75',
+    startDate: '',
+    completionDate: ''
+  });
+}
+
+async function testTaskInspectionActionRejectsNarrativeFields() {
+  const auditLog = await createAuditLog('task_inspection');
+
+  await assert.rejects(
+    prepareFeishuCardAction(inspectionPayloadFor(auditLog, {
+      progress_text: '不允许提交叙述进展'
+    })),
+    /任务巡检字段无效/
+  );
+}
+
+async function testTaskInspectionActionIsClaimedBeforeGenericMeetingCallback() {
+  const auditLog = await createAuditLog('task_inspection');
+  const prepared = await prepareFeishuCardAction(inspectionPayloadFor(auditLog, {
+    task_status: '已完成',
+    progress_evaluation: '100',
+    start_date: '2026-07-20',
+    completion_date: '2026-07-24'
+  }));
+
+  assert.equal(prepared.auditLog.id, auditLog.id);
+  assert.equal(prepared.state, undefined);
+  assert.equal(prepared.parsed.card_kind, 'task_inspection');
+  assert.equal(prepared.parsed.action, 'task_inspection_submit_update');
+}
+
 await initDatabase();
 await testNoUpdateDoesNotWriteProgress();
 await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
@@ -712,5 +815,9 @@ await testPrepareAcceptsJsonStringActionValue();
 await testPrepareCanFallbackToCamelCaseRecordDateTypeLookup();
 await testPrepareCanFallbackToContextMessageIdLookup();
 await testLegacyCallbackUsesRootActorAndMessageId();
+await testTaskInspectionActionWritesOnlyFourInspectionFields();
+await testTaskInspectionActionAcceptsPartialApprovedFields();
+await testTaskInspectionActionRejectsNarrativeFields();
+await testTaskInspectionActionIsClaimedBeforeGenericMeetingCallback();
 
 console.log('master task audit action tests passed');

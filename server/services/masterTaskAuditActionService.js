@@ -1,4 +1,4 @@
-import { updateMasterTaskProgress } from './feishuBitableClient.js';
+import { updateMasterTaskInspectionFields, updateMasterTaskProgress } from './feishuBitableClient.js';
 import {
   getMasterTaskAuditLogByCardMessageId,
   getMasterTaskAuditLogById,
@@ -48,6 +48,22 @@ function normalizeTaskStatus(value) {
 
 function normalizeSubmittedNote(value) {
   return String(value || '').trim();
+}
+
+function normalizeProgressEvaluation(value) {
+  const text = String(value || '').trim();
+  if (!text) reject('进度评估不能为空', 400);
+  const numeric = Number(text.replace('%', ''));
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) reject('进度评估无效', 400);
+  return String(numeric);
+}
+
+function optionalDateOnly(value, fieldName) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const dateOnly = dateOnlyFromText(text);
+  if (!dateOnly) reject(`${fieldName}无效`, 400);
+  return dateOnly;
 }
 
 function dateOnlyFromDate(date) {
@@ -133,6 +149,22 @@ function normalizeConfirmUpdateValues(formValues) {
   return { usesCanonicalEdit, progressText, taskStatus, completionDate, taskNote };
 }
 
+function normalizeTaskInspectionValues(formValues) {
+  const allowedFields = new Set(['task_status', 'progress_evaluation', 'start_date', 'completion_date']);
+  const submittedKeys = Object.keys(formValues || {}).filter((key) => String(formValues[key] || '').trim());
+  const unknownFields = submittedKeys.filter((key) => !allowedFields.has(key));
+
+  if (unknownFields.length) reject('任务巡检字段无效', 400);
+
+  const values = {};
+  if (Object.hasOwn(formValues || {}, 'task_status') && String(formValues.task_status || '').trim()) values.taskStatus = normalizeTaskStatus(formValues.task_status);
+  if (Object.hasOwn(formValues || {}, 'progress_evaluation') && String(formValues.progress_evaluation || '').trim()) values.progressEvaluation = normalizeProgressEvaluation(formValues.progress_evaluation);
+  if (Object.hasOwn(formValues || {}, 'start_date')) values.startDate = optionalDateOnly(formValues.start_date, '开始日期');
+  if (Object.hasOwn(formValues || {}, 'completion_date')) values.completionDate = optionalDateOnly(formValues.completion_date, '完成日期');
+  if (!Object.keys(values).some((key) => values[key])) reject('任务巡检更新不能为空', 400);
+  return values;
+}
+
 function auditValue(rawValue, snakeKey, camelKey) {
   return rawValue?.[snakeKey] || rawValue?.[camelKey] || '';
 }
@@ -174,6 +206,8 @@ function parsedFormPresence(formValues) {
     task_status: Boolean(String(formValues.task_status || '').trim()),
     completion_date: Boolean(String(formValues.completion_date || '').trim()),
     progress_text: Boolean(String(formValues.progress_text || '').trim()),
+    progress_evaluation: Boolean(String(formValues.progress_evaluation || '').trim()),
+    start_date: Boolean(String(formValues.start_date || '').trim()),
     task_note: Boolean(String(formValues.task_note || '').trim())
   };
 }
@@ -276,7 +310,7 @@ export async function prepareMasterTaskAuditCardAction(payload) {
 
   console.log('[Master Task Audit] callback received', JSON.stringify(safeAuditCallbackMetadata(parsed)));
 
-  if (!['master_task_no_update', 'master_task_confirm_update'].includes(parsed.action)) {
+  if (!['master_task_no_update', 'master_task_confirm_update', 'task_inspection_submit_update'].includes(parsed.action)) {
     return null;
   }
 
@@ -294,12 +328,21 @@ export async function prepareMasterTaskAuditCardAction(payload) {
       throw error;
     }
   }
+  if (parsed.action === 'task_inspection_submit_update') {
+    try {
+      submittedValues = normalizeTaskInspectionValues(parsed.form_values);
+    } catch (error) {
+      logAuditValidationFailure({ error, parsed, submittedValues: parsed.form_values });
+      throw error;
+    }
+  }
 
   return { parsed, auditLog, submittedValues, response: feishuCallbackToast('正在处理'), shouldProcess: true };
 }
 
 export async function processPreparedMasterTaskAuditCardAction(prepared, overrides = {}) {
   const updateProgress = overrides.updateProgress || updateMasterTaskProgress;
+  const updateInspection = overrides.updateInspection || updateMasterTaskInspectionFields;
   const updateCard = overrides.updateCard || updateMasterTaskAuditCard;
 
   if (!prepared.shouldProcess) {
@@ -379,6 +422,46 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
       throw error;
     }
     return feishuCallbackToast('任务进展已更新');
+  }
+
+  if (prepared.parsed.action === 'task_inspection_submit_update') {
+    const { taskStatus, progressEvaluation, startDate, completionDate } = prepared.submittedValues;
+    const submittedValues = {};
+    if (taskStatus) submittedValues.task_status = taskStatus;
+    if (progressEvaluation) submittedValues.progress_evaluation = progressEvaluation;
+    if (startDate) submittedValues.start_date = startDate;
+    if (completionDate) submittedValues.completion_date = completionDate;
+
+    try {
+      await updateInspection({ recordId: prepared.auditLog.record_id, taskStatus, progressEvaluation, startDate, completionDate });
+      await markMasterTaskAuditAction({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        actionTaken: 'confirmed_updated',
+        submittedStatus: taskStatus,
+        submittedCompletionDate: completionDate,
+        submittedStartDate: startDate,
+        submittedProgressEvaluation: progressEvaluation,
+        submittedValues,
+        callbackId: prepared.parsed.callback_id
+      });
+      try {
+        await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      } catch (error) {
+        logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+      }
+    } catch (error) {
+      await markMasterTaskAuditFailed({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        errorMessage: error.message,
+        callbackId: prepared.parsed.callback_id
+      });
+      throw error;
+    }
+    return feishuCallbackToast('任务巡检已更新');
   }
 
   reject('不支持的总表巡检卡片操作', 400);

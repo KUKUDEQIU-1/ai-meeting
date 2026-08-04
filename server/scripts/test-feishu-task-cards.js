@@ -14,7 +14,7 @@ import {
 import { handleFeishuCardAction, prepareFeishuCardAction } from '../services/feishuTaskCardActionService.js';
 import { all, initDatabase, run } from '../db/database.js';
 import { finalizeMeetingTaskDraftProgressForAssignee } from '../services/draftFinalizeService.js';
-import { createTaskRecord, formatTaskForMasterTable, updateMasterTaskProgress } from '../services/feishuBitableClient.js';
+import { createTaskRecord, formatTaskForMasterTable, updateMasterTaskInspectionFields, updateMasterTaskProgress } from '../services/feishuBitableClient.js';
 import { markDraftTasksMatchedInMasterTable, repairDraftAssigneesFromPreviousDraft, speakerCoverageTaskItems } from '../services/feishuMeetingNotesImportService.js';
 import { buildMeetingTableNotifyText } from '../services/feishuBitableClient.js';
 import { normalizeTaskExtractionResult } from '../services/aiService.js';
@@ -1086,6 +1086,63 @@ async function testMasterTaskAuditUpdateRejectsInvalidStatusBeforeBitablePut() {
   }
 
   assert.equal(calls.some((call) => call.options.method === 'PUT'), false);
+}
+
+async function testTaskInspectionUpdateUsesOnlyFourMasterFields() {
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+
+    if (String(url).endsWith('/fields')) {
+      return {
+        ok: true,
+        json: async () => ({
+          code: 0,
+          data: {
+            items: [
+              { field_name: '事务需求名称' },
+              { field_name: '跟进人' },
+              { field_name: '需求状态' },
+              { field_name: '进度评估' },
+              { field_name: '开始日期' },
+              { field_name: '完成日期' },
+              { field_name: '任务进展描述' },
+              { field_name: '备注' }
+            ]
+          }
+        })
+      };
+    }
+
+    return {
+      ok: true,
+      json: async () => ({ code: 0, data: { record: { record_id: 'rec_task_inspection_contract' } } })
+    };
+  };
+
+  try {
+    await updateMasterTaskInspectionFields({
+      appToken: 'app_task_inspection_contract',
+      tableId: 'tbl_task_inspection_contract',
+      tenantAccessToken: 'tenant_task_inspection_contract',
+      recordId: 'rec_task_inspection_contract',
+      taskStatus: '进行中',
+      progressEvaluation: '75',
+      startDate: '2026-08-01',
+      completionDate: '2026-08-29'
+    });
+  } finally {
+    global.fetch = originalFetch;
+  }
+
+  const updateCall = calls.find((call) => call.options.method === 'PUT');
+  const fields = JSON.parse(updateCall.options.body).fields;
+  assert.deepEqual(Object.keys(fields).sort(), ['完成日期', '开始日期', '进度评估', '需求状态'].sort());
+  assert.equal(fields.需求状态, '进行中');
+  assert.equal(fields.进度评估, '75');
+  assert.equal(fields.开始日期, new Date(2026, 7, 1).getTime());
+  assert.equal(fields.完成日期, new Date(2026, 7, 29).getTime());
 }
 
 function testConfirmedManualProgressBuildsBitableProgressFields() {
@@ -5312,6 +5369,7 @@ testSpeakerCoverageAggregatesReliableConcreteSegmentsBeforeFallback();
 testNotifyTextIncludesTaskCountsByAssignee();
 await testMasterTaskAuditUpdateUsesCanonicalBitableFieldMapping();
 await testMasterTaskAuditUpdateRejectsInvalidStatusBeforeBitablePut();
+await testTaskInspectionUpdateUsesOnlyFourMasterFields();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDraftNormalizationPreservesSemanticTaskFields();
