@@ -884,12 +884,132 @@ export function buildMasterTaskPausedAuditCard({ audit, terminal = false }) {
   };
 }
 
+function fieldNamesFromInspectionIssues(issues) {
+  const names = new Set();
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    for (const name of Array.isArray(issue?.field_names) ? issue.field_names : []) {
+      names.add(String(name || '').trim());
+    }
+  }
+  return names;
+}
+
+export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
+  const taskName = truncateText(audit?.task_name || '未命名任务', 100);
+  const assigneeName = truncateText(audit?.assignee_name || '待确认', 40);
+  const taskStatus = String(audit?.task_status || audit?.submitted_status || '').trim();
+  const progressEvaluation = String(audit?.progress_evaluation || audit?.submitted_progress_evaluation || audit?.progress_text || audit?.submitted_progress_text || '').trim();
+  const startDate = String(audit?.start_date || audit?.submitted_start_date || '').trim();
+  const completionDate = String(audit?.completion_date || audit?.submitted_completion_date || '').trim();
+
+  if (terminal) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: {
+        template: 'green',
+        title: { tag: 'plain_text', content: '任务巡检已处理' }
+      },
+      body: {
+        elements: [{
+          tag: 'markdown',
+          content: `**任务：** ${taskName}\n**跟进人：** ${assigneeName}\n\n本次任务巡检已处理。`
+        }]
+      }
+    };
+  }
+
+  const fieldNames = fieldNamesFromInspectionIssues(audit?.inspection_issues);
+  const showAll = fieldNames.size === 0;
+  const elements = [
+    { tag: 'markdown', content: `**任务：** ${taskName}\n**跟进人：** ${assigneeName}` },
+    { tag: 'hr' }
+  ];
+
+  if (showAll || fieldNames.has('task_status')) {
+    elements.push(selectElement({
+      tag: 'task_status',
+      options: VALID_TASK_STATUSES.map((status) => ({ text: { tag: 'plain_text', content: status }, value: status })),
+      value: taskStatus
+    }));
+  }
+  if (showAll || fieldNames.has('progress_evaluation')) {
+    elements.push(inputElement({ tag: 'progress_evaluation', label: '进度评估', value: progressEvaluation }));
+  }
+  if (showAll || fieldNames.has('start_date')) {
+    elements.push(datePickerElement({ tag: 'start_date', label: '开始日期', value: startDate }));
+  }
+  if (showAll || fieldNames.has('completion_date')) {
+    elements.push(datePickerElement({ tag: 'completion_date', label: '完成日期', value: completionDate }));
+  }
+
+  elements.push({
+    tag: 'column_set',
+    columns: [{
+      tag: 'column',
+      width: 'weighted',
+      weight: 1,
+      elements: [callbackButton({
+        name: 'task_inspection_submit_update',
+        text: '提交更新',
+        type: 'primary',
+        value: {
+          action: 'task_inspection_submit_update',
+          audit_log_id: audit.id,
+          audit_record_id: audit.record_id,
+          audit_date: audit.audit_date,
+          audit_type: audit.audit_type,
+          card_kind: 'task_inspection'
+        }
+      })]
+    }]
+  });
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: {
+      template: audit?.due_soon ? 'blue' : 'orange',
+      title: { tag: 'plain_text', content: '任务巡检待更新' }
+    },
+    body: {
+      elements: [{
+        tag: 'form',
+        name: 'task_inspection_form',
+        elements
+      }]
+    }
+  };
+}
+
+export function buildMasterTaskInspectionAdminSummaryCard({ auditDate, summary }) {
+  const members = Array.isArray(summary?.members) ? summary.members : [];
+  const elements = [
+    labelElement(`**巡检日期：** ${truncateText(auditDate, 20)}\n**异常任务：** ${Number(summary?.abnormal_count || 0)}\n**临期提醒：** ${Number(summary?.due_soon_count || 0)}`)
+  ];
+
+  for (const member of members) {
+    elements.push(labelElement(`**${truncateText(member.assignee_name || '未分配', 40)}**｜abnormal=${Number(member.abnormal_count || 0)}｜due_soon=${Number(member.due_soon_count || 0)}`));
+  }
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'purple',
+      title: { tag: 'plain_text', content: '总任务巡检汇总' }
+    },
+    body: { elements }
+  };
+}
+
 function extractAllowedFormValues(formValue, itemId) {
   const safeItemId = String(itemId || '');
   const suffix = safeItemId ? `_${safeItemId}` : '';
   const formContainers = [
     formValue,
     formValue?.master_task_audit_form,
+    formValue?.task_inspection_form,
     formValue?.task_form,
     formValue?.getnote_task_form
   ];
@@ -903,6 +1023,8 @@ function extractAllowedFormValues(formValue, itemId) {
       ...fieldValue('matched_task_name')
     ),
     task_status: firstString(...fieldValue(`task_status${suffix}`), ...fieldValue('task_status')),
+    progress_evaluation: firstString(...fieldValue(`progress_evaluation${suffix}`), ...fieldValue('progress_evaluation')),
+    start_date: firstString(...fieldValue(`start_date${suffix}`), ...fieldValue('start_date')),
     completion_date: firstString(...fieldValue(`completion_date${suffix}`), ...fieldValue('completion_date')),
     progress_text: firstString(...fieldValue(`progress_text${suffix}`), ...fieldValue('progress_text')),
     task_note: firstString(...fieldValue(`task_note${suffix}`), ...fieldValue('task_note'))

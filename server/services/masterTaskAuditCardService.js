@@ -1,5 +1,5 @@
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { buildMasterTaskInProgressAuditCard, buildMasterTaskPausedAuditCard, normalizeAssigneeKey } from './feishuTaskCardPure.js';
+import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard, normalizeAssigneeKey } from './feishuTaskCardPure.js';
 import { getMasterTaskAuditLogById, markMasterTaskAuditFailed, markMasterTaskAuditSent, upsertMasterTaskAuditLog } from './masterTaskAuditLogService.js';
 import { patchInteractiveFeishuMessage, resolveTaskCardRecipients, sendInteractiveFeishuMessage } from './feishuTaskCardService.js';
 
@@ -23,6 +23,10 @@ function assigneeMapFromMembers(members) {
 }
 
 function buildAuditCard(auditLog, terminal = false) {
+  if (auditLog.audit_type === 'task_inspection' || auditLog.audit_type === 'task_inspection_due_soon') {
+    return buildMasterTaskInspectionCard({ audit: auditLog, terminal });
+  }
+
   if (auditLog.audit_type === 'paused_missing_reason') {
     return buildMasterTaskPausedAuditCard({ audit: auditLog, terminal });
   }
@@ -73,7 +77,9 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
     : baseRecipient;
   const taskStatus = normalizeText(auditLog.task_status || auditLog.submitted_status);
   const completionDate = normalizeDateOnlyText(auditLog.completion_date || auditLog.submitted_completion_date);
+  const startDate = normalizeDateOnlyText(auditLog.start_date || auditLog.submitted_start_date);
   const progressText = normalizeText(auditLog.progress_text || auditLog.submitted_progress_text || auditLog.submitted_text);
+  const progressEvaluation = normalizeText(auditLog.progress_evaluation || auditLog.submitted_progress_evaluation || progressText);
   const taskNote = normalizeText(auditLog.task_note || auditLog.submitted_note);
   const nextLog = await upsertAuditLog({
     recordId: auditLog.record_id,
@@ -89,7 +95,9 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
     submittedText: progressText,
     submittedStatus: taskStatus,
     submittedCompletionDate: completionDate,
+    submittedStartDate: startDate,
     submittedProgressText: progressText,
+    submittedProgressEvaluation: progressEvaluation,
     submittedNote: taskNote
   });
 
@@ -99,7 +107,11 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
       assignee_name: recipient.assignee_name,
       task_status: normalizeText(nextLog.submitted_status || nextLog.task_status || taskStatus),
       completion_date: normalizeDateOnlyText(nextLog.submitted_completion_date || completionDate),
+      start_date: normalizeDateOnlyText(nextLog.submitted_start_date || startDate),
       progress_text: normalizeText(nextLog.submitted_progress_text || nextLog.submitted_text || progressText),
+      progress_evaluation: normalizeText(nextLog.submitted_progress_evaluation || progressEvaluation),
+      inspection_issues: auditLog.inspection_issues || [],
+      due_soon: Boolean(auditLog.due_soon),
       task_note: normalizeText(nextLog.submitted_note || taskNote)
     });
     const messageId = await sendMessage({ receiveId: recipient.receive_id, card });
@@ -118,6 +130,29 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
     });
     throw error;
   }
+}
+
+export function resolveMasterTaskAuditAdminRecipient(env = process.env) {
+  const receiveIdType = String(env.FEISHU_NOTIFY_RECEIVE_ID_TYPE || '').trim() || 'email';
+  const receiveId = String(env.FEISHU_NOTIFY_RECEIVE_ID || '').trim();
+
+  if (!receiveId) return { status: 'skipped', reason: 'FEISHU_NOTIFY_RECEIVE_ID_not_configured' };
+  if (receiveIdType !== 'open_id') return { status: 'skipped', reason: 'FEISHU_NOTIFY_RECEIVE_ID_TYPE_must_be_open_id_for_interactive_card' };
+  return { status: 'ready', receive_id_type: receiveIdType, receive_id: receiveId };
+}
+
+export async function sendMasterTaskInspectionAdminSummary({ auditDate, summary }, deps = {}) {
+  const resolveRecipient = deps.resolveRecipient || (() => resolveMasterTaskAuditAdminRecipient());
+  const sendMessage = deps.sendMessage || sendInteractiveFeishuMessage;
+  const recipient = resolveRecipient();
+
+  if (recipient.status !== 'ready') {
+    return { status: 'skipped', reason: recipient.reason || 'admin_summary_recipient_not_configured' };
+  }
+
+  const card = buildMasterTaskInspectionAdminSummaryCard({ auditDate, summary });
+  const messageId = await sendMessage({ receiveId: recipient.receive_id, card });
+  return { status: 'sent', message_id: messageId };
 }
 
 export async function updateMasterTaskAuditCard({ auditLogId, terminal = false }) {

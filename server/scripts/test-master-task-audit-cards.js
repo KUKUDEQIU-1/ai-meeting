@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { buildMasterTaskInProgressAuditCard, buildMasterTaskPausedAuditCard } from '../services/feishuTaskCardPure.js';
-import { sendMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
+import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard } from '../services/feishuTaskCardPure.js';
+import { resolveMasterTaskAuditAdminRecipient, sendMasterTaskAuditCard, sendMasterTaskInspectionAdminSummary } from '../services/masterTaskAuditCardService.js';
 
 function formControl(card, name) {
   const stack = [card];
@@ -213,6 +213,47 @@ async function testSendMasterTaskAuditCardPreservesProgressOnlyDefaultValue() {
   assert.equal(formControl(sentCard, 'progress_text')?.default_value, '只提交进展的兼容路径');
 }
 
+function testAdminSummaryCardContainsMachineCountsByMember() {
+  const card = buildMasterTaskInspectionAdminSummaryCard({
+    auditDate: '2026-07-24',
+    summary: {
+      abnormal_count: 2,
+      due_soon_count: 1,
+      members: [{ assignee_name: '张三', abnormal_count: 2, due_soon_count: 1 }]
+    }
+  });
+  const text = JSON.stringify(card);
+
+  assert.equal(card.schema, '2.0');
+  assert.match(text, /abnormal=2/);
+  assert.match(text, /due_soon=1/);
+}
+
+async function testSendAdminSummaryUsesConfiguredOpenIdRecipient() {
+  let sent = null;
+  const result = await sendMasterTaskInspectionAdminSummary({
+    auditDate: '2026-07-24',
+    summary: { abnormal_count: 1, due_soon_count: 0, members: [] }
+  }, {
+    resolveRecipient: () => ({ status: 'ready', receive_id: 'ou_admin', receive_id_type: 'open_id' }),
+    sendMessage: async (payload) => {
+      sent = payload;
+      return 'om_admin_summary';
+    }
+  });
+
+  assert.equal(result.status, 'sent');
+  assert.equal(result.message_id, 'om_admin_summary');
+  assert.equal(sent.receiveId, 'ou_admin');
+  assert.equal(sent.card.schema, '2.0');
+}
+
+function testAdminSummaryRecipientRequiresExplicitOpenIdNotifyConfig() {
+  assert.deepEqual(resolveMasterTaskAuditAdminRecipient({}), { status: 'skipped', reason: 'FEISHU_NOTIFY_RECEIVE_ID_not_configured' });
+  assert.deepEqual(resolveMasterTaskAuditAdminRecipient({ FEISHU_NOTIFY_RECEIVE_ID: 'admin@example.com', FEISHU_NOTIFY_RECEIVE_ID_TYPE: 'email' }), { status: 'skipped', reason: 'FEISHU_NOTIFY_RECEIVE_ID_TYPE_must_be_open_id_for_interactive_card' });
+  assert.deepEqual(resolveMasterTaskAuditAdminRecipient({ FEISHU_NOTIFY_RECEIVE_ID: 'ou_admin', FEISHU_NOTIFY_RECEIVE_ID_TYPE: 'open_id' }), { status: 'ready', receive_id_type: 'open_id', receive_id: 'ou_admin' });
+}
+
 function testBlankCompletionDateOmitsInitialDate() {
   const card = buildMasterTaskInProgressAuditCard({
     audit: { task_status: '进行中', completion_date: '' }
@@ -223,13 +264,67 @@ function testBlankCompletionDateOmitsInitialDate() {
   assert.equal('initial_date' in completionDateControl, false);
 }
 
+function testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields() {
+  const card = buildMasterTaskInspectionCard({
+    audit: {
+      id: 404,
+      record_id: 'rec_inspection_card',
+      audit_date: '2026-07-24',
+      audit_type: 'task_inspection',
+      task_name: '巡检字段结构',
+      assignee_name: '简学勤',
+      task_status: '进行中',
+      progress_evaluation: '80',
+      start_date: '2026-07-20',
+      completion_date: '2026-07-30',
+      inspection_issues: [{ type: 'three_daily_inspections_without_effective_update', field_names: ['task_status', 'progress_evaluation', 'start_date', 'completion_date'] }]
+    }
+  });
+  const submitButton = formControl(card, 'task_inspection_submit_update');
+
+  assert.equal(card.schema, '2.0');
+  assert.equal(formControl(card, 'task_status')?.tag, 'select_static');
+  assert.equal(formControl(card, 'progress_evaluation')?.tag, 'input');
+  assert.equal(formControl(card, 'start_date')?.tag, 'date_picker');
+  assert.equal(formControl(card, 'completion_date')?.tag, 'date_picker');
+  assert.equal(formControl(card, 'progress_text'), undefined);
+  assert.equal(formControl(card, 'task_note'), undefined);
+  assert.equal(formControl(card, 'reason'), undefined);
+  assert.equal(submitButton.behaviors[0].value.card_kind, 'task_inspection');
+  assert.equal(submitButton.behaviors[0].value.action, 'task_inspection_submit_update');
+  assert.equal(JSON.stringify(card).includes('master_task_confirm_update'), false);
+  assert.equal(JSON.stringify(card).includes('master_task_no_update'), false);
+}
+
+function testTaskInspectionCardShowsOnlyRelevantIssueFields() {
+  const card = buildMasterTaskInspectionCard({
+    audit: {
+      id: 405,
+      audit_type: 'task_inspection_due_soon',
+      task_status: '进行中',
+      completion_date: '2026-07-25',
+      inspection_issues: [{ type: 'due_tomorrow_not_completed', field_names: ['completion_date', 'task_status'] }]
+    }
+  });
+
+  assert.equal(formControl(card, 'task_status')?.tag, 'select_static');
+  assert.equal(formControl(card, 'completion_date')?.tag, 'date_picker');
+  assert.equal(formControl(card, 'progress_evaluation'), undefined);
+  assert.equal(formControl(card, 'start_date'), undefined);
+}
+
 testInProgressAuditCardContainsEditableProgressForm();
 testForceUniqueAuditCardKeepsCanonicalRecordInCallbacks();
 testInProgressAuditCardUsesCanonicalEditFieldDefaults();
 testPausedAuditCardContainsReminderOnly();
 testTerminalCardsRenderDoneState();
 testBlankCompletionDateOmitsInitialDate();
+testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields();
+testTaskInspectionCardShowsOnlyRelevantIssueFields();
+testAdminSummaryCardContainsMachineCountsByMember();
+testAdminSummaryRecipientRequiresExplicitOpenIdNotifyConfig();
 await testSendMasterTaskAuditCardPreservesCanonicalEditDefaults();
 await testSendMasterTaskAuditCardPreservesProgressOnlyDefaultValue();
+await testSendAdminSummaryUsesConfiguredOpenIdRecipient();
 
 console.log('master task audit card tests passed');
