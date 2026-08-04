@@ -193,6 +193,8 @@ async function testUpdatedActionPersistsCanonicalSubmittedValues() {
     auditType,
     actionTaken: 'confirmed_updated',
     submittedValues,
+    submittedStartDate: '2026-08-26',
+    submittedProgressEvaluation: '88',
     callbackId: 'evt_audit_callback_4'
   });
   const row = await getMasterTaskAuditLog(recordId, auditDate, auditType);
@@ -200,8 +202,36 @@ async function testUpdatedActionPersistsCanonicalSubmittedValues() {
   assert.equal(row.submitted_text, JSON.stringify(submittedValues));
   assert.equal(row.submitted_status, '已完成-日志-147');
   assert.equal(row.submitted_completion_date, '2026-08-27');
+  assert.equal(row.submitted_start_date, '2026-08-26');
   assert.equal(row.submitted_progress_text, '日志进展-258');
+  assert.equal(row.submitted_progress_evaluation, '88');
   assert.equal(row.submitted_note, '日志备注-369');
+}
+
+async function testInspectionSnapshotFieldsPersistForDailyComparison() {
+  const recordId = `record_inspection_${Date.now()}`;
+
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: '巡检快照',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_actor_5',
+    taskStatus: '进行中',
+    auditDate: '2026-08-28',
+    auditType: 'task_inspection',
+    actionTaken: 'passed',
+    submittedStatus: '进行中',
+    submittedStartDate: '2026-08-01',
+    submittedCompletionDate: '2026-08-31',
+    submittedProgressEvaluation: '60'
+  });
+
+  const row = await getMasterTaskAuditLog(recordId, '2026-08-28', 'task_inspection');
+  assert.equal(row.submitted_status, '进行中');
+  assert.equal(row.submitted_start_date, '2026-08-01');
+  assert.equal(row.submitted_completion_date, '2026-08-31');
+  assert.equal(row.submitted_progress_evaluation, '60');
 }
 
 await initDatabase();
@@ -210,5 +240,6 @@ await testForcedAuditTypesCreateDistinctRowsForCanonicalRecord();
 await testMarkSentActionAndCallbackLookups();
 await testFailedActionIsRetryableAndUpdatedActionPersistsText();
 await testUpdatedActionPersistsCanonicalSubmittedValues();
+await testInspectionSnapshotFieldsPersistForDailyComparison();
 
 console.log('master task audit log tests passed');

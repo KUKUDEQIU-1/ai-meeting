@@ -21,7 +21,9 @@ function normalizeSubmittedValues(rawValue = {}) {
   return {
     status: submittedValue(rawValue, 'task_status', 'taskStatus'),
     completionDate: submittedValue(rawValue, 'completion_date', 'completionDate'),
+    startDate: submittedValue(rawValue, 'start_date', 'startDate'),
     progressText: submittedValue(rawValue, 'progress_text', 'progressText'),
+    progressEvaluation: submittedValue(rawValue, 'progress_evaluation', 'progressEvaluation'),
     note: submittedValue(rawValue, 'task_note', 'taskNote')
   };
 }
@@ -60,6 +62,16 @@ export async function listMasterTaskAuditLogs(auditDate) {
   return all('SELECT * FROM master_task_audit_logs ORDER BY id ASC');
 }
 
+export async function listMasterTaskInspectionHistory(recordId, beforeAuditDate, limit = 2) {
+  return all(
+    `SELECT * FROM master_task_audit_logs
+     WHERE record_id = ? AND audit_type = ? AND audit_date < ?
+     ORDER BY audit_date DESC
+     LIMIT ?`,
+    [recordId, 'task_inspection', beforeAuditDate, limit]
+  );
+}
+
 export async function upsertMasterTaskAuditLog({
   recordId,
   taskName,
@@ -75,7 +87,9 @@ export async function upsertMasterTaskAuditLog({
   submittedValues,
   submittedStatus = '',
   submittedCompletionDate = '',
+  submittedStartDate = '',
   submittedProgressText = '',
+  submittedProgressEvaluation = '',
   submittedNote = '',
   cardMessageId = '',
   callbackId = '',
@@ -86,13 +100,15 @@ export async function upsertMasterTaskAuditLog({
   const normalizedSubmittedText = normalizeSubmittedText(submittedText, submittedValues);
   const normalizedSubmittedStatus = normalizeText(submittedStatus) || canonicalSubmittedValues.status;
   const normalizedSubmittedCompletionDate = normalizeText(submittedCompletionDate) || canonicalSubmittedValues.completionDate;
+  const normalizedSubmittedStartDate = normalizeText(submittedStartDate) || canonicalSubmittedValues.startDate;
   const normalizedSubmittedProgressText = normalizeText(submittedProgressText) || canonicalSubmittedValues.progressText;
+  const normalizedSubmittedProgressEvaluation = normalizeText(submittedProgressEvaluation) || canonicalSubmittedValues.progressEvaluation;
   const normalizedSubmittedNote = normalizeText(submittedNote) || canonicalSubmittedValues.note;
 
   await run(
     `INSERT INTO master_task_audit_logs
-      (record_id, task_name, assignee_key, assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, submitted_status, submitted_completion_date, submitted_progress_text, submitted_note, card_message_id, callback_id, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (record_id, task_name, assignee_key, assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, submitted_status, submitted_completion_date, submitted_start_date, submitted_progress_text, submitted_progress_evaluation, submitted_note, card_message_id, callback_id, error_message, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(record_id, audit_date, audit_type) DO UPDATE SET
       task_name = excluded.task_name,
       assignee_key = excluded.assignee_key,
@@ -104,7 +120,9 @@ export async function upsertMasterTaskAuditLog({
       submitted_text = CASE WHEN excluded.submitted_text != '' THEN excluded.submitted_text ELSE submitted_text END,
       submitted_status = CASE WHEN excluded.submitted_status != '' THEN excluded.submitted_status ELSE submitted_status END,
       submitted_completion_date = CASE WHEN excluded.submitted_completion_date != '' THEN excluded.submitted_completion_date ELSE submitted_completion_date END,
+      submitted_start_date = CASE WHEN excluded.submitted_start_date != '' THEN excluded.submitted_start_date ELSE submitted_start_date END,
       submitted_progress_text = CASE WHEN excluded.submitted_progress_text != '' THEN excluded.submitted_progress_text ELSE submitted_progress_text END,
+      submitted_progress_evaluation = CASE WHEN excluded.submitted_progress_evaluation != '' THEN excluded.submitted_progress_evaluation ELSE submitted_progress_evaluation END,
       submitted_note = CASE WHEN excluded.submitted_note != '' THEN excluded.submitted_note ELSE submitted_note END,
       card_message_id = CASE WHEN excluded.card_message_id != '' THEN excluded.card_message_id ELSE card_message_id END,
       callback_id = CASE WHEN excluded.callback_id != '' THEN excluded.callback_id ELSE callback_id END,
@@ -124,7 +142,9 @@ export async function upsertMasterTaskAuditLog({
       normalizedSubmittedText,
       normalizedSubmittedStatus,
       normalizedSubmittedCompletionDate,
+      normalizedSubmittedStartDate,
       normalizedSubmittedProgressText,
+      normalizedSubmittedProgressEvaluation,
       normalizedSubmittedNote,
       normalizeText(cardMessageId),
       normalizeText(callbackId),
@@ -155,7 +175,9 @@ export async function markMasterTaskAuditAction({
   submittedValues,
   submittedStatus = '',
   submittedCompletionDate = '',
+  submittedStartDate = '',
   submittedProgressText = '',
+  submittedProgressEvaluation = '',
   submittedNote = '',
   callbackId = ''
 }) {
@@ -163,7 +185,9 @@ export async function markMasterTaskAuditAction({
   const normalizedSubmittedText = normalizeSubmittedText(submittedText, submittedValues);
   const normalizedSubmittedStatus = normalizeText(submittedStatus) || canonicalSubmittedValues.status;
   const normalizedSubmittedCompletionDate = normalizeText(submittedCompletionDate) || canonicalSubmittedValues.completionDate;
+  const normalizedSubmittedStartDate = normalizeText(submittedStartDate) || canonicalSubmittedValues.startDate;
   const normalizedSubmittedProgressText = normalizeText(submittedProgressText) || canonicalSubmittedValues.progressText;
+  const normalizedSubmittedProgressEvaluation = normalizeText(submittedProgressEvaluation) || canonicalSubmittedValues.progressEvaluation;
   const normalizedSubmittedNote = normalizeText(submittedNote) || canonicalSubmittedValues.note;
 
   await run(
@@ -172,7 +196,9 @@ export async function markMasterTaskAuditAction({
          submitted_text = CASE WHEN ? != '' THEN ? ELSE submitted_text END,
          submitted_status = CASE WHEN ? != '' THEN ? ELSE submitted_status END,
          submitted_completion_date = CASE WHEN ? != '' THEN ? ELSE submitted_completion_date END,
+         submitted_start_date = CASE WHEN ? != '' THEN ? ELSE submitted_start_date END,
          submitted_progress_text = CASE WHEN ? != '' THEN ? ELSE submitted_progress_text END,
+         submitted_progress_evaluation = CASE WHEN ? != '' THEN ? ELSE submitted_progress_evaluation END,
          submitted_note = CASE WHEN ? != '' THEN ? ELSE submitted_note END,
          callback_id = CASE WHEN ? != '' THEN ? ELSE callback_id END,
          error_message = '',
@@ -186,8 +212,12 @@ export async function markMasterTaskAuditAction({
       normalizedSubmittedStatus,
       normalizedSubmittedCompletionDate,
       normalizedSubmittedCompletionDate,
+      normalizedSubmittedStartDate,
+      normalizedSubmittedStartDate,
       normalizedSubmittedProgressText,
       normalizedSubmittedProgressText,
+      normalizedSubmittedProgressEvaluation,
+      normalizedSubmittedProgressEvaluation,
       normalizedSubmittedNote,
       normalizedSubmittedNote,
       normalizeText(callbackId),

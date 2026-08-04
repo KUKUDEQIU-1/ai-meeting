@@ -407,7 +407,9 @@ function migrateDatabase() {
   const masterTaskAuditMigrations = [
     ['submitted_status', 'TEXT'],
     ['submitted_completion_date', 'TEXT'],
+    ['submitted_start_date', 'TEXT'],
     ['submitted_progress_text', 'TEXT'],
+    ['submitted_progress_evaluation', 'TEXT'],
     ['submitted_note', 'TEXT']
   ];
 
