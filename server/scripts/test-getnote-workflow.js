@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { all, get, initDatabase, run } from '../db/database.js';
 import { parseAssigneeMap } from '../services/feishuTaskCardPure.js';
 import { extractGetNoteContentWithMeta } from '../services/getnoteClient.js';
-import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle } from '../services/getnoteImportService.js';
+import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { listDraftCardMessages } from '../services/taskDraftService.js';
 
 function note(noteId, content) {
@@ -372,9 +372,106 @@ function testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles() {
   assert.equal(isDatedTodayWorkArrangementTitle('关于疫苗接种卡相关事项的提及'), false);
 }
 
+async function testBatchSyncOnlyImportsLatestUploadedNote() {
+  const detailedNotes = [];
+  const importedNotes = [];
+  const notes = [
+    {
+      note_id: 'latest_note',
+      title: '8.4团队每日工作任务同步会议',
+      created_at: '2026-08-04 10:00:00',
+      audio: { transcript: '张三今天修复最新上传文档的同步问题。' }
+    },
+    {
+      note_id: 'historical_note_728',
+      title: '7.28团队每日工作任务同步会议',
+      created_at: '2026-07-28 10:00:00',
+      audio: { transcript: '张三今天修复历史文档的同步问题。' }
+    }
+  ];
+
+  const result = await syncRecentGetNotes({
+    limit: 20,
+    ignoreTag: true,
+    getNoteListImpl: async () => ({ notes }),
+    getNoteDetailImpl: async (noteId) => {
+      detailedNotes.push(noteId);
+      return notes.find((item) => item.note_id === noteId);
+    },
+    importGetNoteMeetingImpl: async (noteId) => {
+      importedNotes.push(noteId);
+      return {
+        note_id: noteId,
+        title: '8.4团队每日工作任务同步会议',
+        status: 'pending_confirmation',
+        content_source: 'audio.transcript',
+        used_transcript: true,
+        raw_tasks_count: 1,
+        final_tasks_count: 1,
+        removed_tasks_count: 0,
+        needs_confirmation_count: 1,
+        table_id: 'tbl_test',
+        table_name: '事务列表',
+        table_url: 'https://example.com/table',
+        tasks_count: 1
+      };
+    }
+  });
+
+  assert.deepEqual(detailedNotes, ['latest_note']);
+  assert.deepEqual(importedNotes, ['latest_note']);
+  assert.equal(result.imported.length, 1);
+  assert.equal(result.imported[0].note_id, 'latest_note');
+  assert.equal(result.skipped.length, 0);
+  assert.equal(result.failed.length, 0);
+}
+
+async function testBatchSyncDoesNotFallBackToOlderEligibleNote() {
+  const detailedNotes = [];
+  const importedNotes = [];
+  const notes = [
+    {
+      note_id: 'latest_non_meeting',
+      title: '8.4随手记录',
+      created_at: '2026-08-04 10:00:00',
+      audio: { transcript: '这不是任务同步会议。' }
+    },
+    {
+      note_id: 'historical_note_728',
+      title: '7.28团队每日工作任务同步会议',
+      created_at: '2026-07-28 10:00:00',
+      audio: { transcript: '张三今天修复历史文档的同步问题。' }
+    }
+  ];
+
+  const result = await syncRecentGetNotes({
+    limit: 20,
+    ignoreTag: true,
+    getNoteListImpl: async () => ({ notes }),
+    getNoteDetailImpl: async (noteId) => {
+      detailedNotes.push(noteId);
+      return notes.find((item) => item.note_id === noteId);
+    },
+    importGetNoteMeetingImpl: async (noteId) => {
+      importedNotes.push(noteId);
+      return { note_id: noteId, status: 'pending_confirmation' };
+    }
+  });
+
+  assert.deepEqual(detailedNotes, []);
+  assert.deepEqual(importedNotes, []);
+  assert.equal(result.imported.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].note_id, 'latest_non_meeting');
+  assert.equal(result.skipped[0].reason, 'title_not_dated_today_work_arrangement');
+  assert.equal(result.failed.length, 0);
+}
+
 await initDatabase();
 testGetNoteSummaryIsNotUsedAsTaskSource();
 testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles();
+await testBatchSyncOnlyImportsLatestUploadedNote();
+await testBatchSyncDoesNotFallBackToOlderEligibleNote();
 await testImportCreatesPendingDraftAndSkipsUnchangedContent();
 await testImportRecoversUnchangedDraftWithoutSentDelivery();
 await testImportRecoveryRespectsActiveDispatchLock();

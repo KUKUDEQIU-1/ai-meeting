@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { get, run } from '../db/database.js';
 import { getMasterTaskTable, logFeishuRuntimeDiagnostics, sendMeetingTableToFeishuUser, writeMeetingIndexRecord } from './feishuBitableClient.js';
-import { addTagsToNote, extractGetNoteContent, extractGetNoteContentWithMeta, getNoteDetail, getNoteList, getTopicNoteList } from './getnoteClient.js';
+import { addTagsToNote, extractGetNoteContent, extractGetNoteContentWithMeta, getNoteDetail, getNoteList } from './getnoteClient.js';
 import { analyzeMeetingText } from './meetingService.js';
 import { dispatchGetNoteTaskCard } from './feishuTaskCardService.js';
 import { createMeetingTaskDraft, getMeetingTaskDraftBySource, hasSuccessfulDraftCardDelivery, updateMeetingTaskDraftContent } from './taskDraftService.js';
@@ -247,31 +247,13 @@ function sortNotesByRecent(a, b) {
   return getNoteTime(b) - getNoteTime(a);
 }
 
-async function loadCandidateGetNotes({ scanLimit, syncTag, requireTag }) {
-  const { notes } = await getNoteList({ limit: scanLimit, tag: requireTag ? syncTag : undefined });
+async function loadCandidateGetNotes({ scanLimit, syncTag, requireTag, getNoteListImpl = getNoteList }) {
+  const { notes } = await getNoteListImpl({ limit: scanLimit, tag: requireTag ? syncTag : undefined });
   console.log(`[GetNote Sync] note list loaded count=${notes.length}`);
 
-  const topicIds = [...new Set(
-    notes
-      .flatMap((note) => getNoteTopics(note).map((topic) => topic.id))
-      .filter(Boolean)
-  )];
+  const mergedNotes = mergeNotesById(notes).sort(sortNotesByRecent);
 
-  const topicNotes = [];
-
-  for (const topicId of topicIds) {
-    try {
-      const result = await getTopicNoteList({ topic_id: topicId, page: 1 });
-      console.log(`[GetNote Sync] topic note list loaded topic_id=${topicId} count=${result.notes.length}`);
-      topicNotes.push(...result.notes);
-    } catch (error) {
-      console.warn(`[GetNote Sync] topic note list skipped topic_id=${topicId} error=${error.message}`);
-    }
-  }
-
-  const mergedNotes = mergeNotesById(topicNotes, notes).sort(sortNotesByRecent);
-
-  console.log(`[GetNote Sync] candidate notes merged base=${notes.length} topic=${topicNotes.length} unique=${mergedNotes.length}`);
+  console.log(`[GetNote Sync] candidate notes merged base=${notes.length} topic=0 unique=${mergedNotes.length}`);
 
   return mergedNotes;
 }
@@ -929,21 +911,35 @@ export async function importGetNoteMeeting(noteId, options = {}) {
   }
 }
 
-export async function syncRecentGetNotes({ limit, tag, ignoreTag = false, reanalyze = false, force = false } = {}) {
+export async function syncRecentGetNotes({
+  limit,
+  tag,
+  ignoreTag = false,
+  reanalyze = false,
+  force = false,
+  getNoteListImpl = getNoteList,
+  getNoteDetailImpl = getNoteDetail,
+  importGetNoteMeetingImpl = importGetNoteMeeting
+} = {}) {
   const scanLimit = Number(limit) || envNumber('GETNOTE_SCAN_LIMIT', 20);
   const requireTag = !ignoreTag && envBool('GETNOTE_REQUIRE_TAG', false);
   const syncTag = tag || process.env.GETNOTE_SYNC_TAG?.trim() || '';
   const minNoteAgeMinutes = envNumber('GETNOTE_MIN_NOTE_AGE_MINUTES', 5);
   const maxLookbackDays = envNumber('GETNOTE_MAX_LOOKBACK_DAYS', 7);
 
-  console.log(`[GetNote Sync] production sync start limit=${scanLimit} require_tag=${requireTag}`);
+  console.log(`[GetNote Sync] production sync start limit=${scanLimit} require_tag=${requireTag} mode=latest_only`);
 
-  const notes = await loadCandidateGetNotes({ scanLimit, syncTag, requireTag });
-  const targetNotes = notes.slice(0, Math.max(scanLimit * 2, scanLimit));
+  const notes = await loadCandidateGetNotes({ scanLimit, syncTag, requireTag, getNoteListImpl });
+  const targetNotes = notes.length ? [notes[0]] : [];
   console.log(`[GetNote Sync] target notes selected count=${targetNotes.length}`);
   const imported = [];
   const skipped = [];
   const failed = [];
+
+  if (!targetNotes.length) {
+    skipped.push({ note_id: '', title: '', reason: 'no_latest_note' });
+    console.log('[GetNote Sync] skipped reason=no_latest_note');
+  }
 
   for (const note of targetNotes) {
     let detailNote = null;
@@ -970,7 +966,7 @@ export async function syncRecentGetNotes({ limit, tag, ignoreTag = false, reanal
       }
 
       if (requireTag && syncTag && tags.length === 0) {
-        detailNote = await getNoteDetail(noteId);
+        detailNote = await getNoteDetailImpl(noteId);
         tags = getNoteTags(detailNote);
       }
 
@@ -989,7 +985,7 @@ export async function syncRecentGetNotes({ limit, tag, ignoreTag = false, reanal
       }
 
       if (!detailNote) {
-        detailNote = await getNoteDetail(noteId);
+        detailNote = await getNoteDetailImpl(noteId);
       }
 
       try {
@@ -1012,7 +1008,7 @@ export async function syncRecentGetNotes({ limit, tag, ignoreTag = false, reanal
       }
 
       console.log(`[GetNote Sync] import start note_id=${noteId} title=${title}`);
-      const result = await importGetNoteMeeting(noteId, detailNote ? { note: detailNote, skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force } : { skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force });
+      const result = await importGetNoteMeetingImpl(noteId, detailNote ? { note: detailNote, skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force } : { skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force });
 
       if (result.status === 'skipped') {
         skipped.push({
