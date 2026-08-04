@@ -50,6 +50,10 @@ function serializeArray(value) {
   return JSON.stringify(normalizeStringArray(value));
 }
 
+function serializeJsonArray(value) {
+  return JSON.stringify(Array.isArray(value) ? value : []);
+}
+
 function normalizeRecentTask(task) {
   const confirmedAt = normalizeId(task?.confirmed_at || task?.confirmedAt || task?.updated_at || task?.created_at || nowIso());
 
@@ -165,7 +169,7 @@ export async function upsertMember(memberId, data = {}) {
       normalizeId(data.role ?? existing?.role ?? ''),
       serializeArray(fields.domains),
       serializeArray(fields.project_ownership),
-      serializeArray(fields.abbreviations),
+      serializeJsonArray(fields.abbreviations),
       JSON.stringify(existing?.recent_confirmed_tasks || []),
       serializeArray(fields.extraction_hints),
       serializeArray(fields.negative_hints),
