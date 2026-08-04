@@ -372,7 +372,7 @@ function testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles() {
   assert.equal(isDatedTodayWorkArrangementTitle('关于疫苗接种卡相关事项的提及'), false);
 }
 
-async function testBatchSyncOnlyImportsLatestUploadedNote() {
+async function testBatchSyncImportsOnlyCurrentDayNotesFromDirectList() {
   const detailedNotes = [];
   const importedNotes = [];
   const notes = [
@@ -393,7 +393,9 @@ async function testBatchSyncOnlyImportsLatestUploadedNote() {
   const result = await syncRecentGetNotes({
     limit: 20,
     ignoreTag: true,
+    now: new Date('2026-08-04T03:00:00+08:00'),
     getNoteListImpl: async () => ({ notes }),
+    getTopicNoteListImpl: async () => ({ notes: [] }),
     getNoteDetailImpl: async (noteId) => {
       detailedNotes.push(noteId);
       return notes.find((item) => item.note_id === noteId);
@@ -447,7 +449,9 @@ async function testBatchSyncDoesNotFallBackToOlderEligibleNote() {
   const result = await syncRecentGetNotes({
     limit: 20,
     ignoreTag: true,
+    now: new Date('2026-08-04T03:00:00+08:00'),
     getNoteListImpl: async () => ({ notes }),
+    getTopicNoteListImpl: async () => ({ notes: [] }),
     getNoteDetailImpl: async (noteId) => {
       detailedNotes.push(noteId);
       return notes.find((item) => item.note_id === noteId);
@@ -467,11 +471,113 @@ async function testBatchSyncDoesNotFallBackToOlderEligibleNote() {
   assert.equal(result.failed.length, 0);
 }
 
+async function testBatchSyncDiscoversCurrentDayNoteFromTopicList() {
+  const detailedNotes = [];
+  const importedNotes = [];
+  const topicRequests = [];
+  const directNotes = [{
+    note_id: 'direct_old_topic_holder',
+    title: '七月三十日研发团队早会工作安排同步',
+    created_at: '2026-07-30 10:10:24',
+    topics: [{ id: 'topic_products', name: '产品团队知识库' }],
+    audio: { transcript: '张三处理旧会议。' }
+  }];
+  const topicNotes = [{
+    note_id: 'today_topic_note',
+    title: '8.4团队每日工作任务同步会议',
+    created_at: '2026-08-04 10:22:20',
+    audio: { transcript: '张三今天修复当天上传笔记的同步问题。' }
+  }];
+
+  const result = await syncRecentGetNotes({
+    limit: 20,
+    ignoreTag: true,
+    now: new Date('2026-08-04T03:00:00+08:00'),
+    getNoteListImpl: async () => ({ notes: directNotes }),
+    getTopicNoteListImpl: async ({ topic_id: topicId }) => {
+      topicRequests.push(topicId);
+      return { notes: topicNotes };
+    },
+    getNoteDetailImpl: async (noteId) => {
+      detailedNotes.push(noteId);
+      return [...directNotes, ...topicNotes].find((item) => item.note_id === noteId);
+    },
+    importGetNoteMeetingImpl: async (noteId) => {
+      importedNotes.push(noteId);
+      return {
+        note_id: noteId,
+        title: '8.4团队每日工作任务同步会议',
+        status: 'pending_confirmation',
+        content_source: 'audio.transcript',
+        used_transcript: true,
+        raw_tasks_count: 1,
+        final_tasks_count: 1,
+        removed_tasks_count: 0,
+        needs_confirmation_count: 1,
+        table_id: 'tbl_test',
+        table_name: '事务列表',
+        table_url: 'https://example.com/table',
+        tasks_count: 1
+      };
+    }
+  });
+
+  assert.deepEqual(topicRequests, ['topic_products']);
+  assert.deepEqual(detailedNotes, ['today_topic_note']);
+  assert.deepEqual(importedNotes, ['today_topic_note']);
+  assert.equal(result.imported.length, 1);
+  assert.equal(result.imported[0].note_id, 'today_topic_note');
+  assert.equal(result.failed.length, 0);
+}
+
+async function testBatchSyncSkipsHistoricalTopicNotes() {
+  const detailedNotes = [];
+  const importedNotes = [];
+  const directNotes = [{
+    note_id: 'direct_old_topic_holder',
+    title: '七月三十日研发团队早会工作安排同步',
+    created_at: '2026-07-30 10:10:24',
+    topics: [{ id: 'topic_products', name: '产品团队知识库' }],
+    audio: { transcript: '张三处理旧会议。' }
+  }];
+  const topicNotes = [{
+    note_id: 'historical_note_728',
+    title: '7.28团队每日工作任务同步会议',
+    created_at: '2026-07-28 10:00:00',
+    audio: { transcript: '张三今天修复历史文档的同步问题。' }
+  }];
+
+  const result = await syncRecentGetNotes({
+    limit: 20,
+    ignoreTag: true,
+    now: new Date('2026-08-04T03:00:00+08:00'),
+    getNoteListImpl: async () => ({ notes: directNotes }),
+    getTopicNoteListImpl: async () => ({ notes: topicNotes }),
+    getNoteDetailImpl: async (noteId) => {
+      detailedNotes.push(noteId);
+      return [...directNotes, ...topicNotes].find((item) => item.note_id === noteId);
+    },
+    importGetNoteMeetingImpl: async (noteId) => {
+      importedNotes.push(noteId);
+      return { note_id: noteId, status: 'pending_confirmation' };
+    }
+  });
+
+  assert.deepEqual(detailedNotes, []);
+  assert.deepEqual(importedNotes, []);
+  assert.equal(result.imported.length, 0);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].reason, 'no_today_note');
+  assert.equal(result.failed.length, 0);
+}
+
 await initDatabase();
 testGetNoteSummaryIsNotUsedAsTaskSource();
 testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles();
-await testBatchSyncOnlyImportsLatestUploadedNote();
+await testBatchSyncImportsOnlyCurrentDayNotesFromDirectList();
 await testBatchSyncDoesNotFallBackToOlderEligibleNote();
+await testBatchSyncDiscoversCurrentDayNoteFromTopicList();
+await testBatchSyncSkipsHistoricalTopicNotes();
 await testImportCreatesPendingDraftAndSkipsUnchangedContent();
 await testImportRecoversUnchangedDraftWithoutSentDelivery();
 await testImportRecoveryRespectsActiveDispatchLock();
