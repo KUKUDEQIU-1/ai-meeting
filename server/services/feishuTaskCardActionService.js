@@ -23,6 +23,7 @@ import {
 import { updateFeishuTaskCard } from './feishuTaskCardService.js';
 import { listMasterTaskAuditRecords } from './feishuBitableClient.js';
 import { prepareMasterTaskAuditCardAction, processPreparedMasterTaskAuditCardAction } from './masterTaskAuditActionService.js';
+import { updateMasterTaskAuditCard } from './masterTaskAuditCardService.js';
 import { masterTaskNameExists } from './taskHistoryService.js';
 
 const MAX_TASK_NAME_LENGTH = 120;
@@ -905,6 +906,25 @@ export async function processPreparedFeishuCardAction(prepared, overrides = {}) 
   if (prepared.parsed.action === 'confirm_assignee_progress') return confirmAssigneeProgress(prepared.parsed, prepared.state, dependencies);
 
   reject('不支持的卡片操作', 400);
+}
+
+export async function updatePreparedFeishuCardToProcessing(prepared, overrides = {}) {
+  if (!prepared?.shouldProcess) return { status: 'skipped', reason: 'not_processable' };
+
+  if (prepared.auditLog) {
+    const updateAuditCard = overrides.updateAuditCard || updateMasterTaskAuditCard;
+    return updateAuditCard({ auditLogId: prepared.auditLog.id, processing: true });
+  }
+
+  const dependencies = dependencySet(overrides);
+  return dependencies.updateCard({
+    messageId: prepared.parsed.message_id,
+    draftId: prepared.parsed.draft_id,
+    assigneeKey: prepared.state.assignee_key,
+    cardKind: prepared.state.card_kind || prepared.parsed.card_kind || 'tasks',
+    itemId: prepared.parsed.item_id || '',
+    processing: true
+  });
 }
 
 export async function handleFeishuCardAction(payload, overrides = {}) {

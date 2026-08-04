@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getTenantAccessToken, listMasterTaskAuditRecords } from './feishuBitableClient.js';
-import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, classifyTaskCardDeliveryState, diagnoseAssigneeRecipient, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
+import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, buildTaskCardProcessingCard, classifyTaskCardDeliveryState, diagnoseAssigneeRecipient, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
 import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
 
@@ -355,7 +355,7 @@ async function loadActiveMasterTaskOptions(listRecords = listMasterTaskAuditReco
   }
 }
 
-export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, itemId = '', compactRefresh = false, recoverableFailure = false }, deps = {}) {
+export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, cardKind = 'tasks', terminal = false, processing = false, itemId = '', compactRefresh = false, recoverableFailure = false }, deps = {}) {
   const state = await getDraftAssigneeState(draftId, assigneeKey, cardKind);
   const draft = await getMeetingTaskDraftById(draftId);
 
@@ -382,6 +382,16 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   };
   const scopedItemId = exactMessage?.item_id || scopedMessage?.item_id || state.split_item_id || '';
   const effectiveCardKind = state.card_kind || cardKind;
+  if (processing) {
+    const taskName = String(draft.meeting_title || draft.title || draft.topic || '').trim();
+    const card = buildTaskCardProcessingCard({
+      title: '卡片正在处理',
+      taskName,
+      assigneeName: assignee.assignee_name,
+      actionText: '已收到你的操作，正在处理，请稍候'
+    });
+    return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
+  }
   const listRecords = memoizeMasterTaskAuditRecords(deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
   const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));
   const oldTaskOptionsByItemId = !terminal && effectiveCardKind === 'getnote_tasks'

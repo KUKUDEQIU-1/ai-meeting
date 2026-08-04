@@ -158,6 +158,19 @@ function testTwoDailyInspectionsWithoutEffectiveUpdateDoesNotRemind() {
   assert.equal(result.action, 'passed');
 }
 
+function testProgressOneIsFullProgress() {
+  const result = evaluateMasterTaskInspectionRecord(record({ status: '已完成', progressEvaluation: '1' }), { now: new Date('2026-07-24 18:00:00') });
+
+  assert.equal(result.action, 'passed');
+  assert.equal(result.reason, 'inspection_passed');
+}
+
+function testNumericDateTimestampsAreNormalized() {
+  const result = evaluateMasterTaskInspectionRecord(record({ status: '进行中', completionDate: '1784044800000' }), { now: new Date('2026-07-24 18:00:00') });
+
+  assert.equal(result.reason, 'overdue_in_progress');
+}
+
 function testInspectionHistoryRequiresConsecutiveDaysAndResetsOnEffectiveChange() {
   const nonConsecutive = evaluateMasterTaskInspectionRecord(record(), {
     now: new Date('2026-07-24 18:00:00'),
@@ -254,6 +267,8 @@ testSummaryCounts();
 testOneDailyInspectionWithoutUpdateDoesNotRemind();
 testThreeDailyInspectionsWithoutEffectiveUpdateReminds();
 testTwoDailyInspectionsWithoutEffectiveUpdateDoesNotRemind();
+testProgressOneIsFullProgress();
+testNumericDateTimestampsAreNormalized();
 testInspectionHistoryRequiresConsecutiveDaysAndResetsOnEffectiveChange();
 testInspectionRulesClassifyMachineIssueTypes();
 testInProgressBlankDedicatedCompletionIgnoresUnrelatedDueAt();

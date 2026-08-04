@@ -310,8 +310,12 @@ export async function prepareMasterTaskAuditCardAction(payload) {
 
   console.log('[Master Task Audit] callback received', JSON.stringify(safeAuditCallbackMetadata(parsed)));
 
-  if (!['master_task_no_update', 'master_task_confirm_update', 'task_inspection_submit_update'].includes(parsed.action)) {
+  if (!['master_task_no_update', 'master_task_confirm_update', 'task_inspection_submit_update', 'task_inspection_ignore'].includes(parsed.action)) {
     return null;
+  }
+
+  if (parsed.action.startsWith('task_inspection_') && parsed.card_kind !== 'task_inspection') {
+    reject('任务巡检卡片类型无效', 400);
   }
 
   const auditLog = await loadAuditState(parsed);
@@ -347,6 +351,22 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
 
   if (!prepared.shouldProcess) {
     return prepared.response;
+  }
+
+  if (prepared.parsed.action === 'task_inspection_ignore') {
+    await markMasterTaskAuditAction({
+      recordId: prepared.auditLog.record_id,
+      auditDate: prepared.auditLog.audit_date,
+      auditType: prepared.auditLog.audit_type,
+      actionTaken: 'skipped',
+      callbackId: prepared.parsed.callback_id
+    });
+    try {
+      await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+    } catch (error) {
+      logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+    }
+    return feishuCallbackToast('已忽略本次巡检提醒');
   }
 
   if (prepared.parsed.action === 'master_task_no_update') {

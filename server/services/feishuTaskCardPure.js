@@ -8,6 +8,11 @@ const VALID_TASK_STATUSES = [
   '需求建议集-基础需求（未澄清）'
 ];
 
+const TASK_INSPECTION_PROGRESS_OPTIONS = Array.from({ length: 11 }, (_, index) => {
+  const percent = index * 10;
+  return { text: { tag: 'plain_text', content: `${percent}%` }, value: String(percent) };
+});
+
 function truncateText(value, maxLength) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
@@ -43,6 +48,32 @@ export function assigneeNameOf(task) {
 
 function cardTitle({ assignee, label }) {
   return assignee.test_mode ? `测试转发｜${truncateText(assignee.assignee_name, 20)}的${label}` : label;
+}
+
+export function buildTaskCardProcessingCard({ title = '正在处理', taskName = '', assigneeName = '', actionText = '已收到操作，正在处理，请稍候' } = {}) {
+  const lines = [
+    `**状态：** ${truncateText(actionText, 80)}`
+  ];
+  const taskText = truncateText(taskName, 100);
+  const assigneeText = truncateText(assigneeName, 40);
+
+  if (taskText) lines.push(`**任务：** ${taskText}`);
+  if (assigneeText) lines.push(`**负责人：** ${assigneeText}`);
+  lines.push('按钮已暂时置灰，请勿重复点击。');
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: {
+      template: 'grey',
+      title: { tag: 'plain_text', content: truncateText(title, 40) }
+    },
+    body: {
+      elements: [
+        { tag: 'markdown', content: lines.join('\n') }
+      ]
+    }
+  };
 }
 
 export function normalizeAssigneeKey(value) {
@@ -894,11 +925,41 @@ function fieldNamesFromInspectionIssues(issues) {
   return names;
 }
 
+const INSPECTION_ISSUE_LABELS = new Map([
+  ['overdue_in_progress', '任务已逾期，请更新状态'],
+  ['progress_complete_status_open', '进度已完成，请更新状态'],
+  ['status_done_progress_incomplete', '状态已完成，请更新进度评估'],
+  ['in_progress_missing_progress_and_completion', '进行中任务缺少进度评估和完成日期'],
+  ['pending_started', '任务已超过开始日期，请更新状态或开始日期'],
+  ['three_daily_inspections_without_effective_update', '任务已连续 3 天未更新，请检查状态、进度或日期'],
+  ['due_tomorrow_not_completed', '任务明天到期，请确认状态或完成日期']
+]);
+
+function inspectionIssueLabel(type) {
+  return INSPECTION_ISSUE_LABELS.get(String(type || '').trim()) || '任务关键字段需要检查或更新';
+}
+
+function inspectionIssueLabels(issues) {
+  const labels = [];
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const label = inspectionIssueLabel(issue?.type);
+    if (!labels.includes(label)) labels.push(label);
+  }
+  return labels;
+}
+
+function progressPercentValue(value) {
+  const numeric = Number(String(value || '').replace('%', '').trim());
+  if (!Number.isFinite(numeric)) return '';
+  const percent = numeric >= 0 && numeric <= 1 ? numeric * 100 : numeric;
+  return String(Math.max(0, Math.min(100, Math.round(percent / 10) * 10)));
+}
+
 export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
   const taskName = truncateText(audit?.task_name || '未命名任务', 100);
   const assigneeName = truncateText(audit?.assignee_name || '待确认', 40);
   const taskStatus = String(audit?.task_status || audit?.submitted_status || '').trim();
-  const progressEvaluation = String(audit?.progress_evaluation || audit?.submitted_progress_evaluation || audit?.progress_text || audit?.submitted_progress_text || '').trim();
+  const progressEvaluation = progressPercentValue(audit?.progress_evaluation || audit?.submitted_progress_evaluation || audit?.progress_text || audit?.submitted_progress_text);
   const startDate = String(audit?.start_date || audit?.submitted_start_date || '').trim();
   const completionDate = String(audit?.completion_date || audit?.submitted_completion_date || '').trim();
 
@@ -921,12 +982,16 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
 
   const fieldNames = fieldNamesFromInspectionIssues(audit?.inspection_issues);
   const showAll = fieldNames.size === 0;
+  const issueLabels = inspectionIssueLabels(audit?.inspection_issues);
+  const issueText = issueLabels.length ? issueLabels.map((label) => `- ${label}`).join('\n') : '- 请检查任务状态、进度评估和日期是否需要更新';
   const elements = [
     { tag: 'markdown', content: `**任务：** ${taskName}\n**跟进人：** ${assigneeName}` },
+    { tag: 'markdown', content: issueText },
     { tag: 'hr' }
   ];
 
   if (showAll || fieldNames.has('task_status')) {
+    elements.push(labelElement('**状态**'));
     elements.push(selectElement({
       tag: 'task_status',
       options: VALID_TASK_STATUSES.map((status) => ({ text: { tag: 'plain_text', content: status }, value: status })),
@@ -934,35 +999,58 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
     }));
   }
   if (showAll || fieldNames.has('progress_evaluation')) {
-    elements.push(inputElement({ tag: 'progress_evaluation', label: '进度评估', value: progressEvaluation }));
+    elements.push(labelElement('**进度评估**'));
+    elements.push(selectElement({ tag: 'progress_evaluation', options: TASK_INSPECTION_PROGRESS_OPTIONS, value: progressEvaluation }));
   }
   if (showAll || fieldNames.has('start_date')) {
+    elements.push(labelElement('**开始日期**'));
     elements.push(datePickerElement({ tag: 'start_date', label: '开始日期', value: startDate }));
   }
   if (showAll || fieldNames.has('completion_date')) {
+    elements.push(labelElement('**完成日期**'));
     elements.push(datePickerElement({ tag: 'completion_date', label: '完成日期', value: completionDate }));
   }
 
   elements.push({
     tag: 'column_set',
-    columns: [{
-      tag: 'column',
-      width: 'weighted',
-      weight: 1,
-      elements: [callbackButton({
-        name: 'task_inspection_submit_update',
-        text: '提交更新',
-        type: 'primary',
-        value: {
-          action: 'task_inspection_submit_update',
-          audit_log_id: audit.id,
-          audit_record_id: audit.record_id,
-          audit_date: audit.audit_date,
-          audit_type: audit.audit_type,
-          card_kind: 'task_inspection'
-        }
-      })]
-    }]
+    columns: [
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
+          name: 'task_inspection_submit_update',
+          text: '提交更新',
+          type: 'primary',
+          value: {
+            action: 'task_inspection_submit_update',
+            audit_log_id: audit.id,
+            audit_record_id: audit.record_id,
+            audit_date: audit.audit_date,
+            audit_type: audit.audit_type,
+            card_kind: 'task_inspection'
+          }
+        })]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
+          name: 'task_inspection_ignore',
+          text: '忽略本次提醒',
+          type: 'default',
+          value: {
+            action: 'task_inspection_ignore',
+            audit_log_id: audit.id,
+            audit_record_id: audit.record_id,
+            audit_date: audit.audit_date,
+            audit_type: audit.audit_type,
+            card_kind: 'task_inspection'
+          }
+        })]
+      }
+    ]
   });
 
   return {

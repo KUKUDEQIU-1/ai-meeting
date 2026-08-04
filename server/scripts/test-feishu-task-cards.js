@@ -3,6 +3,7 @@ import {
   buildAssigneeTaskCard,
   buildGetNoteTaskReviewCard,
   buildAssigneeProgressCard,
+  buildTaskCardProcessingCard,
   parseFeishuCardActionPayload,
   groupDraftTasksByAssignee,
   itemScopeIncludes,
@@ -40,6 +41,21 @@ function testMappingAndGrouping() {
   assert.equal(grouped.deliveryFailures[0].assignee_key, '王五');
   assert.equal(grouped.deliverable[0].receive_id_type, 'open_id');
   assert.deepEqual(grouped.deliverable.map((item) => item.tasks.length), [1, 1]);
+}
+
+function testProcessingCardIsNonInteractiveAndVisiblyGrey() {
+  const card = buildTaskCardProcessingCard({ taskName: '版本更新MS-16---开发', assigneeName: '简学勤' });
+  const payload = JSON.stringify(card);
+
+  assert.equal(card.schema, '2.0');
+  assert.equal(card.header.template, 'grey');
+  assert.equal(payload.includes('版本更新MS-16---开发'), true);
+  assert.equal(payload.includes('简学勤'), true);
+  assert.equal(payload.includes('button'), false);
+  assert.equal(payload.includes('behaviors'), false);
+  assert.equal(payload.includes('form'), false);
+  assert.equal(payload.includes('select_static'), false);
+  assert.equal(payload.includes('date_picker'), false);
 }
 
 function testRelaxedAssigneeGroupingMatchesUniqueMemberDisplayNames() {
@@ -1140,7 +1156,7 @@ async function testTaskInspectionUpdateUsesOnlyFourMasterFields() {
   const fields = JSON.parse(updateCall.options.body).fields;
   assert.deepEqual(Object.keys(fields).sort(), ['完成日期', '开始日期', '进度评估', '需求状态'].sort());
   assert.equal(fields.需求状态, '进行中');
-  assert.equal(fields.进度评估, '75');
+  assert.equal(fields.进度评估, 0.75);
   assert.equal(fields.开始日期, new Date(2026, 7, 1).getTime());
   assert.equal(fields.完成日期, new Date(2026, 7, 29).getTime());
 }
@@ -5314,6 +5330,7 @@ async function testProgressConfirmationUsesProgressOnlyAction() {
 
 
 testMappingAndGrouping();
+testProcessingCardIsNonInteractiveAndVisiblyGrey();
 testRelaxedAssigneeGroupingMatchesUniqueMemberDisplayNames();
 testRelaxedAssigneeGroupingFailsClosedOnAmbiguousMemberPrefixes();
 testCardPayloadContainsOnlyOwnedTasks();

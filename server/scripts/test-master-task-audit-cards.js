@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard } from '../services/feishuTaskCardPure.js';
+import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard, buildTaskCardProcessingCard } from '../services/feishuTaskCardPure.js';
 import { resolveMasterTaskAuditAdminRecipient, sendMasterTaskAuditCard, sendMasterTaskInspectionAdminSummary } from '../services/masterTaskAuditCardService.js';
 
 function formControl(card, name) {
@@ -264,6 +264,20 @@ function testBlankCompletionDateOmitsInitialDate() {
   assert.equal('initial_date' in completionDateControl, false);
 }
 
+function testProcessingCardRemovesMasterTaskButtonsAndForms() {
+  const card = buildTaskCardProcessingCard({ taskName: '版本更新MS-16---开发', assigneeName: '简学勤' });
+  const payload = JSON.stringify(card);
+
+  assert.equal(card.header.template, 'grey');
+  assert.equal(payload.includes('版本更新MS-16---开发'), true);
+  assert.equal(payload.includes('简学勤'), true);
+  assert.equal(payload.includes('button'), false);
+  assert.equal(payload.includes('behaviors'), false);
+  assert.equal(payload.includes('task_inspection_submit_update'), false);
+  assert.equal(payload.includes('master_task_confirm_update'), false);
+  assert.equal(payload.includes('form'), false);
+}
+
 function testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields() {
   const card = buildMasterTaskInspectionCard({
     audit: {
@@ -281,10 +295,14 @@ function testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields() {
     }
   });
   const submitButton = formControl(card, 'task_inspection_submit_update');
+  const ignoreButton = formControl(card, 'task_inspection_ignore');
 
   assert.equal(card.schema, '2.0');
   assert.equal(formControl(card, 'task_status')?.tag, 'select_static');
-  assert.equal(formControl(card, 'progress_evaluation')?.tag, 'input');
+  assert.equal(formControl(card, 'progress_evaluation')?.tag, 'select_static');
+  assert.deepEqual(formControl(card, 'progress_evaluation')?.options?.[0], { text: { tag: 'plain_text', content: '0%' }, value: '0' });
+  assert.deepEqual(formControl(card, 'progress_evaluation')?.options?.[10], { text: { tag: 'plain_text', content: '100%' }, value: '100' });
+  assert.equal(formControl(card, 'progress_evaluation')?.initial_option, '80');
   assert.equal(formControl(card, 'start_date')?.tag, 'date_picker');
   assert.equal(formControl(card, 'completion_date')?.tag, 'date_picker');
   assert.equal(formControl(card, 'progress_text'), undefined);
@@ -292,6 +310,13 @@ function testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields() {
   assert.equal(formControl(card, 'reason'), undefined);
   assert.equal(submitButton.behaviors[0].value.card_kind, 'task_inspection');
   assert.equal(submitButton.behaviors[0].value.action, 'task_inspection_submit_update');
+  assert.equal(ignoreButton?.behaviors?.[0]?.value?.card_kind, 'task_inspection');
+  assert.equal(ignoreButton?.behaviors?.[0]?.value?.action, 'task_inspection_ignore');
+  assert.doesNotMatch(JSON.stringify(card), /发现的问题/);
+  assert.match(JSON.stringify(card), /任务已连续 3 天未更新，请检查状态、进度或日期/);
+  assert.match(JSON.stringify(card), /状态/);
+  assert.match(JSON.stringify(card), /开始日期/);
+  assert.match(JSON.stringify(card), /完成日期/);
   assert.equal(JSON.stringify(card).includes('master_task_confirm_update'), false);
   assert.equal(JSON.stringify(card).includes('master_task_no_update'), false);
 }
@@ -311,6 +336,24 @@ function testTaskInspectionCardShowsOnlyRelevantIssueFields() {
   assert.equal(formControl(card, 'completion_date')?.tag, 'date_picker');
   assert.equal(formControl(card, 'progress_evaluation'), undefined);
   assert.equal(formControl(card, 'start_date'), undefined);
+  assert.match(JSON.stringify(card), /任务明天到期，请确认状态或完成日期/);
+}
+
+function testTaskInspectionCardDisplaysParentPrefixedTaskName() {
+  const card = buildMasterTaskInspectionCard({
+    audit: {
+      id: 406,
+      audit_type: 'task_inspection',
+      task_name: '版本更新MS-16---开发',
+      assignee_name: '简学勤',
+      task_status: '进行中',
+      progress_evaluation: '30',
+      completion_date: '2026-07-30',
+      inspection_issues: [{ type: 'overdue_in_progress', field_names: ['completion_date', 'task_status'] }]
+    }
+  });
+
+  assert.match(JSON.stringify(card), /版本更新MS-16---开发/);
 }
 
 testInProgressAuditCardContainsEditableProgressForm();
@@ -319,8 +362,10 @@ testInProgressAuditCardUsesCanonicalEditFieldDefaults();
 testPausedAuditCardContainsReminderOnly();
 testTerminalCardsRenderDoneState();
 testBlankCompletionDateOmitsInitialDate();
+testProcessingCardRemovesMasterTaskButtonsAndForms();
 testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields();
 testTaskInspectionCardShowsOnlyRelevantIssueFields();
+testTaskInspectionCardDisplaysParentPrefixedTaskName();
 testAdminSummaryCardContainsMachineCountsByMember();
 testAdminSummaryRecipientRequiresExplicitOpenIdNotifyConfig();
 await testSendMasterTaskAuditCardPreservesCanonicalEditDefaults();

@@ -15,6 +15,14 @@ function normalizeText(value) {
 function normalizeDateOnlyText(value) {
   const text = normalizeText(value);
   if (!text) return '';
+  if (/^\d{10,13}$/.test(text)) {
+    const timestamp = Number(text) * (text.length === 10 ? 1000 : 1);
+    const timestampDate = new Date(timestamp);
+    if (!Number.isNaN(timestampDate.getTime())) {
+      const pad = (number) => String(number).padStart(2, '0');
+      return `${timestampDate.getFullYear()}-${pad(timestampDate.getMonth() + 1)}-${pad(timestampDate.getDate())}`;
+    }
+  }
   const date = new Date(text.replace(' ', 'T'));
   if (Number.isNaN(date.getTime())) return text;
   const pad = (number) => String(number).padStart(2, '0');
@@ -85,7 +93,10 @@ function normalizeProgressEvaluation(value) {
   const text = normalizeText(value);
   if (!text) return '';
   const numeric = Number(String(text).replace('%', ''));
-  if (Number.isFinite(numeric)) return String(Math.max(0, Math.min(100, numeric)));
+  if (Number.isFinite(numeric)) {
+    const percent = numeric >= 0 && numeric <= 1 && !text.includes('%') ? numeric * 100 : numeric;
+    return String(Math.max(0, Math.min(100, percent)));
+  }
   return text;
 }
 

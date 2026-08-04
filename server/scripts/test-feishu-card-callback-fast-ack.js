@@ -51,6 +51,7 @@ async function testFastAckDispatchDoesNotAwaitSlowHandler() {
 async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
   let resolvePrepare;
   let processCount = 0;
+  const backgroundOrder = [];
   let responseCount = 0;
   let nextError = null;
   const unhandledRejections = [];
@@ -65,8 +66,13 @@ async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
   const processed = new Promise((resolve) => {
     const handler = createFeishuCardActionHandler({
       prepareCardAction: async () => preparedAfterAck,
+      updateCardToProcessing: async (prepared) => {
+        assert.equal(prepared.marker, 'slow-prepare');
+        backgroundOrder.push('processing');
+      },
       processPreparedCardAction: async (prepared) => {
         assert.equal(prepared.marker, 'slow-prepare');
+        backgroundOrder.push('process');
         processCount += 1;
         resolve();
       },
@@ -115,9 +121,48 @@ async function testSlowPrepareReturnsProcessingAckBeforePreparationResolves() {
   await processed;
   process.off('unhandledRejection', onUnhandledRejection);
   assert.equal(processCount, 1);
+  assert.deepEqual(backgroundOrder, ['processing', 'process']);
   assert.equal(responseCount, 1);
   assert.equal(nextError, null);
   assert.deepEqual(unhandledRejections, []);
+}
+
+async function testProcessingPatchFailureStillProcessesAction() {
+  let processCount = 0;
+  const diagnostics = [];
+  const tasks = [];
+  const handler = createFeishuCardActionHandler({
+    prepareCardAction: async () => ({
+      marker: 'processing-patch-failed',
+      parsed: { action: 'confirm_assignee_tasks', card_kind: 'tasks', draft_id: 1, message_id: 'om_processing_failed', operator_open_id: 'ou_actor' },
+      response: { toast: { type: 'info', content: '你的选择已确认' } },
+      shouldProcess: true
+    }),
+    updateCardToProcessing: async () => {
+      const error = new Error('patch failed');
+      error.feishuResponse = { code: 200671 };
+      throw error;
+    },
+    processPreparedCardAction: async (prepared) => {
+      assert.equal(prepared.marker, 'processing-patch-failed');
+      processCount += 1;
+    },
+    dispatchFeishuCardAction: (_response, task) => {
+      tasks.push(task());
+      return _response;
+    },
+    diagnosticsLogger: { warn: (record) => diagnostics.push(record) }
+  });
+
+  const req = { body: buildActionPayload({ action: 'confirm_assignee_tasks', draftId: 1, eventId: 'evt_processing_patch_failed' }) };
+  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+
+  await handler(req, res, (error) => { throw error; });
+  await Promise.all(tasks);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(processCount, 1);
+  assert.equal(diagnostics.some((item) => item.phase === 'processing_card_patch' && item.failure_class === 'feishu_processing_card_patch_failed'), true);
 }
 
 function testTestRecipientOverridePreservesOriginalAssignees() {
@@ -419,6 +464,7 @@ async function testBackgroundFailureStoresErrorAndKeepsFastAck() {
 
 await testFastAckDispatchDoesNotAwaitSlowHandler();
 await testSlowPrepareReturnsProcessingAckBeforePreparationResolves();
+await testProcessingPatchFailureStillProcessesAction();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();
 await testConfirmClaimOnlyOnce();

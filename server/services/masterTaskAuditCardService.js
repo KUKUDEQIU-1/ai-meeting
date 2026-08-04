@@ -1,5 +1,5 @@
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard, normalizeAssigneeKey } from './feishuTaskCardPure.js';
+import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard, buildTaskCardProcessingCard, normalizeAssigneeKey } from './feishuTaskCardPure.js';
 import { getMasterTaskAuditLogById, markMasterTaskAuditFailed, markMasterTaskAuditSent, upsertMasterTaskAuditLog } from './masterTaskAuditLogService.js';
 import { patchInteractiveFeishuMessage, resolveTaskCardRecipients, sendInteractiveFeishuMessage } from './feishuTaskCardService.js';
 
@@ -155,13 +155,20 @@ export async function sendMasterTaskInspectionAdminSummary({ auditDate, summary 
   return { status: 'sent', message_id: messageId };
 }
 
-export async function updateMasterTaskAuditCard({ auditLogId, terminal = false }) {
+export async function updateMasterTaskAuditCard({ auditLogId, terminal = false, processing = false }) {
   const auditLog = await getMasterTaskAuditLogById(auditLogId);
 
   if (!auditLog || !auditLog.card_message_id) {
     return { status: 'skipped', reason: 'audit_card_not_found' };
   }
 
-  const card = buildAuditCard(auditLog, terminal);
+  const card = processing
+    ? buildTaskCardProcessingCard({
+      title: '任务卡片正在处理',
+      taskName: auditLog.task_name,
+      assigneeName: auditLog.assignee_name,
+      actionText: '已收到你的操作，正在更新任务信息，请稍候'
+    })
+    : buildAuditCard(auditLog, terminal);
   return patchInteractiveFeishuMessage({ messageId: auditLog.card_message_id, card });
 }

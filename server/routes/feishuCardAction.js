@@ -1,6 +1,6 @@
 import express from 'express';
 import { createFeishuCardActionDispatcher } from '../services/feishuCardActionDispatcher.js';
-import { prepareFeishuCardAction, processPreparedFeishuCardAction } from '../services/feishuTaskCardActionService.js';
+import { prepareFeishuCardAction, processPreparedFeishuCardAction, updatePreparedFeishuCardToProcessing } from '../services/feishuTaskCardActionService.js';
 
 function configuredVerificationToken() {
   return process.env.FEISHU_EVENT_VERIFICATION_TOKEN?.trim() || '';
@@ -112,7 +112,7 @@ function preparedMetadataFrom(prepared, metadata) {
     : metadata;
 }
 
-function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction, processPreparedCardAction, diagnosticsLogger }) {
+function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction, processPreparedCardAction, updateCardToProcessing, diagnosticsLogger }) {
   const response = prepared.response || {};
   const preparedMetadata = preparedMetadataFrom(prepared, metadata);
 
@@ -120,6 +120,19 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
     dispatchAction(response, async () => {
       const processStartedAt = performance.now();
       try {
+        try {
+          await updateCardToProcessing(prepared);
+        } catch (error) {
+          emitDiagnostics(diagnosticsLogger, {
+            phase: 'processing_card_patch',
+            failure_class: 'feishu_processing_card_patch_failed',
+            status: error?.status,
+            code: error?.feishuResponse?.code,
+            prepare_ms: prepareMs,
+            process_ms: elapsedMs(processStartedAt),
+            ...preparedMetadata
+          });
+        }
         await processPreparedCardAction(prepared);
       } catch (error) {
         emitDiagnostics(diagnosticsLogger, {
@@ -150,6 +163,7 @@ export function createFeishuCardActionHandler({
   dispatchFeishuCardAction,
   prepareCardAction = prepareFeishuCardAction,
   processPreparedCardAction = processPreparedFeishuCardAction,
+  updateCardToProcessing = updatePreparedFeishuCardToProcessing,
   diagnosticsLogger
 } = {}) {
   const dispatchAction = dispatchFeishuCardAction || createFeishuCardActionDispatcher({
@@ -196,6 +210,7 @@ export function createFeishuCardActionHandler({
         prepareMs: elapsedMs(startedAt),
         dispatchAction,
         processPreparedCardAction,
+        updateCardToProcessing,
         diagnosticsLogger
       });
     }).catch((error) => {

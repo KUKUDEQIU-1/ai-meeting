@@ -30,17 +30,55 @@ async function createAuditLog(auditType = 'in_progress_missing_update') {
 }
 
 function payloadFor(auditLog, action, formValue = {}) {
+  const cardKind = action.startsWith('task_inspection_') ? 'task_inspection' : 'master_task_audit';
   return {
     header: { event_id: `evt_${Date.now()}` },
     event: {
       operator: { open_id: 'ou_audit_actor' },
       context: { open_message_id: auditLog.card_message_id },
       action: {
-        value: { action, audit_log_id: auditLog.id, card_kind: 'master_task_audit' },
+        value: { action, audit_log_id: auditLog.id, card_kind: cardKind },
         form_value: formValue
       }
     }
   };
+}
+
+async function testInspectionIgnoreMarksOnlyCurrentAuditTerminal() {
+  const auditLog = await upsertMasterTaskAuditLog({
+    recordId: `rec_inspection_ignore_${Date.now()}`,
+    taskName: '三天未更新测试',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveIdType: 'open_id',
+    receiveId: 'ou_audit_actor',
+    taskStatus: '进行中',
+    auditDate: '2026-08-04',
+    auditType: 'task_inspection',
+    actionTaken: 'sent',
+    cardMessageId: `om_inspection_ignore_${Date.now()}`
+  });
+  const prepared = await prepareFeishuCardAction(payloadFor(auditLog, 'task_inspection_ignore'));
+  let updateInspectionCalled = false;
+  let updateProgressCalled = false;
+  let updateCardPayload = null;
+
+  const response = await processPreparedFeishuCardAction(prepared, {
+    updateInspection: async () => { updateInspectionCalled = true; },
+    updateProgress: async () => { updateProgressCalled = true; },
+    updateCard: async (payload) => { updateCardPayload = payload; return { status: 'updated' }; }
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.equal(response.toast.content, '已忽略本次巡检提醒');
+  assert.equal(updateInspectionCalled, false);
+  assert.equal(updateProgressCalled, false);
+  assert.deepEqual(updateCardPayload, { auditLogId: auditLog.id, terminal: true });
+  assert.equal(stored.action_taken, 'skipped');
+  assert.equal(stored.callback_id, prepared.parsed.callback_id);
+
+  const replay = await prepareFeishuCardAction(payloadFor(auditLog, 'task_inspection_ignore'));
+  assert.equal(replay.shouldProcess, false);
 }
 
 function inspectionPayloadFor(auditLog, formValue = {}) {
@@ -791,6 +829,7 @@ async function testTaskInspectionActionIsClaimedBeforeGenericMeetingCallback() {
 }
 
 await initDatabase();
+await testInspectionIgnoreMarksOnlyCurrentAuditTerminal();
 await testNoUpdateDoesNotWriteProgress();
 await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();

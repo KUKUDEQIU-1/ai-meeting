@@ -1073,6 +1073,38 @@ function recordFieldText(fields, names) {
   return bitableCellText(recordFieldValue(fields, names));
 }
 
+function linkedRecordIds(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap(linkedRecordIds);
+  }
+
+  if (value && typeof value === 'object') {
+    const ids = value.record_ids || value.recordIds;
+    return Array.isArray(ids) ? ids.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  }
+
+  return [];
+}
+
+function parentTaskNameOf(fields, taskNameByRecordId) {
+  for (const fieldName of ['父记录', '父记录 2']) {
+    const ids = linkedRecordIds(fields?.[fieldName]);
+    for (const id of ids) {
+      const taskName = taskNameByRecordId.get(id);
+      if (taskName) return taskName;
+    }
+  }
+
+  return '';
+}
+
+function inspectionTaskNameOf(fields, taskNameByRecordId) {
+  const taskName = recordFieldText(fields, ['事务需求名称', '任务名称']);
+  const parentTaskName = parentTaskNameOf(fields, taskNameByRecordId);
+
+  return parentTaskName && taskName ? `${parentTaskName}---${taskName}` : taskName;
+}
+
 function progressValueForMasterTaskStatus(status) {
   if (status === '已完成') return 1;
   if (status === '进行中') return 0.5;
@@ -1144,7 +1176,15 @@ function buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation,
   const fields = {};
 
   if (String(taskStatus || '').trim()) fields.需求状态 = normalizeMasterTaskStatusForUpdate(taskStatus);
-  if (String(progressEvaluation || '').trim()) fields.进度评估 = String(progressEvaluation || '').trim();
+  if (String(progressEvaluation || '').trim()) {
+    const percent = Number(String(progressEvaluation).replace('%', '').trim());
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+      const error = new Error('进度评估无效');
+      error.status = 400;
+      throw error;
+    }
+    fields.进度评估 = percent / 100;
+  }
   if (String(startDate || '').trim()) fields.开始日期 = normalizeDateOnlyTimestamp(startDate);
   if (String(completionDate || '').trim()) fields.完成日期 = normalizeDateOnlyTimestamp(completionDate);
 
@@ -1208,6 +1248,11 @@ export async function listMasterTaskAuditRecords(context = {}) {
     }
     const records = await listBitableRecords({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
 
+    const taskNameByRecordId = new Map(records.map((record) => [
+      record.record_id || record.id || '',
+      recordFieldText(record.fields, ['事务需求名称', '任务名称'])
+    ]).filter(([recordId, taskName]) => recordId && taskName));
+
     return records.map((record) => {
       const status = recordFieldText(record.fields, ['需求状态', '状态']);
       const progressText = context.inspection
@@ -1220,7 +1265,9 @@ export async function listMasterTaskAuditRecords(context = {}) {
 
       return {
         recordId: record.record_id || record.id || '',
-        taskName: recordFieldText(record.fields, ['事务需求名称', '任务名称']),
+        taskName: context.inspection
+          ? inspectionTaskNameOf(record.fields, taskNameByRecordId)
+          : recordFieldText(record.fields, ['事务需求名称', '任务名称']),
         status,
         taskStatus: status,
         task_status: status,

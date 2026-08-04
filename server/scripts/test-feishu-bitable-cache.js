@@ -179,9 +179,56 @@ async function testUpdateMasterTaskProgressInvalidatesRecordCacheButKeepsSchemaC
   }
 }
 
+async function testInspectionRecordsPrefixLinkedParentTaskName() {
+  clearMasterTaskAuditCache();
+  const fetchHarness = installFetch({
+    fields: async () => response({ code: 0, data: { items: [
+      ...fieldItems(),
+      { field_name: '进度评估' },
+      { field_name: '开始日期' },
+      { field_name: '父记录 2' }
+    ] } }),
+    records: async () => response({ code: 0, data: { items: [
+      {
+        record_id: 'rec_parent',
+        fields: {
+          事务需求名称: '版本更新MS-16',
+          需求状态: '进行中',
+          跟进人: '简学勤',
+          进度评估: '50',
+          完成日期: '2026-07-30'
+        }
+      },
+      {
+        record_id: 'rec_child',
+        fields: {
+          事务需求名称: '开发',
+          需求状态: '进行中',
+          跟进人: '简学勤',
+          进度评估: '30',
+          完成日期: '2026-07-30',
+          '父记录 2': [{ record_ids: ['rec_parent'], table_id: 'tbl_cache', text_arr: [], type: 'text' }]
+        }
+      }
+    ] } }),
+    update: async () => response({ code: 0, data: { record: { record_id: 'rec_child' } } })
+  });
+
+  try {
+    const records = await listMasterTaskAuditRecords({ appToken: 'app_cache', tableId: 'tbl_cache', tenantAccessToken: 'tenant_cache', inspection: true });
+
+    assert.equal(records.find((record) => record.recordId === 'rec_child')?.taskName, '版本更新MS-16---开发');
+    assert.equal(records.find((record) => record.recordId === 'rec_parent')?.taskName, '版本更新MS-16');
+  } finally {
+    fetchHarness.restore();
+    clearMasterTaskAuditCache();
+  }
+}
+
 await testValidateMasterTaskAuditFieldsUsesSchemaCache();
 await testConcurrentListMasterTaskAuditRecordsDedupesFieldsAndRecords();
 await testRejectedRecordReadsAreNotCached();
 await testUpdateMasterTaskProgressInvalidatesRecordCacheButKeepsSchemaCache();
+await testInspectionRecordsPrefixLinkedParentTaskName();
 
 console.log('feishu bitable cache tests passed');
