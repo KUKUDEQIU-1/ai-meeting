@@ -81,6 +81,64 @@ async function testInspectionIgnoreMarksOnlyCurrentAuditTerminal() {
   assert.equal(replay.shouldProcess, false);
 }
 
+async function testAuditCallbackAuthorizesCurrentAssigneeRecipientWhenStoredReceiverDiffers() {
+  const previousChatId = process.env.FEISHU_TASK_GROUP_CHAT_ID;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousFetch = globalThis.fetch;
+  const auditLog = await upsertMasterTaskAuditLog({
+    recordId: `rec_audit_receiver_changed_${Date.now()}`,
+    taskName: '接收人映射更新测试',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveIdType: 'open_id',
+    receiveId: 'ou_stale_receiver',
+    taskStatus: '进行中',
+    auditDate: '2026-08-04',
+    auditType: 'task_inspection',
+    actionTaken: 'sent',
+    cardMessageId: `om_receiver_changed_${Date.now()}`
+  });
+
+  process.env.FEISHU_TASK_GROUP_CHAT_ID = 'oc_test_members';
+  process.env.FEISHU_APP_ID = 'cli_test_app';
+  process.env.FEISHU_APP_SECRET = 'cli_test_secret';
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/auth/v3/tenant_access_token/internal')) {
+      return response({ code: 0, tenant_access_token: 'tenant_test' });
+    }
+    if (String(url).includes('/chats/oc_test_members/members')) {
+      return response({ code: 0, data: { items: [{ name: '简学勤', open_id: 'ou_audit_actor' }], has_more: false } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const prepared = await prepareFeishuCardAction({
+      header: { event_id: `evt_receiver_changed_${Date.now()}` },
+      event: {
+        operator: { open_id: 'ou_audit_actor' },
+        context: { open_message_id: auditLog.card_message_id },
+        action: {
+          value: { action: 'task_inspection_ignore', audit_log_id: auditLog.id, card_kind: 'task_inspection' },
+          form_value: {}
+        }
+      }
+    });
+
+    assert.equal(prepared.shouldProcess, true);
+    assert.equal(prepared.auditLog.id, auditLog.id);
+  } finally {
+    if (previousChatId === undefined) delete process.env.FEISHU_TASK_GROUP_CHAT_ID;
+    else process.env.FEISHU_TASK_GROUP_CHAT_ID = previousChatId;
+    if (previousAppId === undefined) delete process.env.FEISHU_APP_ID;
+    else process.env.FEISHU_APP_ID = previousAppId;
+    if (previousAppSecret === undefined) delete process.env.FEISHU_APP_SECRET;
+    else process.env.FEISHU_APP_SECRET = previousAppSecret;
+    globalThis.fetch = previousFetch;
+  }
+}
+
 function inspectionPayloadFor(auditLog, formValue = {}) {
   return {
     header: { event_id: `evt_inspection_${Date.now()}` },
@@ -830,6 +888,7 @@ async function testTaskInspectionActionIsClaimedBeforeGenericMeetingCallback() {
 
 await initDatabase();
 await testInspectionIgnoreMarksOnlyCurrentAuditTerminal();
+await testAuditCallbackAuthorizesCurrentAssigneeRecipientWhenStoredReceiverDiffers();
 await testNoUpdateDoesNotWriteProgress();
 await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();

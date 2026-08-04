@@ -6,7 +6,7 @@ import {
   markMasterTaskAuditAction,
   markMasterTaskAuditFailed
 } from './masterTaskAuditLogService.js';
-import { updateMasterTaskAuditCard } from './masterTaskAuditCardService.js';
+import { resolveAuditRecipient, updateMasterTaskAuditCard } from './masterTaskAuditCardService.js';
 import { isReplayCallback, validateCallbackActor } from './feishuTaskCardPure.js';
 
 const MAX_AUDIT_PROGRESS_LENGTH = 500;
@@ -292,12 +292,22 @@ async function loadAuditState(parsed) {
     reject('未匹配到总表巡检提醒记录', 404);
   }
 
-  const state = {
+  const storedState = {
     receive_id: auditLog.receive_id,
     last_callback_id: auditLog.callback_id || ''
   };
+  let authorized = validateCallbackActor(storedState, parsed);
 
-  if (!validateCallbackActor(state, parsed)) {
+  if (!authorized) {
+    try {
+      const recipient = await resolveAuditRecipient(auditLog.assignee_key);
+      authorized = validateCallbackActor({ receive_id: recipient.original_receive_id || recipient.receive_id }, parsed);
+    } catch {
+      authorized = false;
+    }
+  }
+
+  if (!authorized) {
     reject('无权操作他人的巡检提醒卡片', 403);
   }
 
