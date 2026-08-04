@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildMasterTaskAuditSummary, evaluateMasterTaskAuditRecord } from '../services/masterTaskAuditService.js';
+import { buildMasterTaskAuditSummary, buildMasterTaskInspectionAdminSummary, evaluateMasterTaskAuditRecord, evaluateMasterTaskInspectionRecord } from '../services/masterTaskAuditService.js';
 
 function record(overrides = {}) {
   return {
@@ -9,9 +9,24 @@ function record(overrides = {}) {
     assigneeName: '简学勤',
     assigneeKey: '简学勤',
     progressText: '昨天已完成基础准备',
+    progressEvaluation: '50',
+    startDate: '2026-07-20',
+    completionDate: '2026-07-30',
     remark: '',
     lastModifiedAt: '2026-07-21 17:59:00',
     dueAt: '',
+    ...overrides
+  };
+}
+
+function inspectionLog(overrides = {}) {
+  return {
+    audit_type: 'task_inspection',
+    audit_date: '2026-07-23',
+    submitted_status: '进行中',
+    submitted_progress_evaluation: '50',
+    submitted_start_date: '2026-07-20',
+    submitted_completion_date: '2026-07-30',
     ...overrides
   };
 }
@@ -114,6 +129,116 @@ function testSummaryCounts() {
   });
 }
 
+function testOneDailyInspectionWithoutUpdateDoesNotRemind() {
+  const result = evaluateMasterTaskInspectionRecord(record(), { now: new Date('2026-07-24 18:00:00'), history: [] });
+
+  assert.equal(result.action, 'passed');
+  assert.equal(result.audit_type, 'task_inspection');
+  assert.equal(result.reason, 'inspection_passed');
+}
+
+function testThreeDailyInspectionsWithoutEffectiveUpdateReminds() {
+  const result = evaluateMasterTaskInspectionRecord(record(), {
+    now: new Date('2026-07-24 18:00:00'),
+    history: [inspectionLog({ audit_date: '2026-07-23' }), inspectionLog({ audit_date: '2026-07-22' })]
+  });
+
+  assert.equal(result.action, 'remind');
+  assert.equal(result.audit_type, 'task_inspection');
+  assert.equal(result.reason, 'three_daily_inspections_without_effective_update');
+  assert.deepEqual(result.issues[0].field_names, ['task_status', 'progress_evaluation', 'start_date', 'completion_date']);
+}
+
+function testTwoDailyInspectionsWithoutEffectiveUpdateDoesNotRemind() {
+  const result = evaluateMasterTaskInspectionRecord(record(), {
+    now: new Date('2026-07-24 18:00:00'),
+    history: [inspectionLog({ audit_date: '2026-07-23' })]
+  });
+
+  assert.equal(result.action, 'passed');
+}
+
+function testInspectionHistoryRequiresConsecutiveDaysAndResetsOnEffectiveChange() {
+  const nonConsecutive = evaluateMasterTaskInspectionRecord(record(), {
+    now: new Date('2026-07-24 18:00:00'),
+    history: [inspectionLog({ audit_date: '2026-07-22' }), inspectionLog({ audit_date: '2026-07-21' })]
+  });
+  const changedProgress = evaluateMasterTaskInspectionRecord(record(), {
+    now: new Date('2026-07-24 18:00:00'),
+    history: [inspectionLog({ audit_date: '2026-07-23', submitted_progress_evaluation: '60' }), inspectionLog({ audit_date: '2026-07-22' })]
+  });
+
+  assert.equal(nonConsecutive.action, 'passed');
+  assert.equal(changedProgress.action, 'passed');
+}
+
+function testInspectionRulesClassifyMachineIssueTypes() {
+  const cases = [
+    ['overdue', record({ status: '进行中', completionDate: '2026-07-23' }), 'overdue_in_progress'],
+    ['progress100', record({ status: '进行中', progressEvaluation: '100' }), 'progress_complete_status_open'],
+    ['doneProgress', record({ status: '已完成', progressEvaluation: '80' }), 'status_done_progress_incomplete'],
+    ['blankProgressCompletion', record({ status: '进行中', progressEvaluation: '', progressText: '', completionDate: '' }), 'in_progress_missing_progress_and_completion'],
+    ['pendingStarted', record({ status: '待开始', startDate: '2026-07-23' }), 'pending_started']
+  ];
+
+  for (const [label, item, issueType] of cases) {
+    const result = evaluateMasterTaskInspectionRecord(item, { now: new Date('2026-07-24 18:00:00') });
+    assert.equal(result.action, 'remind', label);
+    assert.equal(result.issues.some((issue) => issue.type === issueType), true, label);
+  }
+}
+
+function testInProgressBlankDedicatedCompletionIgnoresUnrelatedDueAt() {
+  const result = evaluateMasterTaskInspectionRecord(record({
+    status: '进行中',
+    progressEvaluation: '',
+    progressText: '',
+    completionDate: '',
+    completion_date: '',
+    dueAt: '2026-07-30'
+  }), { now: new Date('2026-07-24 18:00:00') });
+
+  assert.equal(result.action, 'remind');
+  assert.equal(result.issues.some((issue) => issue.type === 'in_progress_missing_progress_and_completion'), true);
+}
+
+function testDueTomorrowIsSeparateDueSoonReminder() {
+  const result = evaluateMasterTaskInspectionRecord(record({ completionDate: '2026-07-25', status: '进行中' }), { now: new Date('2026-07-24 18:00:00') });
+
+  assert.equal(result.action, 'remind');
+  assert.equal(result.audit_type, 'task_inspection_due_soon');
+  assert.equal(result.due_soon, true);
+  assert.equal(result.abnormal, false);
+}
+
+function testAdminSummaryDeduplicatesAbnormalAndSeparatesDueSoon() {
+  const summary = buildMasterTaskInspectionAdminSummary([
+    { record_id: 'rec_a', assignee_name: '张三', abnormal: true },
+    { record_id: 'rec_a', assignee_name: '张三', abnormal: true },
+    { record_id: 'rec_b', assignee_name: '张三', due_soon: true },
+    { record_id: 'rec_c', assignee_name: '李四', abnormal: true }
+  ]);
+
+  assert.equal(summary.abnormal_count, 2);
+  assert.equal(summary.due_soon_count, 1);
+  assert.deepEqual(summary.members, [
+    { assignee_name: '张三', abnormal_count: 1, due_soon_count: 1 },
+    { assignee_name: '李四', abnormal_count: 1, due_soon_count: 0 }
+  ]);
+}
+
+function testAdminSummaryKeepsZeroCountMembers() {
+  const summary = buildMasterTaskInspectionAdminSummary([
+    { record_id: 'rec_zero', assignee_name: '王五', abnormal: false, due_soon: false, action: 'passed' }
+  ]);
+
+  assert.deepEqual(summary, {
+    abnormal_count: 0,
+    due_soon_count: 0,
+    members: [{ assignee_name: '王五', abnormal_count: 0, due_soon_count: 0 }]
+  });
+}
+
 testRecentInProgressPasses();
 testStaleInProgressNeedsReminder();
 testExactlyThreeDaysOldPasses();
@@ -126,5 +251,14 @@ testPausedRecentPasses();
 testUnsupportedStatusesAreIgnored();
 testMissingAssigneeIsSkipped();
 testSummaryCounts();
+testOneDailyInspectionWithoutUpdateDoesNotRemind();
+testThreeDailyInspectionsWithoutEffectiveUpdateReminds();
+testTwoDailyInspectionsWithoutEffectiveUpdateDoesNotRemind();
+testInspectionHistoryRequiresConsecutiveDaysAndResetsOnEffectiveChange();
+testInspectionRulesClassifyMachineIssueTypes();
+testInProgressBlankDedicatedCompletionIgnoresUnrelatedDueAt();
+testDueTomorrowIsSeparateDueSoonReminder();
+testAdminSummaryDeduplicatesAbnormalAndSeparatesDueSoon();
+testAdminSummaryKeepsZeroCountMembers();
 
 console.log('master task audit evaluator tests passed');
