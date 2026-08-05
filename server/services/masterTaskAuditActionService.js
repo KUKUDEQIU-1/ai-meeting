@@ -289,14 +289,34 @@ async function loadAuditState(parsed) {
     ? await getMasterTaskAuditLogById(auditLogId)
     : null;
 
-  if (!auditLog && parsed.message_id) {
-    auditLog = await getMasterTaskAuditLogByCardMessageId(parsed.message_id);
-  }
-
   const auditRecordId = auditValue(parsed.raw_value, 'audit_record_id', 'auditRecordId');
   const auditDate = auditValue(parsed.raw_value, 'audit_date', 'auditDate');
   const auditType = auditValue(parsed.raw_value, 'audit_type', 'auditType');
   const auditAssigneeKey = auditValue(parsed.raw_value, 'audit_assignee_key', 'auditAssigneeKey');
+
+  if (auditLog && parsed.message_id && auditLog.card_message_id !== parsed.message_id) {
+    auditLog = null;
+  }
+
+  if (auditLog && auditRecordId && auditLog.record_id !== String(auditRecordId || '').trim()) {
+    auditLog = null;
+  }
+
+  if (auditLog && auditDate && auditLog.audit_date !== String(auditDate || '').trim()) {
+    auditLog = null;
+  }
+
+  if (auditLog && auditType && auditLog.audit_type !== String(auditType || '').trim()) {
+    auditLog = null;
+  }
+
+  if (auditLog && auditAssigneeKey && auditLog.assignee_key !== String(auditAssigneeKey || '').trim()) {
+    auditLog = null;
+  }
+
+  if (!auditLog && parsed.message_id) {
+    auditLog = await getMasterTaskAuditLogByCardMessageId(parsed.message_id);
+  }
 
   if (!auditLog && auditRecordId && auditDate && auditType) {
     const { getMasterTaskAuditLog } = await import('./masterTaskAuditLogService.js');

@@ -139,6 +139,43 @@ async function testAuditCallbackAuthorizesCurrentAssigneeRecipientWhenStoredRece
   }
 }
 
+async function testAuditCallbackFallsBackFromMismatchedIdToMessageId() {
+  const wrongLog = await upsertMasterTaskAuditLog({
+    recordId: `rec_audit_wrong_${Date.now()}`,
+    taskName: '错误 ID 碰撞记录',
+    assigneeKey: '其他人',
+    assigneeName: '其他人',
+    receiveIdType: 'open_id',
+    receiveId: 'ou_wrong_actor',
+    taskStatus: '进行中',
+    auditDate: '2026-08-05',
+    auditType: 'task_inspection',
+    actionTaken: 'sent',
+    cardMessageId: `om_wrong_${Date.now()}`
+  });
+  const currentLog = await upsertMasterTaskAuditLog({
+    recordId: `rec_audit_current_${Date.now()}`,
+    taskName: '正确消息记录',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveIdType: 'open_id',
+    receiveId: 'ou_audit_actor',
+    taskStatus: '进行中',
+    auditDate: '2026-08-05',
+    auditType: 'task_inspection',
+    actionTaken: 'sent',
+    cardMessageId: `om_current_${Date.now()}`
+  });
+
+  const payload = payloadFor(currentLog, 'task_inspection_ignore');
+  payload.event.action.value.audit_log_id = wrongLog.id;
+
+  const prepared = await prepareFeishuCardAction(payload);
+
+  assert.equal(prepared.shouldProcess, true);
+  assert.equal(prepared.auditLog.id, currentLog.id);
+}
+
 function inspectionPayloadFor(auditLog, formValue = {}, action = 'task_inspection_submit_update') {
   return {
     header: { event_id: `evt_inspection_${Date.now()}` },
@@ -944,6 +981,7 @@ async function testTaskInspectionActionIsClaimedBeforeGenericMeetingCallback() {
 await initDatabase();
 await testInspectionIgnoreMarksOnlyCurrentAuditTerminal();
 await testAuditCallbackAuthorizesCurrentAssigneeRecipientWhenStoredReceiverDiffers();
+await testAuditCallbackFallsBackFromMismatchedIdToMessageId();
 await testNoUpdateDoesNotWriteProgress();
 await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
