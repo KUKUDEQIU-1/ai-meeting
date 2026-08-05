@@ -1,5 +1,5 @@
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard, buildTaskCardProcessingCard, normalizeAssigneeKey } from './feishuTaskCardPure.js';
+import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskMissingAssigneeCard, buildMasterTaskPausedAuditCard, buildTaskCardProcessingCard, normalizeAssigneeKey } from './feishuTaskCardPure.js';
 import { getMasterTaskAuditLogById, markMasterTaskAuditFailed, markMasterTaskAuditSent, upsertMasterTaskAuditLog } from './masterTaskAuditLogService.js';
 import { patchInteractiveFeishuMessage, resolveTaskCardRecipients, sendInteractiveFeishuMessage } from './feishuTaskCardService.js';
 
@@ -22,7 +22,20 @@ function assigneeMapFromMembers(members) {
   return map;
 }
 
-function buildAuditCard(auditLog, terminal = false) {
+const MASTER_TASK_OWNER_NAME = '洪伟填';
+
+function assigneeOptionsFromMembers(members) {
+  return (Array.isArray(members) ? members : []).map((member) => {
+    const key = normalizeAssigneeKey(member?.assignee_key || member?.assignee_name || member?.name);
+    const name = String(member?.assignee_name || member?.name || key).trim();
+    return key ? { text: { tag: 'plain_text', content: name || key }, value: key } : null;
+  }).filter(Boolean);
+}
+
+function buildAuditCard(auditLog, terminal = false, options = {}) {
+  if (auditLog.audit_type === 'task_inspection_missing_assignee') {
+    return buildMasterTaskMissingAssigneeCard({ audit: auditLog, assigneeOptions: options.assigneeOptions || [], terminal });
+  }
   if (auditLog.audit_type === 'task_inspection' || auditLog.audit_type === 'task_inspection_due_soon') {
     return buildMasterTaskInspectionCard({ audit: auditLog, terminal });
   }
@@ -59,6 +72,10 @@ export async function resolveAuditRecipient(assigneeKey) {
   return resolveTaskCardRecipients([recipient])[0];
 }
 
+export async function resolveMasterTaskAuditOwner() {
+  return resolveAuditRecipient(MASTER_TASK_OWNER_NAME);
+}
+
 export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
   const resolveRecipient = deps.resolveRecipient || resolveAuditRecipient;
   const upsertAuditLog = deps.upsertAuditLog || upsertMasterTaskAuditLog;
@@ -66,7 +83,11 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
   const markSent = deps.markSent || markMasterTaskAuditSent;
   const markFailed = deps.markFailed || markMasterTaskAuditFailed;
 
-  const baseRecipient = await resolveRecipient(auditLog.assignee_key);
+  const memberResult = await listConfiguredFeishuGroupMembers();
+  const assigneeOptions = assigneeOptionsFromMembers(memberResult.members || []);
+  const baseRecipient = auditLog.audit_type === 'task_inspection_missing_assignee'
+    ? await resolveMasterTaskAuditOwner()
+    : await resolveRecipient(auditLog.assignee_key);
   const recipientMode = String(deps.recipientMode || 'production').trim() || 'production';
   const testReceiveId = String(deps.testReceiveId || process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID || '').trim();
   if (recipientMode === 'test_recipient' && !testReceiveId) {
@@ -113,7 +134,7 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
       inspection_issues: auditLog.inspection_issues || [],
       due_soon: Boolean(auditLog.due_soon),
       task_note: normalizeText(nextLog.submitted_note || taskNote)
-    });
+    }, false, { assigneeOptions });
     const messageId = await sendMessage({ receiveId: recipient.receive_id, card });
     return markSent({
       recordId: nextLog.record_id,
@@ -142,11 +163,11 @@ export function resolveMasterTaskAuditAdminRecipient(env = process.env) {
 }
 
 export async function sendMasterTaskInspectionAdminSummary({ auditDate, summary }, deps = {}) {
-  const resolveRecipient = deps.resolveRecipient || (() => resolveMasterTaskAuditAdminRecipient());
+  const resolveRecipient = deps.resolveRecipient || resolveMasterTaskAuditOwner;
   const sendMessage = deps.sendMessage || sendInteractiveFeishuMessage;
-  const recipient = resolveRecipient();
+  const recipient = await resolveRecipient();
 
-  if (recipient.status !== 'ready') {
+  if (recipient.status && recipient.status !== 'ready') {
     return { status: 'skipped', reason: recipient.reason || 'admin_summary_recipient_not_configured' };
   }
 

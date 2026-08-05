@@ -35,6 +35,8 @@ const DUE_SOON_MS = 3 * DAY_MS;
 const PENDING_STATUSES = new Set(['待开始', '未开始']);
 const INSPECTION_AUDIT_TYPE = 'task_inspection';
 const DUE_SOON_AUDIT_TYPE = 'task_inspection_due_soon';
+const MISSING_ASSIGNEE_AUDIT_TYPE = 'task_inspection_missing_assignee';
+const MASTER_TASK_OWNER_NAME = '洪伟填';
 
 function toEpochMs(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -155,7 +157,16 @@ export function evaluateMasterTaskInspectionRecord(record, options = {}) {
   const issues = [];
 
   if (!normalizeText(record?.assigneeKey) || !normalizeText(record?.assigneeName)) {
-    return { audit_date: auditDate, action: 'skipped', audit_type: '', reason: 'missing_assignee', issues: [], due_soon: false, abnormal: false };
+    return {
+      audit_date: auditDate,
+      action: 'remind',
+      audit_type: MISSING_ASSIGNEE_AUDIT_TYPE,
+      reason: 'missing_assignee',
+      issues: [{ type: 'missing_assignee', field_names: ['task_name', 'assignee'] }],
+      due_soon: false,
+      abnormal: true,
+      route_to_owner: true
+    };
   }
 
   if (snapshot.status === '进行中' && dateOnlyMs(snapshot.completionDate) && dateOnlyMs(snapshot.completionDate) < dateOnlyMs(now)) {
@@ -171,7 +182,7 @@ export function evaluateMasterTaskInspectionRecord(record, options = {}) {
     addInspectionIssue(issues, 'in_progress_missing_progress_and_completion', ['progress_evaluation', 'completion_date']);
   }
   if (PENDING_STATUSES.has(snapshot.status) && dateOnlyMs(snapshot.startDate) && dateOnlyMs(snapshot.startDate) < dateOnlyMs(now)) {
-    addInspectionIssue(issues, 'pending_started', ['start_date', 'task_status']);
+    addInspectionIssue(issues, 'pending_started', ['start_date', 'task_status', 'completion_date']);
   }
 
   if (!issues.length && unchangedInspectionDayCount(record, options.history, auditDate) >= 3) {
@@ -312,31 +323,34 @@ export function buildMasterTaskAuditSummary(results) {
 
 export function buildMasterTaskInspectionAdminSummary(results) {
   const byMember = new Map();
-  const abnormalRecordIds = new Set();
-  const dueSoonRecordIds = new Set();
+  let abnormalCount = 0;
+  let dueSoonCount = 0;
+  let missingAssigneeCount = 0;
 
   for (const result of Array.isArray(results) ? results : []) {
-    const recordId = normalizeText(result.record_id || result.recordId);
-    const member = normalizeText(result.assignee_name || result.assigneeName) || '未分配';
-    if (!byMember.has(member)) byMember.set(member, { assignee_name: member, abnormal_count: 0, due_soon_count: 0 });
+    const member = result.reason === 'missing_assignee'
+      ? '未分配'
+      : normalizeText(result.original_assignee_name || result.assignee_name || result.assigneeName) || '未分配';
+    if (!byMember.has(member)) byMember.set(member, { assignee_name: member, abnormal_count: 0, due_soon_count: 0, missing_assignee_count: 0 });
     const item = byMember.get(member);
 
     if (result.due_soon) {
-      if (!dueSoonRecordIds.has(recordId)) {
-        dueSoonRecordIds.add(recordId);
-        item.due_soon_count += 1;
-      }
+      dueSoonCount += 1;
+      item.due_soon_count += 1;
     } else if (result.abnormal) {
-      if (!abnormalRecordIds.has(recordId)) {
-        abnormalRecordIds.add(recordId);
-        item.abnormal_count += 1;
+      abnormalCount += 1;
+      item.abnormal_count += 1;
+      if (result.reason === 'missing_assignee') {
+        missingAssigneeCount += 1;
+        item.missing_assignee_count += 1;
       }
     }
   }
 
   return {
-    abnormal_count: abnormalRecordIds.size,
-    due_soon_count: dueSoonRecordIds.size,
+    abnormal_count: abnormalCount,
+    due_soon_count: dueSoonCount,
+    missing_assignee_count: missingAssigneeCount,
     members: [...byMember.values()]
   };
 }
@@ -370,8 +384,9 @@ export async function auditMasterTaskTable(dependencies = {}) {
     const result = {
       record_id: record.recordId,
       task_name: record.taskName,
-      assignee_key: record.assigneeKey,
-      assignee_name: record.assigneeName,
+      assignee_key: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeKey,
+      assignee_name: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeName,
+      original_assignee_name: record.assigneeName,
       audit_type: evaluation.audit_type,
       action: evaluation.action,
       reason: evaluation.reason,
@@ -392,8 +407,8 @@ export async function auditMasterTaskTable(dependencies = {}) {
         await createAuditLog({
           recordId: record.recordId,
           taskName: record.taskName,
-          assigneeKey: record.assigneeKey,
-          assigneeName: record.assigneeName,
+          assigneeKey: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeKey,
+          assigneeName: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeName,
           taskStatus,
           auditDate: evaluation.audit_date,
           auditType: evaluation.audit_type,
@@ -419,8 +434,8 @@ export async function auditMasterTaskTable(dependencies = {}) {
     const auditLog = await createAuditLog({
       recordId: record.recordId,
       taskName: record.taskName,
-      assigneeKey: record.assigneeKey,
-      assigneeName: record.assigneeName,
+      assigneeKey: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeKey,
+      assigneeName: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeName,
       taskStatus,
       auditDate: evaluation.audit_date,
       auditType: evaluation.audit_type,
@@ -447,7 +462,8 @@ export async function auditMasterTaskTable(dependencies = {}) {
         progress_text: progressText,
         task_note: taskNote,
         inspection_issues: evaluation.issues || [],
-        due_soon: Boolean(evaluation.due_soon)
+        due_soon: Boolean(evaluation.due_soon),
+        original_assignee_name: record.assigneeName
       });
       results.push({ ...result, action: 'remind' });
     } catch (error) {
