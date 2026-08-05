@@ -252,6 +252,12 @@ function optionValues(control) {
   return (control?.options || []).map((option) => option.value);
 }
 
+function workTypeOptionValues(control) {
+  return optionValues(control);
+}
+
+const EXPECTED_WORK_TYPE_OPTIONS = ['开发类(功能/修复)', '事务类(运营/对接)', '运营类'];
+
 function testOldTaskDropdownReplacesManualFallback() {
   const card = buildAssigneeTaskCard({
     draft: { id: 31, meeting_title: '下拉测试' },
@@ -269,6 +275,20 @@ function testOldTaskDropdownReplacesManualFallback() {
   assert.equal(select.tag, 'select_static');
   assert.deepEqual(select.options.map((option) => option.value), ['进行中任务 A', '进行中任务 B']);
   assert.equal(input, undefined);
+}
+
+function testNewTaskCardShowsEditableWorkTypeDropdown() {
+  const card = buildAssigneeTaskCard({
+    draft: { id: 32, meeting_title: '工作类型测试' },
+    assignee: { assignee_key: '张三', assignee_name: '张三' },
+    tasks: [{ item_id: 'work_type_task', task_name: '修复登录接口 Bug', work_type: '开发类(功能/修复)' }]
+  });
+  const control = formControl(card, 'work_type_select_work_type_task');
+
+  assert.equal(control?.tag, 'select_static');
+  assert.equal(control?.placeholder?.content, '工作类型');
+  assert.deepEqual(workTypeOptionValues(control), EXPECTED_WORK_TYPE_OPTIONS);
+  assert.equal(control?.initial_option, '开发类(功能/修复)');
 }
 
 function testTaskChoiceButtonsShowCurrentSelection() {
@@ -908,6 +928,35 @@ function testCallbackParsingPrefersOldTaskDropdownValue() {
 
   assert.equal(parsed.form_values.matched_task_name, '下拉旧任务');
   assert.equal(parsed.raw_form_values.matched_task_name_select_task_b, '不应读取');
+}
+
+function testCallbackParsingAcceptsScopedWorkTypeOnly() {
+  const parsed = parseFeishuCardActionPayload({
+    event: {
+      action: {
+        value: { action: 'mark_task_as_new', draft_id: 10, assignee_key: '张三', item_id: 'task_a' },
+        form_value: {
+          work_type_select_task_a: { value: '运营类' },
+          work_type_select_task_b: '开发类(功能/修复)',
+          work_type: '恶意全局工作类型'
+        }
+      }
+    }
+  });
+
+  assert.equal(parsed.form_values.work_type, '运营类');
+}
+
+function testWorkTypeMapsToMasterTableOnlyWhenFieldExists() {
+  const withField = formatTaskForMasterTable({ task_name: '配置活动运营方案', work_type: '运营类' }, {
+    bitable_fields: [{ field_name: '工作类型' }]
+  });
+  const withoutField = formatTaskForMasterTable({ task_name: '配置活动运营方案', work_type: '运营类' }, {
+    bitable_fields: [{ field_name: '跟进人' }]
+  });
+
+  assert.equal(withField.工作类型, '运营类');
+  assert.equal(Object.hasOwn(withoutField, '工作类型'), false);
 }
 
 function testCallbackParsingAcceptsGetNoteAssigneeSelectOnlyForScopedItem() {
@@ -2747,6 +2796,56 @@ async function testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership() {
   assert.deepEqual(finalized[0].itemIds, ['getnote_item_1']);
 }
 
+async function testGetNoteRegularMarkNewPersistsSelectedWorkType() {
+  const draft = await createGetNoteActionDraft(`getnote-work-type-${Date.now()}`, '洪伟填');
+  const response = await handleFeishuCardAction(getNotePayload({
+    draft,
+    eventId: 'evt_getnote_work_type',
+    action: 'mark_task_as_new',
+    formValue: {
+      task_name_getnote_item_1: '修复 GetNote 卡片分类逻辑',
+      progress_summary_getnote_item_1: '来自 GetNote 分类卡',
+      work_type_select_getnote_item_1: '事务类(运营/对接)'
+    }
+  }), {
+    listMasterTaskAuditRecords: async () => [{ assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
+    finalizeAssignee: async () => ({ status: 'synced', created_count: 1 }),
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const stored = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '新任务已处理');
+  assert.equal(stored.draft_tasks[0].task_name, '修复 GetNote 卡片分类逻辑');
+  assert.equal(stored.draft_tasks[0].work_type, '事务类(运营/对接)');
+  assert.equal(stored.draft_tasks[0].status, 'confirmed');
+}
+
+async function testGetNoteRegularMarkNewRejectsInvalidWorkType() {
+  const draft = await createGetNoteActionDraft(`getnote-invalid-work-type-${Date.now()}`, '洪伟填');
+  let finalized = false;
+
+  await assert.rejects(
+    () => handleFeishuCardAction(getNotePayload({
+      draft,
+      eventId: 'evt_getnote_invalid_work_type',
+      action: 'mark_task_as_new',
+      formValue: {
+        task_name_getnote_item_1: '修复 GetNote 卡片分类逻辑',
+        work_type_select_getnote_item_1: '非法工作类型'
+      }
+    }), {
+      listMasterTaskAuditRecords: async () => [{ assigneeName: '洪伟填', assigneeKey: '洪伟填' }],
+      finalizeAssignee: async () => { finalized = true; return { status: 'synced' }; },
+      updateCard: async () => ({ status: 'updated' })
+    }),
+    /工作类型无效/
+  );
+  const stored = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(finalized, false);
+  assert.equal(stored.draft_tasks[0].status, 'pending');
+}
+
 async function testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask() {
   const draft = await createGetNoteActionDraft(`getnote-regular-mark-old-${Date.now()}`);
   const finalized = [];
@@ -3465,6 +3564,31 @@ async function testDraftNormalizationPreservesSemanticTaskFields() {
   assert.equal(draft.draft_tasks[0].actionability, 'actionable');
   assert.equal(draft.draft_tasks[0].primary_reason, 'clear_owner_and_delivery');
   assert.deepEqual(draft.draft_tasks[0].source_turn_ids, ['turn_7', '8']);
+}
+
+async function testDraftNormalizationDetectsAndPreservesWorkType() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit_test',
+    sourceId: `work_type_${Date.now()}`,
+    meetingTitle: '工作类型会议',
+    meetingSource: '单元测试',
+    draftTasks: [{
+      task_name: '修复登录接口 Bug 并补充自动化测试',
+      assignee: '张三'
+    }, {
+      task_name: '配置活动运营排期',
+      assignee: '李四',
+      work_type: '运营类'
+    }, {
+      task_name: '对接客户资料确认',
+      assignee: '王五',
+      work_type: '非法类型'
+    }]
+  });
+
+  assert.equal(draft.draft_tasks[0].work_type, '开发类(功能/修复)');
+  assert.equal(draft.draft_tasks[1].work_type, '运营类');
+  assert.equal(draft.draft_tasks[2].work_type, '事务类(运营/对接)');
 }
 
 async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
@@ -5369,6 +5493,7 @@ testRelaxedAssigneeGroupingFailsClosedOnAmbiguousMemberPrefixes();
 testCardPayloadContainsOnlyOwnedTasks();
 testTaskCardInputDefaultsAreBoundedForLongDraftContent();
 testOldTaskDropdownReplacesManualFallback();
+testNewTaskCardShowsEditableWorkTypeDropdown();
 testSingleTaskCardKeepsFullControlsAndScopedConfirmation();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
@@ -5385,6 +5510,7 @@ testGetNoteReviewCardAddsRefreshOldTasksButtonOnlyForGetNote();
 testGetNoteCompactCardShowsHandledItemAndPendingSibling();
 testCallbackParsingAndSafety();
 testCallbackParsingPrefersOldTaskDropdownValue();
+testCallbackParsingAcceptsScopedWorkTypeOnly();
 testCallbackParsingAcceptsGetNoteAssigneeSelectOnlyForScopedItem();
 testCallbackParsingExtractsScopedAssigneeForRefreshOldTasksOnly();
 testMasterTaskAuditCallbackParsingKeepsCanonicalEditFieldsOnly();
@@ -5396,6 +5522,7 @@ testConfirmedNewTaskBuildsPersonFollowerFieldFromOpenId();
 testConfirmedNewTaskSkipsPersonFollowerFieldForPlainName();
 testConfirmedNewTaskPrefersAssignedFollowerOverReviewer();
 testConfirmedNewTaskPersonFollowerUsesReviewerWhenAssigneeIsName();
+testWorkTypeMapsToMasterTableOnlyWhenFieldExists();
 testConfirmedProgressBuildsFollowerField();
 testRerunKeepsPreviousAssigneeWhenAiReturnsUnknown();
 testProgressEvidenceUsesTranscriptSpeakerWhenAiOmitsAssignee();
@@ -5424,6 +5551,7 @@ await testTaskInspectionUpdateUsesOnlyFourMasterFields();
 await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDraftNormalizationPreservesSemanticTaskFields();
+await testDraftNormalizationDetectsAndPreservesWorkType();
 await testDispatchKeepsOversizedTaskCardAsOneAttempt();
 await testOldTaskDropdownIncludesSharedAssigneeTasks();
 await testDispatchEmptyDraftDoesNotReportFailure();
@@ -5452,6 +5580,8 @@ await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
 await testDraftCardDeliveryDiagnosticsMaskIdentifiers();
 await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
+await testGetNoteRegularMarkNewPersistsSelectedWorkType();
+await testGetNoteRegularMarkNewRejectsInvalidWorkType();
 await testGetNoteRegularMarkOldUsesSelectedAssigneeAndOldTask();
 await testGetNoteRegularMarkOldUsesStoredAssigneeWhenCallbackOmitsIt();
 await testGetNoteRegularMarkOldRejectsUnknownExplicitAssignee();

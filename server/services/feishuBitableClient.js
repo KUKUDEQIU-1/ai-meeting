@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { normalizeWorkType } from '../utils/workType.js';
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
 export const MEETING_TASK_TABLE_SCHEMA_VERSION = 'meeting_task_v4';
@@ -365,10 +366,16 @@ export function formatTaskForBitable(task, context = {}) {
 export function formatTaskForMasterTable(task, context = {}) {
   const taskName = truncateText(taskNameOf(task), 100) || '未命名任务';
   const follower = [assigneeNameOf(task), task.confirmed_by, task.confirmedBy, context.confirmed_by, context.confirmedBy];
+  const bitableFields = context.bitable_fields || context.bitableFields || [];
+  const fieldNames = new Set((Array.isArray(bitableFields) ? bitableFields : []).map(fieldNameOf).filter(Boolean));
   const formatted = {
     事务需求名称: taskName,
     需求状态: task.status || '进行中'
   };
+
+  if (fieldNames.has('工作类型')) {
+    formatted.工作类型 = normalizeWorkType(task.work_type, task);
+  }
 
   if (hasExplicitTodaySignal(task)) {
     formatted.开始日期 = dateOnlyTimestamp(context.meeting_time || context.meetingTime || context.created_at);
@@ -376,7 +383,7 @@ export function formatTaskForMasterTable(task, context = {}) {
 
   console.log(`[GetNote Sync] format master task done task_name=${formatted.事务需求名称} start_date=${formatted.开始日期 ? formatDateOnly(context.meeting_time || context.meetingTime || context.created_at) : 'empty'}`);
 
-  return addFollowerField(formatted, follower, context.bitable_fields || context.bitableFields || []);
+  return addFollowerField(formatted, follower, bitableFields);
 }
 
 function buildTableUrl(tableId) {

@@ -399,6 +399,23 @@ function testTaskInspectionPendingStartedShowsStartStatusAndCompletionDate() {
   assert.equal(formControl(card, 'start_date')?.tag, 'date_picker');
 }
 
+function testTaskInspectionInProgressStartDateAlsoShowsCompletionDate() {
+  const card = buildMasterTaskInspectionCard({
+    audit: {
+      id: 410,
+      audit_type: 'task_inspection',
+      task_name: '进行中补完成时间任务',
+      assignee_name: '简学勤',
+      task_status: '进行中',
+      start_date: '2026-08-05',
+      inspection_issues: [{ type: 'three_daily_inspections_without_effective_update', field_names: ['start_date'] }]
+    }
+  });
+
+  assert.equal(formControl(card, 'start_date')?.tag, 'date_picker');
+  assert.equal(formControl(card, 'completion_date')?.tag, 'date_picker');
+}
+
 function testMissingAssigneeCardContainsAssignmentAndDeleteControls() {
   const card = buildMasterTaskMissingAssigneeCard({
     audit: { id: 409, audit_type: 'task_inspection_missing_assignee', task_name: '无负责人任务', record_id: 'rec_missing', audit_date: '2026-07-24' },
@@ -424,6 +441,7 @@ testTaskInspectionCardShowsOnlyRelevantIssueFields();
 testTaskInspectionCardDisplaysParentPrefixedTaskName();
 testTaskInspectionOverdueCardHasDelayNoteAndWrongAssigneeButton();
 testTaskInspectionPendingStartedShowsStartStatusAndCompletionDate();
+testTaskInspectionInProgressStartDateAlsoShowsCompletionDate();
 testMissingAssigneeCardContainsAssignmentAndDeleteControls();
 testAdminSummaryCardContainsClearChineseCountsByMember();
 testAdminSummaryRecipientRequiresExplicitOpenIdNotifyConfig();

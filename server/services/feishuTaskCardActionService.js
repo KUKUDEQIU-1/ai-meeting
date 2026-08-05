@@ -25,10 +25,26 @@ import { listMasterTaskAuditRecords } from './feishuBitableClient.js';
 import { prepareMasterTaskAuditCardAction, processPreparedMasterTaskAuditCardAction } from './masterTaskAuditActionService.js';
 import { updateMasterTaskAuditCard } from './masterTaskAuditCardService.js';
 import { masterTaskNameExists } from './taskHistoryService.js';
+import { isValidWorkType, normalizeWorkType } from '../utils/workType.js';
 
 const MAX_TASK_NAME_LENGTH = 120;
 const MAX_MATCHED_TASK_NAME_LENGTH = 120;
 const MAX_PROGRESS_SUMMARY_LENGTH = 500;
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const text = firstString(...value);
+      if (text) return text;
+    }
+    if (value && typeof value === 'object') {
+      const text = firstString(value.value, value.text, value.name);
+      if (text) return text;
+    }
+  }
+  return '';
+}
 
 function reject(message, status) {
   const error = new Error(message);
@@ -40,6 +56,7 @@ function validateEditableValues(values) {
   const taskName = String(values.task_name || '').trim();
   const progressSummary = String(values.progress_summary || '').trim();
   const matchedTaskName = String(values.matched_task_name || '').trim();
+  const workType = String(values.work_type || '').trim();
 
   if (!taskName) reject('task_name 不能为空', 400);
   if (taskName.length > MAX_TASK_NAME_LENGTH) {
@@ -51,8 +68,11 @@ function validateEditableValues(values) {
   if (matchedTaskName.length > MAX_MATCHED_TASK_NAME_LENGTH) {
     reject('对应旧任务名称长度超限', 400);
   }
+  if (workType && !isValidWorkType(workType)) {
+    reject('工作类型无效', 400);
+  }
 
-  return { taskName, progressSummary, matchedTaskName };
+  return { taskName, progressSummary, matchedTaskName, workType };
 }
 
 function validateGetNoteTaskValues(values) {
@@ -70,7 +90,7 @@ function matchedTaskNameOf(task) {
 }
 
 function formValueForItem(formValues, field, itemId) {
-  return String(formValues?.[`${field}_${itemId}`] || '').trim();
+  return firstString(formValues?.[`${field}_${itemId}`]);
 }
 
 function matchedTaskNameFormValue(formValues, itemId) {
@@ -83,12 +103,14 @@ function taskWithCurrentFormValues(task, formValues) {
   const taskName = formValueForItem(formValues, 'task_name', itemId);
   const progressSummary = formValueForItem(formValues, 'progress_summary', itemId);
   const matchedTaskName = matchedTaskNameFormValue(formValues, itemId);
+  const workType = formValueForItem(formValues, 'work_type_select', itemId);
 
   return {
     ...task,
     task_name: taskName || task.task_name,
     progress_summary: progressSummary || task.progress_summary,
-    matched_task_name: matchedTaskName || task.matched_task_name
+    matched_task_name: matchedTaskName || task.matched_task_name,
+    work_type: workType || task.work_type
   };
 }
 
@@ -389,6 +411,7 @@ async function editTask(parsed, state, dependencies) {
       task_name: values.taskName,
       progress_summary: values.progressSummary || task.progress_summary,
       matched_task_name: values.matchedTaskName || task.matched_task_name,
+      work_type: values.workType || task.work_type,
       ...assignedTaskFields(selectedAssignee),
       updated_by: parsed.operator_open_id,
       updated_at: new Date().toISOString()
@@ -447,7 +470,8 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     const currentValues = {
       task_name: parsed.form_values.task_name || currentTask?.task_name,
       progress_summary: parsed.form_values.progress_summary || currentTask?.progress_summary,
-      matched_task_name: parsed.form_values.matched_task_name || matchedTaskNameOf(currentTask)
+      matched_task_name: parsed.form_values.matched_task_name || matchedTaskNameOf(currentTask),
+      work_type: parsed.form_values.work_type || currentTask?.work_type
     };
     const validatedValues = validateEditableValues(currentValues);
     const selectedAssignee = await selectedGetNoteAssignee(parsed, currentTask, dependencies);
@@ -459,6 +483,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
         task_name: validatedValues.taskName,
         progress_summary: validatedValues.progressSummary || task.progress_summary,
         matched_task_name: validatedValues.matchedTaskName || task.matched_task_name,
+        work_type: validatedValues.workType || normalizeWorkType('', task),
         ...assignedTaskFields(selectedAssignee)
       }));
     }
@@ -477,6 +502,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
         task_name: validatedValues.taskName,
         progress_summary: validatedValues.progressSummary || task.progress_summary,
         matched_task_name: validatedValues.matchedTaskName || task.matched_task_name,
+        work_type: validatedValues.workType || normalizeWorkType('', task),
         ...assignedTaskFields(selectedAssignee),
         task_choice: taskChoice,
         status: taskChoice === 'new_task' ? 'confirmed' : 'discarded',
@@ -643,6 +669,7 @@ async function submitGetNoteTask(parsed, state, dependencies) {
     task_name: parsed.form_values.task_name || currentTask.task_name,
     assignee: parsed.form_values.assignee || currentTask.assignee
   });
+  if (parsed.form_values.work_type && !isValidWorkType(parsed.form_values.work_type)) reject('工作类型无效', 400);
   if (!values.assignee || values.assignee === '待确认') return feishuCallbackToast('未选择负责人');
   await assertAssigneeExists(values.assignee, dependencies);
   const result = await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
@@ -651,6 +678,7 @@ async function submitGetNoteTask(parsed, state, dependencies) {
     title: values.taskName,
     assignee: values.assignee,
     owner: values.assignee,
+    work_type: parsed.form_values.work_type || task.work_type,
     status: 'confirmed',
     action_result: 'getnote_submitted',
     action_result_at: new Date().toISOString(),
@@ -759,6 +787,12 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
       .filter((item) => !scopedItemId || String(item.item_id || '') === scopedItemId)
       .map((storedTask) => {
         const task = taskWithCurrentFormValues(storedTask, parsed.raw_form_values);
+        validateEditableValues({
+          task_name: task.task_name,
+          progress_summary: task.progress_summary,
+          matched_task_name: matchedTaskNameOf(task),
+          work_type: task.work_type
+        });
         return { ...task, task_choice: taskChoiceFromCurrentForm(task, parsed.raw_form_values) };
       });
     const oldProgressTasks = pendingTasks.filter((task) => task.task_choice === 'old_task_progress');
@@ -774,6 +808,7 @@ async function confirmAssigneeTasks(parsed, state, dependencies) {
         task_name: task.task_name,
         progress_summary: task.progress_summary,
         matched_task_name: task.matched_task_name,
+        work_type: task.work_type,
         task_choice: task.task_choice,
         status: nextStatus,
         action_result: task.task_choice === 'old_task_progress' ? 'old_task_progress' : 'new_task',

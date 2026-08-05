@@ -1,3 +1,5 @@
+import { WORK_TYPE_OPTIONS } from '../utils/workType.js';
+
 const VALID_TASK_STATUSES = [
   '已完成',
   '进行中',
@@ -261,7 +263,7 @@ function inputElement({ tag, label, value }) {
   };
 }
 
-function selectElement({ tag, options, value }) {
+function selectElement({ tag, options, value, placeholder = '旧任务' }) {
   const safeOptions = Array.isArray(options) ? options : [];
   const element = {
     tag: 'column_set',
@@ -274,7 +276,7 @@ function selectElement({ tag, options, value }) {
       elements: [{
         tag: 'select_static',
         name: tag,
-        placeholder: { tag: 'plain_text', content: '旧任务' },
+        placeholder: { tag: 'plain_text', content: placeholder },
         options: safeOptions
       }]
     }]
@@ -292,6 +294,15 @@ function assigneeSelectElement({ tag, options, value }) {
   const element = selectElement({ tag, options, value });
   element.columns[0].elements[0].placeholder = { tag: 'plain_text', content: '负责人' };
   return element;
+}
+
+function workTypeSelectElement({ tag, value }) {
+  return selectElement({
+    tag,
+    placeholder: '工作类型',
+    options: WORK_TYPE_OPTIONS.map((option) => ({ text: { tag: 'plain_text', content: option }, value: option })),
+    value
+  });
 }
 
 function datePickerElement({ tag, label, value }) {
@@ -590,6 +601,7 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOp
 
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
+    elements.push(workTypeSelectElement({ tag: `work_type_select_${itemId}`, value: task.work_type }));
     if (assigneeOptions.length) {
       elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
     }
@@ -682,6 +694,7 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 24)}｜当前选择：${taskChoiceTitle(task)}**\n${taskChoiceStatusText(task)}` });
     elements.push(labelElement('**新任务**'));
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
+    elements.push(workTypeSelectElement({ tag: `work_type_select_${itemId}`, value: task.work_type }));
     if (assigneeOptions.length) {
       elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
     }
@@ -987,6 +1000,9 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
 
   const fieldNames = fieldNamesFromInspectionIssues(audit?.inspection_issues);
   const showAll = fieldNames.size === 0;
+  const isInProgress = taskStatus === '进行中';
+  const showStartDate = showAll || fieldNames.has('start_date');
+  const showCompletionDate = showAll || fieldNames.has('completion_date') || (isInProgress && fieldNames.has('start_date'));
   const issueLabels = inspectionIssueLabels(audit?.inspection_issues);
   const issueText = issueLabels.length ? issueLabels.map((label) => `- ${label}`).join('\n') : '- 请检查任务状态、进度评估和日期是否需要更新';
   const elements = [
@@ -1007,11 +1023,11 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
     elements.push(labelElement('**进度评估**'));
     elements.push(selectElement({ tag: 'progress_evaluation', options: TASK_INSPECTION_PROGRESS_OPTIONS, value: progressEvaluation }));
   }
-  if (showAll || fieldNames.has('start_date')) {
+  if (showStartDate) {
     elements.push(labelElement('**开始日期**'));
     elements.push(datePickerElement({ tag: 'start_date', label: '开始日期', value: startDate }));
   }
-  if (showAll || fieldNames.has('completion_date')) {
+  if (showCompletionDate) {
     elements.push(labelElement('**完成日期**'));
     elements.push(datePickerElement({ tag: 'completion_date', label: '完成日期', value: completionDate }));
   }
@@ -1194,6 +1210,7 @@ function extractAllowedFormValues(formValue, itemId) {
   const values = {
     task_name: firstString(...fieldValue(`task_name${suffix}`), ...fieldValue('task_name')),
     progress_summary: firstString(...fieldValue(`progress_summary${suffix}`), ...fieldValue('progress_summary')),
+    work_type: safeItemId ? firstString(...fieldValue(`work_type_select${suffix}`)) : '',
     matched_task_name: firstString(
       ...fieldValue(`matched_task_name_select${suffix}`),
       ...fieldValue(`matched_task_name${suffix}`),
