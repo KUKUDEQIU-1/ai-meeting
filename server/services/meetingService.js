@@ -1069,7 +1069,7 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
         schemaValidated: masterSchemaValidated,
         masterFields
       };
-      const record = await createTaskRecord({ ...cleanedTask, status: '待处理' }, meetingMeta, createOptions).catch(async (error) => {
+      const record = await createTaskRecord({ ...cleanedTask, status: '进行中' }, meetingMeta, createOptions).catch(async (error) => {
         if (!options.masterTaskTable || !masterSchemaValidated) {
           throw error;
         }
@@ -1083,7 +1083,7 @@ export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
         });
         masterFields = Object.values(schema.fields || {});
         createOptions.masterFields = masterFields;
-        return createTaskRecord({ ...cleanedTask, status: '待处理' }, meetingMeta, createOptions);
+        return createTaskRecord({ ...cleanedTask, status: '进行中' }, meetingMeta, createOptions);
       });
       createdRecords.push({
         index,

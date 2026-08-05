@@ -366,7 +366,8 @@ export function formatTaskForMasterTable(task, context = {}) {
   const taskName = truncateText(taskNameOf(task), 100) || '未命名任务';
   const follower = [assigneeNameOf(task), task.confirmed_by, task.confirmedBy, context.confirmed_by, context.confirmedBy];
   const formatted = {
-    事务需求名称: taskName
+    事务需求名称: taskName,
+    需求状态: task.status || '进行中'
   };
 
   if (hasExplicitTodaySignal(task)) {

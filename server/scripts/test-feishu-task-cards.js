@@ -1178,10 +1178,11 @@ function testConfirmedManualProgressBuildsBitableProgressFields() {
 }
 
 function testConfirmedNewTaskBuildsFollowerField() {
-  const fields = formatTaskForMasterTable({ task_name: 'AI会议助手新任务', confirmed_by: 'ou_card_actor' }, {
+  const fields = formatTaskForMasterTable({ task_name: 'AI会议助手新任务', status: '进行中', confirmed_by: 'ou_card_actor' }, {
     bitable_fields: [{ field_name: '跟进人', type: 'text' }]
   });
 
+  assert.equal(fields.需求状态, '进行中');
   assert.equal(fields.跟进人, 'ou_card_actor');
 }
 
@@ -5027,6 +5028,7 @@ async function testConfirmedNewTaskCreateRecordWritesFollowerField() {
     assert.equal(record.record_id, 'rec_new_1');
     assert.equal(creates.length, 1);
     assert.equal(creates[0].fields.事务需求名称, 'AI会议助手新任务');
+    assert.equal(creates[0].fields.需求状态, '进行中');
     assert.equal(creates[0].fields.跟进人, 'ou_new_actor');
   } finally {
     globalThis.fetch = previousFetch;
