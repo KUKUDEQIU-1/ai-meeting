@@ -1156,6 +1156,14 @@ function normalizeDateOnlyTimestamp(value) {
 function normalizeDateOnlyText(value) {
   const text = String(value || '').trim();
   if (!text) return '';
+  if (/^\d{10,13}$/.test(text)) {
+    const timestamp = Number(text) * (text.length === 10 ? 1000 : 1);
+    const timestampDate = new Date(timestamp);
+    if (!Number.isNaN(timestampDate.getTime())) {
+      const pad = (number) => String(number).padStart(2, '0');
+      return `${timestampDate.getFullYear()}-${pad(timestampDate.getMonth() + 1)}-${pad(timestampDate.getDate())}`;
+    }
+  }
   const date = new Date(text.replace(' ', 'T'));
   if (Number.isNaN(date.getTime())) return text;
   const pad = (number) => String(number).padStart(2, '0');

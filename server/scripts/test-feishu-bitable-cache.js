@@ -225,10 +225,45 @@ async function testInspectionRecordsPrefixLinkedParentTaskName() {
   }
 }
 
+async function testInspectionRecordsNormalizeTimestampDateFields() {
+  clearMasterTaskAuditCache();
+  const fetchHarness = installFetch({
+    fields: async () => response({ code: 0, data: { items: [
+      ...fieldItems(),
+      { field_name: '进度评估' },
+      { field_name: '开始日期' }
+    ] } }),
+    records: async () => response({ code: 0, data: { items: [{
+      record_id: 'rec_timestamp_dates',
+      fields: {
+        事务需求名称: '时间戳日期测试',
+        需求状态: '进行中',
+        跟进人: '简学勤',
+        进度评估: '50',
+        开始日期: '1783440000000',
+        完成日期: '1785801600000'
+      }
+    }] } }),
+    update: async () => response({ code: 0, data: { record: { record_id: 'rec_timestamp_dates' } } })
+  });
+
+  try {
+    const records = await listMasterTaskAuditRecords({ appToken: 'app_cache', tableId: 'tbl_cache', tenantAccessToken: 'tenant_cache', inspection: true });
+    const record = records.find((item) => item.recordId === 'rec_timestamp_dates');
+
+    assert.equal(record?.startDate, '2026-07-08');
+    assert.equal(record?.completionDate, '2026-08-04');
+  } finally {
+    fetchHarness.restore();
+    clearMasterTaskAuditCache();
+  }
+}
+
 await testValidateMasterTaskAuditFieldsUsesSchemaCache();
 await testConcurrentListMasterTaskAuditRecordsDedupesFieldsAndRecords();
 await testRejectedRecordReadsAreNotCached();
 await testUpdateMasterTaskProgressInvalidatesRecordCacheButKeepsSchemaCache();
 await testInspectionRecordsPrefixLinkedParentTaskName();
+await testInspectionRecordsNormalizeTimestampDateFields();
 
 console.log('feishu bitable cache tests passed');
