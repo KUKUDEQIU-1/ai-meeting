@@ -264,7 +264,7 @@ async function testAuditCarriesCurrentCanonicalEditFieldsIntoCreatedAndSentPaylo
   assert.equal(sent[0].task_note, '当前备注来自正式总表');
 }
 
-async function testRunnerBuildsDeduplicatedAdminSummary() {
+async function testRunnerBuildsAdminSummary() {
   const result = await auditMasterTaskTable({
     now: new Date('2026-07-24 18:00:00'),
     dryRun: false,
@@ -280,7 +280,33 @@ async function testRunnerBuildsDeduplicatedAdminSummary() {
 
   assert.equal(result.admin_summary.abnormal_count, 1);
   assert.equal(result.admin_summary.due_soon_count, 1);
-  assert.deepEqual(result.admin_summary.members, [{ assignee_name: '张三', abnormal_count: 1, due_soon_count: 1 }]);
+  assert.equal(result.admin_summary.missing_assignee_count, 0);
+  assert.deepEqual(result.admin_summary.members, [{ assignee_name: '张三', abnormal_count: 1, due_soon_count: 1, missing_assignee_count: 0 }]);
+}
+
+async function testRunnerRoutesMissingAssigneeToOwner() {
+  const created = [];
+  const sent = [];
+  const result = await auditMasterTaskTable({
+    now: new Date('2026-07-24 18:00:00'),
+    dryRun: false,
+    listRecords: async () => [record({ recordId: 'rec_missing_owner', assigneeName: '', assigneeKey: '', status: '进行中', completionDate: '2026-07-30' })],
+    getAuditLog: async () => null,
+    createAuditLog: async (payload) => {
+      created.push(payload);
+      return { ...payload, id: 51, record_id: payload.recordId, audit_date: payload.auditDate, audit_type: payload.auditType };
+    },
+    sendCard: async (payload) => {
+      sent.push(payload);
+    },
+    markFailed: async () => {}
+  });
+
+  assert.equal(created[0].auditType, 'task_inspection_missing_assignee');
+  assert.equal(created[0].assigneeKey, '洪伟填');
+  assert.equal(sent[0].audit_type, 'task_inspection_missing_assignee');
+  assert.equal(result.admin_summary.missing_assignee_count, 1);
+  assert.deepEqual(result.admin_summary.members, [{ assignee_name: '未分配', abnormal_count: 1, due_soon_count: 0, missing_assignee_count: 1 }]);
 }
 
 async function testRunnerUsesInspectionHistoryForThreeDayStreak() {
@@ -345,9 +371,10 @@ async function testRunnerSendsAdminSummaryOnZeroAbnormalDay() {
   });
 
   assert.equal(result.admin_summary_delivery.status, 'sent');
-  assert.deepEqual(summaryPayload.summary.members, [{ assignee_name: '王五', abnormal_count: 0, due_soon_count: 0 }]);
+  assert.deepEqual(summaryPayload.summary.members, [{ assignee_name: '王五', abnormal_count: 0, due_soon_count: 0, missing_assignee_count: 0 }]);
   assert.equal(summaryPayload.summary.abnormal_count, 0);
   assert.equal(summaryPayload.summary.due_soon_count, 0);
+  assert.equal(summaryPayload.summary.missing_assignee_count, 0);
 }
 
 async function testReminderSendFailureIsIsolated() {
@@ -384,7 +411,8 @@ await testListMasterTaskAuditRecordsExposesCanonicalEditFields();
 await testListMasterTaskAuditRecordsPreservesLegacyFieldContractWithoutInspectionContext();
 await testInspectionModeRequiresFourInspectionFields();
 await testAuditCarriesCurrentCanonicalEditFieldsIntoCreatedAndSentPayloads();
-await testRunnerBuildsDeduplicatedAdminSummary();
+await testRunnerBuildsAdminSummary();
+await testRunnerRoutesMissingAssigneeToOwner();
 await testRunnerUsesInspectionHistoryForThreeDayStreak();
 await testRunnerSendsOneAdminSummaryAndIsolatesFailure();
 await testRunnerSendsAdminSummaryOnZeroAbnormalDay();

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskPausedAuditCard, buildTaskCardProcessingCard } from '../services/feishuTaskCardPure.js';
+import { buildMasterTaskInProgressAuditCard, buildMasterTaskInspectionAdminSummaryCard, buildMasterTaskInspectionCard, buildMasterTaskMissingAssigneeCard, buildMasterTaskPausedAuditCard, buildTaskCardProcessingCard } from '../services/feishuTaskCardPure.js';
 import { resolveMasterTaskAuditAdminRecipient, sendMasterTaskAuditCard, sendMasterTaskInspectionAdminSummary } from '../services/masterTaskAuditCardService.js';
 
 function formControl(card, name) {
@@ -213,20 +213,24 @@ async function testSendMasterTaskAuditCardPreservesProgressOnlyDefaultValue() {
   assert.equal(formControl(sentCard, 'progress_text')?.default_value, '只提交进展的兼容路径');
 }
 
-function testAdminSummaryCardContainsMachineCountsByMember() {
+function testAdminSummaryCardContainsClearChineseCountsByMember() {
   const card = buildMasterTaskInspectionAdminSummaryCard({
     auditDate: '2026-07-24',
     summary: {
       abnormal_count: 2,
       due_soon_count: 1,
-      members: [{ assignee_name: '张三', abnormal_count: 2, due_soon_count: 1 }]
+      missing_assignee_count: 1,
+      members: [{ assignee_name: '张三', abnormal_count: 2, due_soon_count: 1, missing_assignee_count: 1 }]
     }
   });
   const text = JSON.stringify(card);
 
   assert.equal(card.schema, '2.0');
-  assert.match(text, /abnormal=2/);
-  assert.match(text, /due_soon=1/);
+  assert.match(text, /异常任务/);
+  assert.match(text, /明日到期/);
+  assert.match(text, /未分配/);
+  assert.doesNotMatch(text, /abnormal=/);
+  assert.doesNotMatch(text, /due_soon=/);
 }
 
 async function testSendAdminSummaryUsesConfiguredOpenIdRecipient() {
@@ -356,6 +360,56 @@ function testTaskInspectionCardDisplaysParentPrefixedTaskName() {
   assert.match(JSON.stringify(card), /版本更新MS-16---开发/);
 }
 
+function testTaskInspectionOverdueCardHasDelayNoteAndWrongAssigneeButton() {
+  const card = buildMasterTaskInspectionCard({
+    audit: {
+      id: 407,
+      audit_type: 'task_inspection',
+      task_name: '延期任务',
+      assignee_name: '简学勤',
+      task_status: '进行中',
+      completion_date: '2026-07-23',
+      task_note: '需要等接口',
+      inspection_issues: [{ type: 'overdue_in_progress', field_names: ['completion_date', 'task_status'] }]
+    }
+  });
+
+  assert.equal(formControl(card, 'delay_note')?.tag, 'input');
+  assert.equal(formControl(card, 'delay_note')?.default_value, '需要等接口');
+  assert.match(JSON.stringify(card), /task_inspection_clear_assignee/);
+}
+
+function testTaskInspectionPendingStartedShowsStartStatusAndCompletionDate() {
+  const card = buildMasterTaskInspectionCard({
+    audit: {
+      id: 408,
+      audit_type: 'task_inspection',
+      task_name: '待开始任务',
+      assignee_name: '简学勤',
+      task_status: '待开始',
+      start_date: '2026-07-20',
+      inspection_issues: [{ type: 'pending_started', field_names: ['start_date', 'task_status', 'completion_date'] }]
+    }
+  });
+
+  assert.equal(formControl(card, 'task_status')?.tag, 'select_static');
+  assert.equal(formControl(card, 'completion_date')?.tag, 'date_picker');
+  assert.equal(formControl(card, 'start_date')?.tag, 'date_picker');
+}
+
+function testMissingAssigneeCardContainsAssignmentAndDeleteControls() {
+  const card = buildMasterTaskMissingAssigneeCard({
+    audit: { id: 409, audit_type: 'task_inspection_missing_assignee', task_name: '无负责人任务', record_id: 'rec_missing', audit_date: '2026-07-24' },
+    assigneeOptions: [{ text: { tag: 'plain_text', content: '简学勤' }, value: '简学勤' }]
+  });
+  const text = JSON.stringify(card);
+
+  assert.equal(formControl(card, 'task_name')?.tag, 'input');
+  assert.equal(formControl(card, 'assignee_select')?.tag, 'select_static');
+  assert.match(text, /task_inspection_assign_missing/);
+  assert.match(text, /task_inspection_delete_record/);
+}
+
 testInProgressAuditCardContainsEditableProgressForm();
 testForceUniqueAuditCardKeepsCanonicalRecordInCallbacks();
 testInProgressAuditCardUsesCanonicalEditFieldDefaults();
@@ -366,7 +420,10 @@ testProcessingCardRemovesMasterTaskButtonsAndForms();
 testTaskInspectionCardUsesIsolatedKindActionAndFourEditableFields();
 testTaskInspectionCardShowsOnlyRelevantIssueFields();
 testTaskInspectionCardDisplaysParentPrefixedTaskName();
-testAdminSummaryCardContainsMachineCountsByMember();
+testTaskInspectionOverdueCardHasDelayNoteAndWrongAssigneeButton();
+testTaskInspectionPendingStartedShowsStartStatusAndCompletionDate();
+testMissingAssigneeCardContainsAssignmentAndDeleteControls();
+testAdminSummaryCardContainsClearChineseCountsByMember();
 testAdminSummaryRecipientRequiresExplicitOpenIdNotifyConfig();
 await testSendMasterTaskAuditCardPreservesCanonicalEditDefaults();
 await testSendMasterTaskAuditCardPreservesProgressOnlyDefaultValue();

@@ -139,14 +139,14 @@ async function testAuditCallbackAuthorizesCurrentAssigneeRecipientWhenStoredRece
   }
 }
 
-function inspectionPayloadFor(auditLog, formValue = {}) {
+function inspectionPayloadFor(auditLog, formValue = {}, action = 'task_inspection_submit_update') {
   return {
     header: { event_id: `evt_inspection_${Date.now()}` },
     event: {
       operator: { open_id: 'ou_audit_actor' },
       context: { open_message_id: auditLog.card_message_id },
       action: {
-        value: { action: 'task_inspection_submit_update', audit_log_id: auditLog.id, card_kind: 'task_inspection' },
+        value: { action, audit_log_id: auditLog.id, card_kind: 'task_inspection' },
         form_value: { task_inspection_form: formValue }
       }
     }
@@ -825,7 +825,8 @@ async function testTaskInspectionActionWritesOnlyFourInspectionFields() {
     taskStatus: '进行中',
     progressEvaluation: '75',
     startDate: '2026-07-20',
-    completionDate: '2026-07-30'
+    completionDate: '2026-07-30',
+    taskNote: undefined
   });
   assert.equal(stored.action_taken, 'confirmed_updated');
   assert.equal(stored.submitted_status, '进行中');
@@ -856,8 +857,62 @@ async function testTaskInspectionActionAcceptsPartialApprovedFields() {
     taskStatus: undefined,
     progressEvaluation: '75',
     startDate: '',
-    completionDate: ''
+    completionDate: '',
+    taskNote: undefined
   });
+}
+
+async function testTaskInspectionActionWritesDelayNote() {
+  const auditLog = await createAuditLog('task_inspection');
+  const prepared = await prepareFeishuCardAction(inspectionPayloadFor(auditLog, {
+    completion_date: '2026-07-30',
+    delay_note: '接口延期，改到月底'
+  }));
+  let updatedPayload = null;
+
+  await processPreparedFeishuCardAction(prepared, {
+    updateInspection: async (payload) => {
+      updatedPayload = payload;
+      return { status: 'updated' };
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+  const stored = await getMasterTaskAuditLog(auditLog.record_id, auditLog.audit_date, auditLog.audit_type);
+
+  assert.deepEqual(updatedPayload, {
+    recordId: auditLog.record_id,
+    taskStatus: undefined,
+    progressEvaluation: undefined,
+    startDate: '',
+    completionDate: '2026-07-30',
+    taskNote: '接口延期，改到月底'
+  });
+  assert.equal(stored.submitted_note, '接口延期，改到月底');
+}
+
+async function testTaskInspectionClearAssigneeIgnoresFormFields() {
+  const auditLog = await createAuditLog('task_inspection');
+  const prepared = await prepareFeishuCardAction(inspectionPayloadFor(auditLog, {
+    task_status: '已完成',
+    completion_date: '2026-07-30'
+  }, 'task_inspection_clear_assignee'));
+  let clearedPayload = null;
+  let updateInspectionCalled = false;
+
+  const response = await processPreparedFeishuCardAction(prepared, {
+    clearAssignee: async (payload) => {
+      clearedPayload = payload;
+      return { status: 'updated' };
+    },
+    updateInspection: async () => {
+      updateInspectionCalled = true;
+    },
+    updateCard: async () => ({ status: 'updated' })
+  });
+
+  assert.equal(response.toast.content, '跟进人已清空');
+  assert.deepEqual(clearedPayload, { recordId: auditLog.record_id });
+  assert.equal(updateInspectionCalled, false);
 }
 
 async function testTaskInspectionActionRejectsNarrativeFields() {
@@ -915,6 +970,8 @@ await testPrepareCanFallbackToContextMessageIdLookup();
 await testLegacyCallbackUsesRootActorAndMessageId();
 await testTaskInspectionActionWritesOnlyFourInspectionFields();
 await testTaskInspectionActionAcceptsPartialApprovedFields();
+await testTaskInspectionActionWritesDelayNote();
+await testTaskInspectionClearAssigneeIgnoresFormFields();
 await testTaskInspectionActionRejectsNarrativeFields();
 await testTaskInspectionActionIsClaimedBeforeGenericMeetingCallback();
 

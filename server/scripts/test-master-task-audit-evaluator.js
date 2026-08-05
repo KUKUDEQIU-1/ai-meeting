@@ -215,6 +215,13 @@ function testInProgressBlankDedicatedCompletionIgnoresUnrelatedDueAt() {
   assert.equal(result.issues.some((issue) => issue.type === 'in_progress_missing_progress_and_completion'), true);
 }
 
+function testPendingStartedIncludesStartStatusAndCompletionFields() {
+  const result = evaluateMasterTaskInspectionRecord(record({ status: '待开始', startDate: '2026-07-23' }), { now: new Date('2026-07-24 18:00:00') });
+  const issue = result.issues.find((item) => item.type === 'pending_started');
+
+  assert.deepEqual(issue.field_names, ['start_date', 'task_status', 'completion_date']);
+}
+
 function testDueTomorrowIsSeparateDueSoonReminder() {
   const result = evaluateMasterTaskInspectionRecord(record({ completionDate: '2026-07-25', status: '进行中' }), { now: new Date('2026-07-24 18:00:00') });
 
@@ -224,7 +231,7 @@ function testDueTomorrowIsSeparateDueSoonReminder() {
   assert.equal(result.abnormal, false);
 }
 
-function testAdminSummaryDeduplicatesAbnormalAndSeparatesDueSoon() {
+function testAdminSummaryCountsEachResultAndSeparatesDueSoon() {
   const summary = buildMasterTaskInspectionAdminSummary([
     { record_id: 'rec_a', assignee_name: '张三', abnormal: true },
     { record_id: 'rec_a', assignee_name: '张三', abnormal: true },
@@ -232,11 +239,12 @@ function testAdminSummaryDeduplicatesAbnormalAndSeparatesDueSoon() {
     { record_id: 'rec_c', assignee_name: '李四', abnormal: true }
   ]);
 
-  assert.equal(summary.abnormal_count, 2);
+  assert.equal(summary.abnormal_count, 3);
   assert.equal(summary.due_soon_count, 1);
+  assert.equal(summary.missing_assignee_count, 0);
   assert.deepEqual(summary.members, [
-    { assignee_name: '张三', abnormal_count: 1, due_soon_count: 1 },
-    { assignee_name: '李四', abnormal_count: 1, due_soon_count: 0 }
+    { assignee_name: '张三', abnormal_count: 2, due_soon_count: 1, missing_assignee_count: 0 },
+    { assignee_name: '李四', abnormal_count: 1, due_soon_count: 0, missing_assignee_count: 0 }
   ]);
 }
 
@@ -248,8 +256,19 @@ function testAdminSummaryKeepsZeroCountMembers() {
   assert.deepEqual(summary, {
     abnormal_count: 0,
     due_soon_count: 0,
-    members: [{ assignee_name: '王五', abnormal_count: 0, due_soon_count: 0 }]
+    missing_assignee_count: 0,
+    members: [{ assignee_name: '王五', abnormal_count: 0, due_soon_count: 0, missing_assignee_count: 0 }]
   });
+}
+
+function testInspectionMissingAssigneeRoutesToOwner() {
+  const result = evaluateMasterTaskInspectionRecord(record({ assigneeName: '', assigneeKey: '' }), { now: new Date('2026-07-24 18:00:00') });
+
+  assert.equal(result.action, 'remind');
+  assert.equal(result.audit_type, 'task_inspection_missing_assignee');
+  assert.equal(result.reason, 'missing_assignee');
+  assert.equal(result.route_to_owner, true);
+  assert.deepEqual(result.issues, [{ type: 'missing_assignee', field_names: ['task_name', 'assignee'] }]);
 }
 
 testRecentInProgressPasses();
@@ -272,8 +291,10 @@ testNumericDateTimestampsAreNormalized();
 testInspectionHistoryRequiresConsecutiveDaysAndResetsOnEffectiveChange();
 testInspectionRulesClassifyMachineIssueTypes();
 testInProgressBlankDedicatedCompletionIgnoresUnrelatedDueAt();
+testPendingStartedIncludesStartStatusAndCompletionFields();
 testDueTomorrowIsSeparateDueSoonReminder();
-testAdminSummaryDeduplicatesAbnormalAndSeparatesDueSoon();
+testAdminSummaryCountsEachResultAndSeparatesDueSoon();
 testAdminSummaryKeepsZeroCountMembers();
+testInspectionMissingAssigneeRoutesToOwner();
 
 console.log('master task audit evaluator tests passed');
