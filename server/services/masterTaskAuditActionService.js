@@ -1,4 +1,4 @@
-import { updateMasterTaskInspectionFields, updateMasterTaskProgress } from './feishuBitableClient.js';
+import { clearMasterTaskAssignee, deleteMasterTaskRecord, updateMasterTaskInspectionFields, updateMasterTaskProgress, updateMissingAssigneeMasterTask } from './feishuBitableClient.js';
 import {
   getMasterTaskAuditLogByCardMessageId,
   getMasterTaskAuditLogById,
@@ -7,7 +7,8 @@ import {
   markMasterTaskAuditFailed
 } from './masterTaskAuditLogService.js';
 import { resolveAuditRecipient, updateMasterTaskAuditCard } from './masterTaskAuditCardService.js';
-import { isReplayCallback, validateCallbackActor } from './feishuTaskCardPure.js';
+import { isReplayCallback, normalizeAssigneeKey, validateCallbackActor } from './feishuTaskCardPure.js';
+import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
 
 const MAX_AUDIT_PROGRESS_LENGTH = 500;
 const VALID_TASK_STATUSES = new Set([
@@ -150,7 +151,7 @@ function normalizeConfirmUpdateValues(formValues) {
 }
 
 function normalizeTaskInspectionValues(formValues) {
-  const allowedFields = new Set(['task_status', 'progress_evaluation', 'start_date', 'completion_date']);
+  const allowedFields = new Set(['task_status', 'progress_evaluation', 'start_date', 'completion_date', 'delay_note']);
   const submittedKeys = Object.keys(formValues || {}).filter((key) => String(formValues[key] || '').trim());
   const unknownFields = submittedKeys.filter((key) => !allowedFields.has(key));
 
@@ -161,8 +162,25 @@ function normalizeTaskInspectionValues(formValues) {
   if (Object.hasOwn(formValues || {}, 'progress_evaluation') && String(formValues.progress_evaluation || '').trim()) values.progressEvaluation = normalizeProgressEvaluation(formValues.progress_evaluation);
   if (Object.hasOwn(formValues || {}, 'start_date')) values.startDate = optionalDateOnly(formValues.start_date, '开始日期');
   if (Object.hasOwn(formValues || {}, 'completion_date')) values.completionDate = optionalDateOnly(formValues.completion_date, '完成日期');
+  if (Object.hasOwn(formValues || {}, 'delay_note') && String(formValues.delay_note || '').trim()) values.taskNote = normalizeSubmittedNote(formValues.delay_note);
   if (!Object.keys(values).some((key) => values[key])) reject('任务巡检更新不能为空', 400);
   return values;
+}
+
+function normalizeMissingAssigneeValues(formValues) {
+  const taskName = String(formValues?.task_name || '').trim();
+  const assigneeKey = String(formValues?.assignee || '').trim();
+  if (!taskName) reject('任务名称不能为空', 400);
+  if (!assigneeKey) reject('跟进人不能为空', 400);
+  return { taskName, assigneeKey };
+}
+
+async function resolveMemberOpenId(assigneeKey) {
+  const normalizedKey = normalizeAssigneeKey(assigneeKey);
+  const result = await listConfiguredFeishuGroupMembers();
+  const member = (result.members || []).find((item) => normalizeAssigneeKey(item?.assignee_key || item?.assignee_name || item?.name) === normalizedKey);
+  if (!member?.receive_id) reject('未找到所选负责人', 400);
+  return member.receive_id;
 }
 
 function auditValue(rawValue, snakeKey, camelKey) {
@@ -320,7 +338,15 @@ export async function prepareMasterTaskAuditCardAction(payload) {
 
   console.log('[Master Task Audit] callback received', JSON.stringify(safeAuditCallbackMetadata(parsed)));
 
-  if (!['master_task_no_update', 'master_task_confirm_update', 'task_inspection_submit_update', 'task_inspection_ignore'].includes(parsed.action)) {
+  if (![
+    'master_task_no_update',
+    'master_task_confirm_update',
+    'task_inspection_submit_update',
+    'task_inspection_ignore',
+    'task_inspection_clear_assignee',
+    'task_inspection_assign_missing',
+    'task_inspection_delete_record'
+  ].includes(parsed.action)) {
     return null;
   }
 
@@ -350,6 +376,14 @@ export async function prepareMasterTaskAuditCardAction(payload) {
       throw error;
     }
   }
+  if (parsed.action === 'task_inspection_assign_missing') {
+    try {
+      submittedValues = normalizeMissingAssigneeValues(parsed.form_values);
+    } catch (error) {
+      logAuditValidationFailure({ error, parsed, submittedValues: parsed.form_values });
+      throw error;
+    }
+  }
 
   return { parsed, auditLog, submittedValues, response: feishuCallbackToast('正在处理'), shouldProcess: true };
 }
@@ -357,6 +391,9 @@ export async function prepareMasterTaskAuditCardAction(payload) {
 export async function processPreparedMasterTaskAuditCardAction(prepared, overrides = {}) {
   const updateProgress = overrides.updateProgress || updateMasterTaskProgress;
   const updateInspection = overrides.updateInspection || updateMasterTaskInspectionFields;
+  const clearAssignee = overrides.clearAssignee || clearMasterTaskAssignee;
+  const updateMissingAssignee = overrides.updateMissingAssignee || updateMissingAssigneeMasterTask;
+  const deleteRecord = overrides.deleteRecord || deleteMasterTaskRecord;
   const updateCard = overrides.updateCard || updateMasterTaskAuditCard;
 
   if (!prepared.shouldProcess) {
@@ -455,15 +492,16 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
   }
 
   if (prepared.parsed.action === 'task_inspection_submit_update') {
-    const { taskStatus, progressEvaluation, startDate, completionDate } = prepared.submittedValues;
+    const { taskStatus, progressEvaluation, startDate, completionDate, taskNote } = prepared.submittedValues;
     const submittedValues = {};
     if (taskStatus) submittedValues.task_status = taskStatus;
     if (progressEvaluation) submittedValues.progress_evaluation = progressEvaluation;
     if (startDate) submittedValues.start_date = startDate;
     if (completionDate) submittedValues.completion_date = completionDate;
+    if (taskNote) submittedValues.delay_note = taskNote;
 
     try {
-      await updateInspection({ recordId: prepared.auditLog.record_id, taskStatus, progressEvaluation, startDate, completionDate });
+      await updateInspection({ recordId: prepared.auditLog.record_id, taskStatus, progressEvaluation, startDate, completionDate, taskNote });
       await markMasterTaskAuditAction({
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
@@ -473,6 +511,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         submittedCompletionDate: completionDate,
         submittedStartDate: startDate,
         submittedProgressEvaluation: progressEvaluation,
+        submittedNote: taskNote,
         submittedValues,
         callbackId: prepared.parsed.callback_id
       });
@@ -492,6 +531,95 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
       throw error;
     }
     return feishuCallbackToast('任务巡检已更新');
+  }
+
+  if (prepared.parsed.action === 'task_inspection_clear_assignee') {
+    try {
+      await clearAssignee({ recordId: prepared.auditLog.record_id });
+      await markMasterTaskAuditAction({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        actionTaken: 'confirmed_updated',
+        submittedValues: { cleared_assignee: true },
+        callbackId: prepared.parsed.callback_id
+      });
+      try {
+        await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      } catch (error) {
+        logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+      }
+    } catch (error) {
+      await markMasterTaskAuditFailed({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        errorMessage: error.message,
+        callbackId: prepared.parsed.callback_id
+      });
+      throw error;
+    }
+    return feishuCallbackToast('跟进人已清空');
+  }
+
+  if (prepared.parsed.action === 'task_inspection_assign_missing') {
+    const { taskName, assigneeKey } = prepared.submittedValues;
+    try {
+      const assigneeOpenId = await resolveMemberOpenId(assigneeKey);
+      await updateMissingAssignee({ recordId: prepared.auditLog.record_id, taskName, assigneeOpenId });
+      await markMasterTaskAuditAction({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        actionTaken: 'confirmed_updated',
+        submittedValues: { task_name: taskName, assignee_key: assigneeKey },
+        callbackId: prepared.parsed.callback_id
+      });
+      try {
+        await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      } catch (error) {
+        logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+      }
+    } catch (error) {
+      await markMasterTaskAuditFailed({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        errorMessage: error.message,
+        callbackId: prepared.parsed.callback_id
+      });
+      throw error;
+    }
+    return feishuCallbackToast('任务名称和跟进人已更新');
+  }
+
+  if (prepared.parsed.action === 'task_inspection_delete_record') {
+    try {
+      await deleteRecord({ recordId: prepared.auditLog.record_id });
+      await markMasterTaskAuditAction({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        actionTaken: 'confirmed_updated',
+        submittedValues: { deleted: true },
+        callbackId: prepared.parsed.callback_id
+      });
+      try {
+        await updateCard({ auditLogId: prepared.auditLog.id, terminal: true });
+      } catch (error) {
+        logTerminalCardPatchFailure({ error, action: prepared.parsed.action, auditLog: prepared.auditLog, parsed: prepared.parsed });
+      }
+    } catch (error) {
+      await markMasterTaskAuditFailed({
+        recordId: prepared.auditLog.record_id,
+        auditDate: prepared.auditLog.audit_date,
+        auditType: prepared.auditLog.audit_type,
+        errorMessage: error.message,
+        callbackId: prepared.parsed.callback_id
+      });
+      throw error;
+    }
+    return feishuCallbackToast('任务已删除');
   }
 
   reject('不支持的总表巡检卡片操作', 400);

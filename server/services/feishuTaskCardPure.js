@@ -930,9 +930,10 @@ const INSPECTION_ISSUE_LABELS = new Map([
   ['progress_complete_status_open', '进度已完成，请更新状态'],
   ['status_done_progress_incomplete', '状态已完成，请更新进度评估'],
   ['in_progress_missing_progress_and_completion', '进行中任务缺少进度评估和完成日期'],
-  ['pending_started', '任务已超过开始日期，请更新状态或开始日期'],
+  ['pending_started', '任务已超过开始日期，请更新状态或完成日期'],
   ['three_daily_inspections_without_effective_update', '任务已连续 3 天未更新，请检查状态、进度或日期'],
-  ['due_tomorrow_not_completed', '任务明天到期，请确认状态或完成日期']
+  ['due_tomorrow_not_completed', '任务明天到期，请确认状态或完成日期'],
+  ['missing_assignee', '任务缺少跟进人，请补充负责人或删除无效任务']
 ]);
 
 function inspectionIssueLabel(type) {
@@ -962,6 +963,8 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
   const progressEvaluation = progressPercentValue(audit?.progress_evaluation || audit?.submitted_progress_evaluation || audit?.progress_text || audit?.submitted_progress_text);
   const startDate = String(audit?.start_date || audit?.submitted_start_date || '').trim();
   const completionDate = String(audit?.completion_date || audit?.submitted_completion_date || '').trim();
+  const taskNote = String(audit?.task_note || audit?.submitted_note || '').trim();
+  const issueTypes = new Set((Array.isArray(audit?.inspection_issues) ? audit.inspection_issues : []).map((issue) => String(issue?.type || '').trim()));
 
   if (terminal) {
     return {
@@ -1010,6 +1013,10 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
     elements.push(labelElement('**完成日期**'));
     elements.push(datePickerElement({ tag: 'completion_date', label: '完成日期', value: completionDate }));
   }
+  if (issueTypes.has('overdue_in_progress')) {
+    elements.push(labelElement('**延期说明**'));
+    elements.push(inputElement({ tag: 'delay_note', label: '请填写延期说明', value: taskNote }));
+  }
 
   elements.push({
     tag: 'column_set',
@@ -1049,6 +1056,24 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
             card_kind: 'task_inspection'
           }
         })]
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        elements: [callbackButton({
+          name: 'task_inspection_clear_assignee',
+          text: '跟进人错误',
+          type: 'default',
+          value: {
+            action: 'task_inspection_clear_assignee',
+            audit_log_id: audit.id,
+            audit_record_id: audit.record_id,
+            audit_date: audit.audit_date,
+            audit_type: audit.audit_type,
+            card_kind: 'task_inspection'
+          }
+        })]
       }
     ]
   });
@@ -1070,14 +1095,72 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
   };
 }
 
+export function buildMasterTaskMissingAssigneeCard({ audit, assigneeOptions = [], terminal = false }) {
+  const taskName = truncateText(audit?.task_name || '未命名任务', 100);
+
+  if (terminal) {
+    return {
+      schema: '2.0',
+      config: { wide_screen_mode: true, update_multi: true },
+      header: { template: 'green', title: { tag: 'plain_text', content: '未分配任务已处理' } },
+      body: { elements: [{ tag: 'markdown', content: `**任务：** ${taskName}\n\n该未分配任务已处理。` }] }
+    };
+  }
+
+  const callbackValue = {
+    audit_log_id: audit.id,
+    audit_record_id: audit.record_id,
+    audit_date: audit.audit_date,
+    audit_type: audit.audit_type,
+    card_kind: 'task_inspection'
+  };
+  const elements = [
+    { tag: 'markdown', content: `**任务：** ${taskName}\n**问题：** 当前任务缺少跟进人，请指定负责人，或删除无效任务。` },
+    { tag: 'hr' },
+    labelElement('**任务名称**'),
+    inputElement({ tag: 'task_name', label: '任务名称', value: taskName }),
+    labelElement('**负责人**'),
+    selectElement({ tag: 'assignee_select', options: assigneeOptions, value: '' }),
+    {
+      tag: 'column_set',
+      columns: [
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [callbackButton({ name: 'task_inspection_assign_missing', text: '保存负责人', type: 'primary', value: { ...callbackValue, action: 'task_inspection_assign_missing' } })]
+        },
+        {
+          tag: 'column',
+          width: 'weighted',
+          weight: 1,
+          elements: [callbackButton({ name: 'task_inspection_delete_record', text: '直接删除任务', type: 'danger', value: { ...callbackValue, action: 'task_inspection_delete_record' } })]
+        }
+      ]
+    }
+  ];
+
+  return {
+    schema: '2.0',
+    config: { wide_screen_mode: true, update_multi: true },
+    header: { template: 'red', title: { tag: 'plain_text', content: '未分配任务待处理' } },
+    body: { elements: [{ tag: 'form', name: 'task_inspection_form', elements }] }
+  };
+}
+
 export function buildMasterTaskInspectionAdminSummaryCard({ auditDate, summary }) {
   const members = Array.isArray(summary?.members) ? summary.members : [];
   const elements = [
-    labelElement(`**巡检日期：** ${truncateText(auditDate, 20)}\n**异常任务：** ${Number(summary?.abnormal_count || 0)}\n**临期提醒：** ${Number(summary?.due_soon_count || 0)}`)
+    labelElement(`**巡检日期：** ${truncateText(auditDate, 20)}\n**异常任务：** ${Number(summary?.abnormal_count || 0)}\n**明日到期：** ${Number(summary?.due_soon_count || 0)}\n**未分配：** ${Number(summary?.missing_assignee_count || 0)}`),
+    { tag: 'hr' }
   ];
 
   for (const member of members) {
-    elements.push(labelElement(`**${truncateText(member.assignee_name || '未分配', 40)}**｜abnormal=${Number(member.abnormal_count || 0)}｜due_soon=${Number(member.due_soon_count || 0)}`));
+    const abnormal = Number(member.abnormal_count || 0);
+    const dueSoon = Number(member.due_soon_count || 0);
+    const missing = Number(member.missing_assignee_count || 0);
+    if (!abnormal && !dueSoon && !missing) continue;
+    elements.push(labelElement(`**${truncateText(member.assignee_name || '未分配', 40)}**｜异常 ${abnormal}｜明日到期 ${dueSoon}｜未分配 ${missing}`));
   }
 
   return {
@@ -1115,9 +1198,10 @@ function extractAllowedFormValues(formValue, itemId) {
     start_date: firstString(...fieldValue(`start_date${suffix}`), ...fieldValue('start_date')),
     completion_date: firstString(...fieldValue(`completion_date${suffix}`), ...fieldValue('completion_date')),
     progress_text: firstString(...fieldValue(`progress_text${suffix}`), ...fieldValue('progress_text')),
-    task_note: firstString(...fieldValue(`task_note${suffix}`), ...fieldValue('task_note'))
+    task_note: firstString(...fieldValue(`task_note${suffix}`), ...fieldValue('task_note')),
+    delay_note: firstString(...fieldValue('delay_note'))
   };
-  const scopedAssignee = firstString(...fieldValue(`assignee_select${suffix}`));
+  const scopedAssignee = firstString(...fieldValue(`assignee_select${suffix}`), ...fieldValue('assignee_select'));
 
   if (scopedAssignee) {
     values.assignee = scopedAssignee;

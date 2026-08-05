@@ -1172,7 +1172,7 @@ function buildMasterTaskUpdateFields({ fieldNames, taskStatus, completionDate, p
   return fields;
 }
 
-function buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation, startDate, completionDate }) {
+function buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation, startDate, completionDate, taskNote }) {
   const fields = {};
 
   if (String(taskStatus || '').trim()) fields.需求状态 = normalizeMasterTaskStatusForUpdate(taskStatus);
@@ -1187,6 +1187,7 @@ function buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation,
   }
   if (String(startDate || '').trim()) fields.开始日期 = normalizeDateOnlyTimestamp(startDate);
   if (String(completionDate || '').trim()) fields.完成日期 = normalizeDateOnlyTimestamp(completionDate);
+  if (String(taskNote || '').trim()) fields.备注 = String(taskNote || '').trim();
 
   return fields;
 }
@@ -1218,7 +1219,7 @@ async function validateMasterTaskInspectionFields(context = {}) {
   const tenantAccessToken = context.tenantAccessToken || await getTenantAccessToken();
   const fields = await listBitableFields({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken });
   const names = new Set(fields.map(fieldNameOf).filter(Boolean));
-  const missingFields = ['事务需求名称', '需求状态', '跟进人', ...MASTER_TASK_INSPECTION_FIELD_NAMES].filter((name) => !names.has(name));
+  const missingFields = ['事务需求名称', '需求状态', '跟进人', '备注', ...MASTER_TASK_INSPECTION_FIELD_NAMES].filter((name) => !names.has(name));
 
   if (missingFields.length) {
     throw new Error(`正式总表巡检字段缺失：${missingFields.join('、')}`);
@@ -1313,14 +1314,14 @@ export async function updateMasterTaskProgress({ recordId, progressText, taskSta
   }
 }
 
-export async function updateMasterTaskInspectionFields({ recordId, taskStatus, progressEvaluation, startDate, completionDate, tenantAccessToken, ...context } = {}) {
+export async function updateMasterTaskInspectionFields({ recordId, taskStatus, progressEvaluation, startDate, completionDate, taskNote, tenantAccessToken, ...context } = {}) {
   const config = await resolveMasterTaskTableConfig(context);
   const token = tenantAccessToken || await getTenantAccessToken();
   const auditSchema = await validateMasterTaskAuditFields({ ...context, tenantAccessToken: token });
   const fieldNames = new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean));
   requireMasterTaskInspectionFields(fieldNames);
 
-  const fields = buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation, startDate, completionDate });
+  const fields = buildMasterTaskInspectionUpdateFields({ taskStatus, progressEvaluation, startDate, completionDate, taskNote });
 
   if (Object.keys(fields).length === 0) {
     throw new Error('任务巡检更新不能为空');
@@ -1334,6 +1335,68 @@ export async function updateMasterTaskInspectionFields({ recordId, taskStatus, p
       recordId,
       fields
     });
+  } finally {
+    invalidateMasterTaskAuditRecordsCache({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken: token });
+  }
+}
+
+export async function clearMasterTaskAssignee({ recordId, tenantAccessToken, ...context } = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const token = tenantAccessToken || await getTenantAccessToken();
+  const auditSchema = await validateMasterTaskInspectionFields({ ...context, tenantAccessToken: token });
+  const fieldNames = new Set((auditSchema.fields || []).map(fieldNameOf).filter(Boolean));
+  if (!fieldNames.has('跟进人')) throw new Error('正式总表巡检字段缺失：跟进人');
+
+  try {
+    return await updateBitableRecord({
+      appToken: config.appToken,
+      tableId: config.tableId,
+      tenantAccessToken: token,
+      recordId,
+      fields: { 跟进人: null }
+    });
+  } finally {
+    invalidateMasterTaskAuditRecordsCache({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken: token });
+  }
+}
+
+export async function updateMissingAssigneeMasterTask({ recordId, taskName, assigneeOpenId, tenantAccessToken, ...context } = {}) {
+  const normalizedTaskName = String(taskName || '').trim();
+  const normalizedAssigneeOpenId = String(assigneeOpenId || '').trim();
+  if (!normalizedTaskName) throw new Error('任务名称不能为空');
+  if (!normalizedAssigneeOpenId) throw new Error('跟进人不能为空');
+
+  const config = await resolveMasterTaskTableConfig(context);
+  const token = tenantAccessToken || await getTenantAccessToken();
+  const auditSchema = await validateMasterTaskInspectionFields({ ...context, tenantAccessToken: token });
+  const fields = auditSchema.fields || [];
+  const fieldNames = new Set(fields.map(fieldNameOf).filter(Boolean));
+  if (!fieldNames.has('事务需求名称')) throw new Error('正式总表巡检字段缺失：事务需求名称');
+  if (!fieldNames.has('跟进人')) throw new Error('正式总表巡检字段缺失：跟进人');
+  const assigneeField = fields.find((field) => fieldNameOf(field) === '跟进人');
+
+  try {
+    return await updateBitableRecord({
+      appToken: config.appToken,
+      tableId: config.tableId,
+      tenantAccessToken: token,
+      recordId,
+      fields: {
+        事务需求名称: normalizedTaskName,
+        跟进人: followerValueForField(assigneeField, normalizedAssigneeOpenId)
+      }
+    });
+  } finally {
+    invalidateMasterTaskAuditRecordsCache({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken: token });
+  }
+}
+
+export async function deleteMasterTaskRecord({ recordId, tenantAccessToken, ...context } = {}) {
+  const config = await resolveMasterTaskTableConfig(context);
+  const token = tenantAccessToken || await getTenantAccessToken();
+
+  try {
+    return await deleteBitableRecord({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken: token, recordId });
   } finally {
     invalidateMasterTaskAuditRecordsCache({ appToken: config.appToken, tableId: config.tableId, tenantAccessToken: token });
   }
