@@ -271,6 +271,15 @@ function testInspectionMissingAssigneeRoutesToOwner() {
   assert.deepEqual(result.issues, [{ type: 'missing_assignee', field_names: ['task_name', 'assignee'] }]);
 }
 
+function testInspectionMissingTaskNameIsIgnored() {
+  const result = evaluateMasterTaskInspectionRecord(record({ taskName: '', assigneeName: '', assigneeKey: '' }), { now: new Date('2026-07-24 18:00:00') });
+
+  assert.equal(result.action, 'ignored');
+  assert.equal(result.audit_type, '');
+  assert.equal(result.reason, 'missing_task_name');
+  assert.equal(result.abnormal, false);
+}
+
 testRecentInProgressPasses();
 testStaleInProgressNeedsReminder();
 testExactlyThreeDaysOldPasses();
@@ -296,5 +305,6 @@ testDueTomorrowIsSeparateDueSoonReminder();
 testAdminSummaryCountsEachResultAndSeparatesDueSoon();
 testAdminSummaryKeepsZeroCountMembers();
 testInspectionMissingAssigneeRoutesToOwner();
+testInspectionMissingTaskNameIsIgnored();
 
 console.log('master task audit evaluator tests passed');

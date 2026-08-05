@@ -156,6 +156,10 @@ export function evaluateMasterTaskInspectionRecord(record, options = {}) {
   const snapshot = inspectionSnapshotOf(record);
   const issues = [];
 
+  if (!normalizeText(record?.taskName || record?.task_name)) {
+    return { audit_date: auditDate, action: 'ignored', audit_type: '', reason: 'missing_task_name', issues: [], due_soon: false, abnormal: false };
+  }
+
   if (!normalizeText(record?.assigneeKey) || !normalizeText(record?.assigneeName)) {
     return {
       audit_date: auditDate,
@@ -406,6 +410,10 @@ export async function auditMasterTaskTable(dependencies = {}) {
     const progressText = normalizeProgressEvaluation(record.progressEvaluation || record.progress_evaluation || record.progressText || record.progress_text);
     const taskNote = normalizeText(record.taskNote || record.task_note || record.remark);
     const targets = inspectionTargets(record, evaluation);
+
+    if (evaluation.reason === 'missing_task_name') {
+      continue;
+    }
 
     if (evaluation.action === 'ignored' || evaluation.action === 'skipped') {
       for (const target of targets) {

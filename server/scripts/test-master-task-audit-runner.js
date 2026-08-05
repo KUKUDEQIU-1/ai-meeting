@@ -97,6 +97,31 @@ async function testOnlyEligibleRecordsSendCards() {
   assert.deepEqual(created.map((item) => item.recordId), ['rec_recent', 'rec_stale', 'rec_due', 'rec_pending', 'rec_paused', 'rec_done']);
 }
 
+async function testEmptyTaskNamesAreNotCountedOrSent() {
+  let created = 0;
+  let sent = 0;
+  const result = await auditMasterTaskTable({
+    now: new Date('2026-07-24 18:00:00'),
+    dryRun: false,
+    listRecords: async () => [record({ recordId: 'rec_empty_name', taskName: '', assigneeName: '', assigneeKey: '' })],
+    getAuditLog: async () => null,
+    createAuditLog: async () => {
+      created += 1;
+      return { id: created };
+    },
+    sendCard: async () => {
+      sent += 1;
+    },
+    markFailed: async () => {}
+  });
+
+  assert.deepEqual(result.results, []);
+  assert.deepEqual(result.summary, { total: 0, remindable: 0, passed: 0, skipped: 0, ignored: 0, failed: 0 });
+  assert.equal(result.admin_summary.abnormal_count, 0);
+  assert.equal(created, 0);
+  assert.equal(sent, 0);
+}
+
 async function testListMasterTaskAuditRecordsExposesCanonicalEditFields() {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -486,6 +511,7 @@ async function testReminderSendFailureIsIsolated() {
 await testDryRunDoesNotSendCard();
 await testAlreadyProcessedTodaySkips();
 await testOnlyEligibleRecordsSendCards();
+await testEmptyTaskNamesAreNotCountedOrSent();
 await testListMasterTaskAuditRecordsExposesCanonicalEditFields();
 await testListMasterTaskAuditRecordsExposesMultipleAssignees();
 await testListMasterTaskAuditRecordsPreservesLegacyFieldContractWithoutInspectionContext();
