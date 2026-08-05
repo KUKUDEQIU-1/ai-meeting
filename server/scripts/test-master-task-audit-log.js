@@ -51,6 +51,52 @@ async function testUpsertUsesOneRowPerRecordDateAndType() {
   assert.equal(row.card_message_id, 'om_audit_card_1');
 }
 
+async function testUpsertKeepsSeparateRowsPerAssignee() {
+  const recordId = `record_multi_assignee_${Date.now()}`;
+  const auditDate = '2026-08-05';
+  const auditType = 'task_inspection';
+
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: '多人负责人巡检',
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_zhangsan',
+    taskStatus: '进行中',
+    auditDate,
+    auditType,
+    actionTaken: 'sent',
+    cardMessageId: 'om_multi_zhangsan'
+  });
+  await upsertMasterTaskAuditLog({
+    recordId,
+    taskName: '多人负责人巡检',
+    assigneeKey: '李四',
+    assigneeName: '李四',
+    receiveId: 'ou_lisi',
+    taskStatus: '进行中',
+    auditDate,
+    auditType,
+    actionTaken: 'pending',
+    cardMessageId: 'om_multi_lisi'
+  });
+
+  const zhangsan = await getMasterTaskAuditLog(recordId, auditDate, auditType, '张三');
+  const lisi = await getMasterTaskAuditLog(recordId, auditDate, auditType, '李四');
+  const rows = (await listMasterTaskAuditLogs(auditDate)).filter((item) => item.record_id === recordId && item.audit_type === auditType);
+
+  assert.equal(rows.length, 2);
+  assert.equal(zhangsan.card_message_id, 'om_multi_zhangsan');
+  assert.equal(lisi.card_message_id, 'om_multi_lisi');
+
+  await markMasterTaskAuditSent({ recordId, auditDate, auditType, assigneeKey: '李四', cardMessageId: 'om_multi_lisi_sent' });
+  const updatedZhangsan = await getMasterTaskAuditLog(recordId, auditDate, auditType, '张三');
+  const updatedLisi = await getMasterTaskAuditLog(recordId, auditDate, auditType, '李四');
+
+  assert.equal(updatedZhangsan.card_message_id, 'om_multi_zhangsan');
+  assert.equal(updatedLisi.card_message_id, 'om_multi_lisi_sent');
+}
+
 async function testForcedAuditTypesCreateDistinctRowsForCanonicalRecord() {
   const recordId = `record_force_unique_${Date.now()}`;
   const auditDate = '2026-08-03';
@@ -236,6 +282,7 @@ async function testInspectionSnapshotFieldsPersistForDailyComparison() {
 
 await initDatabase();
 await testUpsertUsesOneRowPerRecordDateAndType();
+await testUpsertKeepsSeparateRowsPerAssignee();
 await testForcedAuditTypesCreateDistinctRowsForCanonicalRecord();
 await testMarkSentActionAndCallbackLookups();
 await testFailedActionIsRetryableAndUpdatedActionPersistsText();

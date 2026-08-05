@@ -145,6 +145,49 @@ async function testListMasterTaskAuditRecordsExposesCanonicalEditFields() {
   }
 }
 
+async function testListMasterTaskAuditRecordsExposesMultipleAssignees() {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    const body = href.includes('/fields')
+      ? {
+          code: 0,
+          data: { items: ['事务需求名称', '需求状态', '跟进人', '进度评估', '开始日期', '完成日期', '备注'].map((field_name) => ({ field_name })) }
+        }
+      : {
+          code: 0,
+          data: {
+            items: [{
+              record_id: 'rec_multi_assignee_list',
+              fields: {
+                事务需求名称: '多人任务',
+                需求状态: '进行中',
+                跟进人: [{ name: '张三' }, { name: '李四' }, { name: '张三' }],
+                进度评估: '80',
+                开始日期: '2026-08-01',
+                完成日期: '2026-08-20',
+                备注: '多人备注'
+              }
+            }]
+          }
+        };
+
+    return { ok: true, json: async () => body };
+  };
+
+  try {
+    const records = await listMasterTaskAuditRecords({ appToken: 'app_multi', tableId: 'tbl_multi', tenantAccessToken: 'tenant_multi', inspection: true });
+    assert.deepEqual(records[0].assignees, [
+      { assigneeName: '张三', assigneeKey: '张三' },
+      { assigneeName: '李四', assigneeKey: '李四' }
+    ]);
+    assert.equal(records[0].assigneeName, '张三');
+    assert.equal(records[0].assigneeKey, '张三');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 async function testListMasterTaskAuditRecordsPreservesLegacyFieldContractWithoutInspectionContext() {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -309,6 +352,42 @@ async function testRunnerRoutesMissingAssigneeToOwner() {
   assert.deepEqual(result.admin_summary.members, [{ assignee_name: '未分配', abnormal_count: 1, due_soon_count: 0, missing_assignee_count: 1 }]);
 }
 
+async function testRunnerSendsOneCardPerAssignee() {
+  const created = [];
+  const sent = [];
+  const result = await auditMasterTaskTable({
+    now: new Date('2026-07-24 18:00:00'),
+    dryRun: false,
+    listRecords: async () => [record({
+      recordId: 'rec_multi_owner',
+      assigneeName: '张三 李四',
+      assigneeKey: '张三李四',
+      assignees: [
+        { assigneeName: '张三', assigneeKey: '张三' },
+        { assigneeName: '李四', assigneeKey: '李四' }
+      ],
+      completionDate: '2026-07-23'
+    })],
+    getAuditLog: async () => null,
+    createAuditLog: async (payload) => {
+      created.push(payload);
+      return { ...payload, id: created.length, record_id: payload.recordId, audit_date: payload.auditDate, audit_type: payload.auditType, assignee_key: payload.assigneeKey, assignee_name: payload.assigneeName };
+    },
+    sendCard: async (payload) => {
+      sent.push(payload.assignee_key);
+    },
+    markFailed: async () => {}
+  });
+
+  assert.deepEqual(created.map((item) => item.assigneeKey), ['张三', '李四']);
+  assert.deepEqual(sent, ['张三', '李四']);
+  assert.equal(result.admin_summary.abnormal_count, 2);
+  assert.deepEqual(result.admin_summary.members, [
+    { assignee_name: '张三', abnormal_count: 1, due_soon_count: 0, missing_assignee_count: 0 },
+    { assignee_name: '李四', abnormal_count: 1, due_soon_count: 0, missing_assignee_count: 0 }
+  ]);
+}
+
 async function testRunnerUsesInspectionHistoryForThreeDayStreak() {
   const histories = [];
   const result = await auditMasterTaskTable({
@@ -408,11 +487,13 @@ await testDryRunDoesNotSendCard();
 await testAlreadyProcessedTodaySkips();
 await testOnlyEligibleRecordsSendCards();
 await testListMasterTaskAuditRecordsExposesCanonicalEditFields();
+await testListMasterTaskAuditRecordsExposesMultipleAssignees();
 await testListMasterTaskAuditRecordsPreservesLegacyFieldContractWithoutInspectionContext();
 await testInspectionModeRequiresFourInspectionFields();
 await testAuditCarriesCurrentCanonicalEditFieldsIntoCreatedAndSentPayloads();
 await testRunnerBuildsAdminSummary();
 await testRunnerRoutesMissingAssigneeToOwner();
+await testRunnerSendsOneCardPerAssignee();
 await testRunnerUsesInspectionHistoryForThreeDayStreak();
 await testRunnerSendsOneAdminSummaryAndIsolatesFailure();
 await testRunnerSendsAdminSummaryOnZeroAbnormalDay();

@@ -366,6 +366,7 @@ function testTaskInspectionOverdueCardHasDelayNoteAndWrongAssigneeButton() {
       id: 407,
       audit_type: 'task_inspection',
       task_name: '延期任务',
+      assignee_key: '简学勤',
       assignee_name: '简学勤',
       task_status: '进行中',
       completion_date: '2026-07-23',
@@ -377,6 +378,7 @@ function testTaskInspectionOverdueCardHasDelayNoteAndWrongAssigneeButton() {
   assert.equal(formControl(card, 'delay_note')?.tag, 'input');
   assert.equal(formControl(card, 'delay_note')?.default_value, '需要等接口');
   assert.match(JSON.stringify(card), /task_inspection_clear_assignee/);
+  assert.match(JSON.stringify(card), /"audit_assignee_key":"简学勤"/);
 }
 
 function testTaskInspectionPendingStartedShowsStartStatusAndCompletionDate() {
