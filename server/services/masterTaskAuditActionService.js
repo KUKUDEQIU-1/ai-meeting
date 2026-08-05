@@ -296,13 +296,15 @@ async function loadAuditState(parsed) {
   const auditRecordId = auditValue(parsed.raw_value, 'audit_record_id', 'auditRecordId');
   const auditDate = auditValue(parsed.raw_value, 'audit_date', 'auditDate');
   const auditType = auditValue(parsed.raw_value, 'audit_type', 'auditType');
+  const auditAssigneeKey = auditValue(parsed.raw_value, 'audit_assignee_key', 'auditAssigneeKey');
 
   if (!auditLog && auditRecordId && auditDate && auditType) {
     const { getMasterTaskAuditLog } = await import('./masterTaskAuditLogService.js');
     auditLog = await getMasterTaskAuditLog(
       String(auditRecordId || '').trim(),
       String(auditDate || '').trim(),
-      String(auditType || '').trim()
+      String(auditType || '').trim(),
+      String(auditAssigneeKey || '').trim()
     );
   }
 
@@ -405,6 +407,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
       recordId: prepared.auditLog.record_id,
       auditDate: prepared.auditLog.audit_date,
       auditType: prepared.auditLog.audit_type,
+      assigneeKey: prepared.auditLog.assignee_key,
       actionTaken: 'skipped',
       callbackId: prepared.parsed.callback_id
     });
@@ -421,6 +424,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
       recordId: prepared.auditLog.record_id,
       auditDate: prepared.auditLog.audit_date,
       auditType: prepared.auditLog.audit_type,
+      assigneeKey: prepared.auditLog.assignee_key,
       actionTaken: 'confirmed_no_update',
       callbackId: prepared.parsed.callback_id
     });
@@ -438,10 +442,11 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
     if (!usesCanonicalEdit) {
       await updateProgress({ recordId: prepared.auditLog.record_id, progressText });
       await markMasterTaskAuditAction({
-        recordId: prepared.auditLog.record_id,
-        auditDate: prepared.auditLog.audit_date,
-        auditType: prepared.auditLog.audit_type,
-        actionTaken: 'confirmed_updated',
+          recordId: prepared.auditLog.record_id,
+          auditDate: prepared.auditLog.audit_date,
+          auditType: prepared.auditLog.audit_type,
+          assigneeKey: prepared.auditLog.assignee_key,
+          actionTaken: 'confirmed_updated',
         submittedText: progressText,
         callbackId: prepared.parsed.callback_id
       });
@@ -465,6 +470,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         actionTaken: 'confirmed_updated',
         submittedStatus: taskStatus,
         submittedCompletionDate: completionDate,
@@ -483,6 +489,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         errorMessage: error.message,
         callbackId: prepared.parsed.callback_id
       });
@@ -506,6 +513,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         actionTaken: 'confirmed_updated',
         submittedStatus: taskStatus,
         submittedCompletionDate: completionDate,
@@ -525,6 +533,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         errorMessage: error.message,
         callbackId: prepared.parsed.callback_id
       });
@@ -540,6 +549,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         actionTaken: 'confirmed_updated',
         submittedValues: { cleared_assignee: true },
         callbackId: prepared.parsed.callback_id
@@ -554,6 +564,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         errorMessage: error.message,
         callbackId: prepared.parsed.callback_id
       });
@@ -571,6 +582,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         actionTaken: 'confirmed_updated',
         submittedValues: { task_name: taskName, assignee_key: assigneeKey },
         callbackId: prepared.parsed.callback_id
@@ -585,6 +597,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         errorMessage: error.message,
         callbackId: prepared.parsed.callback_id
       });
@@ -600,6 +613,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         actionTaken: 'confirmed_updated',
         submittedValues: { deleted: true },
         callbackId: prepared.parsed.callback_id
@@ -614,6 +628,7 @@ export async function processPreparedMasterTaskAuditCardAction(prepared, overrid
         recordId: prepared.auditLog.record_id,
         auditDate: prepared.auditLog.audit_date,
         auditType: prepared.auditLog.audit_type,
+        assigneeKey: prepared.auditLog.assignee_key,
         errorMessage: error.message,
         callbackId: prepared.parsed.callback_id
       });

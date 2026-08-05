@@ -1035,6 +1035,7 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
             audit_record_id: audit.record_id,
             audit_date: audit.audit_date,
             audit_type: audit.audit_type,
+            audit_assignee_key: audit.assignee_key,
             card_kind: 'task_inspection'
           }
         })]
@@ -1053,6 +1054,7 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
             audit_record_id: audit.record_id,
             audit_date: audit.audit_date,
             audit_type: audit.audit_type,
+            audit_assignee_key: audit.assignee_key,
             card_kind: 'task_inspection'
           }
         })]
@@ -1071,6 +1073,7 @@ export function buildMasterTaskInspectionCard({ audit, terminal = false }) {
             audit_record_id: audit.record_id,
             audit_date: audit.audit_date,
             audit_type: audit.audit_type,
+            audit_assignee_key: audit.assignee_key,
             card_kind: 'task_inspection'
           }
         })]
@@ -1112,6 +1115,7 @@ export function buildMasterTaskMissingAssigneeCard({ audit, assigneeOptions = []
     audit_record_id: audit.record_id,
     audit_date: audit.audit_date,
     audit_type: audit.audit_type,
+    audit_assignee_key: audit.assignee_key,
     card_kind: 'task_inspection'
   };
   const elements = [

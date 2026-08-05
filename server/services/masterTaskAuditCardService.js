@@ -140,6 +140,7 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
       recordId: nextLog.record_id,
       auditDate: nextLog.audit_date,
       auditType: nextLog.audit_type,
+      assigneeKey: nextLog.assignee_key,
       cardMessageId: messageId
     });
   } catch (error) {
@@ -147,6 +148,7 @@ export async function sendMasterTaskAuditCard(auditLog, deps = {}) {
       recordId: nextLog.record_id,
       auditDate: nextLog.audit_date,
       auditType: nextLog.audit_type,
+      assigneeKey: nextLog.assignee_key,
       errorMessage: error instanceof Error ? error.message : String(error)
     });
     throw error;
