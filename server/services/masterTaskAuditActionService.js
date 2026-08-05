@@ -4,7 +4,8 @@ import {
   getMasterTaskAuditLogById,
   isMasterTaskAuditTerminal,
   markMasterTaskAuditAction,
-  markMasterTaskAuditFailed
+  markMasterTaskAuditFailed,
+  upsertMasterTaskAuditLog
 } from './masterTaskAuditLogService.js';
 import { resolveAuditRecipient, updateMasterTaskAuditCard } from './masterTaskAuditCardService.js';
 import { isReplayCallback, normalizeAssigneeKey, validateCallbackActor } from './feishuTaskCardPure.js';
@@ -326,6 +327,27 @@ async function loadAuditState(parsed) {
       String(auditType || '').trim(),
       String(auditAssigneeKey || '').trim()
     );
+  }
+
+  if (!auditLog && auditRecordId && auditDate && auditType && auditAssigneeKey) {
+    const recipient = await resolveAuditRecipient(auditAssigneeKey);
+    if (!validateCallbackActor({ receive_id: recipient.original_receive_id || recipient.receive_id }, parsed)) {
+      reject('无权操作他人的巡检提醒卡片', 403);
+    }
+
+    auditLog = await upsertMasterTaskAuditLog({
+      recordId: String(auditRecordId || '').trim(),
+      taskName: '',
+      assigneeKey: String(auditAssigneeKey || '').trim(),
+      assigneeName: String(auditAssigneeKey || '').trim(),
+      receiveIdType: recipient.receive_id_type || 'open_id',
+      receiveId: recipient.original_receive_id || recipient.receive_id,
+      taskStatus: '',
+      auditDate: String(auditDate || '').trim(),
+      auditType: String(auditType || '').trim(),
+      actionTaken: 'sent',
+      cardMessageId: parsed.message_id
+    });
   }
 
   if (!auditLog) {

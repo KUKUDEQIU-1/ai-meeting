@@ -176,6 +176,63 @@ async function testAuditCallbackFallsBackFromMismatchedIdToMessageId() {
   assert.equal(prepared.auditLog.id, currentLog.id);
 }
 
+async function testAuditCallbackCreatesMissingStateFromTupleWhenRecipientAuthorized() {
+  const previousChatId = process.env.FEISHU_TASK_GROUP_CHAT_ID;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousFetch = globalThis.fetch;
+  const recordId = `rec_missing_tuple_${Date.now()}`;
+  const messageId = `om_missing_tuple_${Date.now()}`;
+
+  process.env.FEISHU_TASK_GROUP_CHAT_ID = 'oc_test_members';
+  process.env.FEISHU_APP_ID = 'cli_test_app';
+  process.env.FEISHU_APP_SECRET = 'cli_test_secret';
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/auth/v3/tenant_access_token/internal')) {
+      return response({ code: 0, tenant_access_token: 'tenant_test' });
+    }
+    if (String(url).includes('/chats/oc_test_members/members')) {
+      return response({ code: 0, data: { items: [{ name: '简学勤', open_id: 'ou_audit_actor' }], has_more: false } });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const prepared = await prepareFeishuCardAction({
+      header: { event_id: `evt_missing_tuple_${Date.now()}` },
+      event: {
+        operator: { open_id: 'ou_audit_actor' },
+        context: { open_message_id: messageId },
+        action: {
+          value: {
+            action: 'task_inspection_submit_update',
+            audit_log_id: 0,
+            audit_record_id: recordId,
+            audit_date: '2026-08-05',
+            audit_type: 'task_inspection',
+            audit_assignee_key: '简学勤',
+            card_kind: 'task_inspection'
+          },
+          form_value: { task_inspection_form: { task_status: '进行中', progress_evaluation: '50' } }
+        }
+      }
+    });
+
+    assert.equal(prepared.shouldProcess, true);
+    assert.equal(prepared.auditLog.record_id, recordId);
+    assert.equal(prepared.auditLog.assignee_key, '简学勤');
+    assert.equal(prepared.auditLog.card_message_id, messageId);
+  } finally {
+    if (previousChatId === undefined) delete process.env.FEISHU_TASK_GROUP_CHAT_ID;
+    else process.env.FEISHU_TASK_GROUP_CHAT_ID = previousChatId;
+    if (previousAppId === undefined) delete process.env.FEISHU_APP_ID;
+    else process.env.FEISHU_APP_ID = previousAppId;
+    if (previousAppSecret === undefined) delete process.env.FEISHU_APP_SECRET;
+    else process.env.FEISHU_APP_SECRET = previousAppSecret;
+    globalThis.fetch = previousFetch;
+  }
+}
+
 function inspectionPayloadFor(auditLog, formValue = {}, action = 'task_inspection_submit_update') {
   return {
     header: { event_id: `evt_inspection_${Date.now()}` },
@@ -982,6 +1039,7 @@ await initDatabase();
 await testInspectionIgnoreMarksOnlyCurrentAuditTerminal();
 await testAuditCallbackAuthorizesCurrentAssigneeRecipientWhenStoredReceiverDiffers();
 await testAuditCallbackFallsBackFromMismatchedIdToMessageId();
+await testAuditCallbackCreatesMissingStateFromTupleWhenRecipientAuthorized();
 await testNoUpdateDoesNotWriteProgress();
 await testNoUpdateKeepsTerminalStateWhenCardPatchFails();
 await testConfirmUpdateWritesProgressText();
