@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS master_task_audit_logs (
   error_message TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(record_id, audit_date, audit_type)
+  UNIQUE(record_id, audit_date, audit_type, assignee_key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_master_task_audit_callback

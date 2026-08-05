@@ -35,9 +35,17 @@ function normalizeSubmittedText(submittedText, submittedValues) {
   return JSON.stringify(submittedValues);
 }
 
-export async function getMasterTaskAuditLog(recordId, auditDate, auditType) {
+export async function getMasterTaskAuditLog(recordId, auditDate, auditType, assigneeKey = '') {
+  const normalizedAssigneeKey = normalizeText(assigneeKey);
+  if (normalizedAssigneeKey) {
+    return get(
+      'SELECT * FROM master_task_audit_logs WHERE record_id = ? AND audit_date = ? AND audit_type = ? AND assignee_key = ? LIMIT 1',
+      [recordId, auditDate, auditType, normalizedAssigneeKey]
+    );
+  }
+
   return get(
-    'SELECT * FROM master_task_audit_logs WHERE record_id = ? AND audit_date = ? AND audit_type = ? LIMIT 1',
+    'SELECT * FROM master_task_audit_logs WHERE record_id = ? AND audit_date = ? AND audit_type = ? ORDER BY id ASC LIMIT 1',
     [recordId, auditDate, auditType]
   );
 }
@@ -65,7 +73,11 @@ export async function listMasterTaskAuditLogs(auditDate) {
 export async function listMasterTaskInspectionHistory(recordId, beforeAuditDate, limit = 2) {
   return all(
     `SELECT * FROM master_task_audit_logs
-     WHERE record_id = ? AND audit_type = ? AND audit_date < ?
+     WHERE id IN (
+       SELECT MIN(id) FROM master_task_audit_logs
+       WHERE record_id = ? AND audit_type = ? AND audit_date < ?
+       GROUP BY audit_date
+     )
      ORDER BY audit_date DESC
      LIMIT ?`,
     [recordId, 'task_inspection', beforeAuditDate, limit]
@@ -109,7 +121,7 @@ export async function upsertMasterTaskAuditLog({
     `INSERT INTO master_task_audit_logs
       (record_id, task_name, assignee_key, assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, submitted_status, submitted_completion_date, submitted_start_date, submitted_progress_text, submitted_progress_evaluation, submitted_note, card_message_id, callback_id, error_message, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(record_id, audit_date, audit_type) DO UPDATE SET
+     ON CONFLICT(record_id, audit_date, audit_type, assignee_key) DO UPDATE SET
       task_name = excluded.task_name,
       assignee_key = excluded.assignee_key,
       assignee_name = excluded.assignee_name,
@@ -154,22 +166,31 @@ export async function upsertMasterTaskAuditLog({
     ]
   );
 
-  return getMasterTaskAuditLog(recordId, auditDate, auditType);
+  return getMasterTaskAuditLog(recordId, auditDate, auditType, assigneeKey);
 }
 
-export async function markMasterTaskAuditSent({ recordId, auditDate, auditType, cardMessageId, errorMessage = '' }) {
+export async function markMasterTaskAuditSent({ recordId, auditDate, auditType, assigneeKey = '', cardMessageId, errorMessage = '' }) {
+  const normalizedAssigneeKey = normalizeText(assigneeKey);
+  const where = normalizedAssigneeKey
+    ? 'WHERE record_id = ? AND audit_date = ? AND audit_type = ? AND assignee_key = ?'
+    : 'WHERE record_id = ? AND audit_date = ? AND audit_type = ?';
+  const params = normalizedAssigneeKey
+    ? ['sent', normalizeText(cardMessageId), normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType, normalizedAssigneeKey]
+    : ['sent', normalizeText(cardMessageId), normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType];
+
   await run(
-    'UPDATE master_task_audit_logs SET action_taken = ?, card_message_id = ?, error_message = ?, updated_at = ? WHERE record_id = ? AND audit_date = ? AND audit_type = ?',
-    ['sent', normalizeText(cardMessageId), normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType]
+    `UPDATE master_task_audit_logs SET action_taken = ?, card_message_id = ?, error_message = ?, updated_at = ? ${where}`,
+    params
   );
 
-  return getMasterTaskAuditLog(recordId, auditDate, auditType);
+  return getMasterTaskAuditLog(recordId, auditDate, auditType, assigneeKey);
 }
 
 export async function markMasterTaskAuditAction({
   recordId,
   auditDate,
   auditType,
+  assigneeKey = '',
   actionTaken,
   submittedText = '',
   submittedValues,
@@ -190,6 +211,11 @@ export async function markMasterTaskAuditAction({
   const normalizedSubmittedProgressEvaluation = normalizeText(submittedProgressEvaluation) || canonicalSubmittedValues.progressEvaluation;
   const normalizedSubmittedNote = normalizeText(submittedNote) || canonicalSubmittedValues.note;
 
+  const normalizedAssigneeKey = normalizeText(assigneeKey);
+  const where = normalizedAssigneeKey
+    ? 'WHERE record_id = ? AND audit_date = ? AND audit_type = ? AND assignee_key = ?'
+    : 'WHERE record_id = ? AND audit_date = ? AND audit_type = ?';
+
   await run(
     `UPDATE master_task_audit_logs
      SET action_taken = ?,
@@ -203,7 +229,7 @@ export async function markMasterTaskAuditAction({
          callback_id = CASE WHEN ? != '' THEN ? ELSE callback_id END,
          error_message = '',
          updated_at = ?
-     WHERE record_id = ? AND audit_date = ? AND audit_type = ?`,
+     ${where}`,
     [
       normalizeAction(actionTaken),
       normalizedSubmittedText,
@@ -225,24 +251,33 @@ export async function markMasterTaskAuditAction({
       nowIso(),
       recordId,
       auditDate,
-      auditType
+      auditType,
+      ...(normalizedAssigneeKey ? [normalizedAssigneeKey] : [])
     ]
   );
 
-  return getMasterTaskAuditLog(recordId, auditDate, auditType);
+  return getMasterTaskAuditLog(recordId, auditDate, auditType, assigneeKey);
 }
 
-export async function markMasterTaskAuditFailed({ recordId, auditDate, auditType, errorMessage, callbackId = '' }) {
+export async function markMasterTaskAuditFailed({ recordId, auditDate, auditType, assigneeKey = '', errorMessage, callbackId = '' }) {
+  const normalizedAssigneeKey = normalizeText(assigneeKey);
+  const where = normalizedAssigneeKey
+    ? 'WHERE record_id = ? AND audit_date = ? AND audit_type = ? AND assignee_key = ?'
+    : 'WHERE record_id = ? AND audit_date = ? AND audit_type = ?';
+  const params = normalizedAssigneeKey
+    ? ['failed', normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType, normalizedAssigneeKey]
+    : ['failed', normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType];
+
   await run(
     `UPDATE master_task_audit_logs
      SET action_taken = ?,
          error_message = ?,
          updated_at = ?
-     WHERE record_id = ? AND audit_date = ? AND audit_type = ?`,
-    ['failed', normalizeText(errorMessage), nowIso(), recordId, auditDate, auditType]
+     ${where}`,
+    params
   );
 
-  return getMasterTaskAuditLog(recordId, auditDate, auditType);
+  return getMasterTaskAuditLog(recordId, auditDate, auditType, assigneeKey);
 }
 
 export function isMasterTaskAuditTerminal(actionTaken) {

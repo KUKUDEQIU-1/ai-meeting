@@ -418,6 +418,50 @@ function migrateDatabase() {
       db.run(`ALTER TABLE master_task_audit_logs ADD COLUMN ${columnName} ${columnType}`);
     }
   }
+
+  const masterTaskAuditIndexes = db.exec('PRAGMA index_list(master_task_audit_logs)')[0]?.values || [];
+  const hasAssigneeUnique = masterTaskAuditIndexes.some((indexRow) => {
+    if (Number(indexRow[2]) !== 1) return false;
+    const indexInfo = db.exec(`PRAGMA index_info(${indexRow[1]})`)[0]?.values || [];
+    return indexInfo.map((item) => item[2]).join(',') === 'record_id,audit_date,audit_type,assignee_key';
+  });
+
+  if (!hasAssigneeUnique) {
+    db.run('ALTER TABLE master_task_audit_logs RENAME TO master_task_audit_logs_old');
+    db.run(`CREATE TABLE master_task_audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      record_id TEXT NOT NULL,
+      task_name TEXT,
+      assignee_key TEXT,
+      assignee_name TEXT,
+      receive_id_type TEXT,
+      receive_id TEXT,
+      task_status TEXT NOT NULL,
+      audit_date TEXT NOT NULL,
+      audit_type TEXT NOT NULL,
+      action_taken TEXT NOT NULL,
+      submitted_text TEXT,
+      submitted_status TEXT,
+      submitted_completion_date TEXT,
+      submitted_start_date TEXT,
+      submitted_progress_text TEXT,
+      submitted_progress_evaluation TEXT,
+      submitted_note TEXT,
+      card_message_id TEXT,
+      callback_id TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(record_id, audit_date, audit_type, assignee_key)
+    )`);
+    db.run(`INSERT OR IGNORE INTO master_task_audit_logs
+      (id, record_id, task_name, assignee_key, assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, submitted_status, submitted_completion_date, submitted_start_date, submitted_progress_text, submitted_progress_evaluation, submitted_note, card_message_id, callback_id, error_message, created_at, updated_at)
+      SELECT id, record_id, task_name, COALESCE(assignee_key, ''), assignee_name, receive_id_type, receive_id, task_status, audit_date, audit_type, action_taken, submitted_text, submitted_status, submitted_completion_date, submitted_start_date, submitted_progress_text, submitted_progress_evaluation, submitted_note, card_message_id, callback_id, error_message, created_at, updated_at
+      FROM master_task_audit_logs_old`);
+    db.run('DROP TABLE master_task_audit_logs_old');
+    db.run('CREATE INDEX IF NOT EXISTS idx_master_task_audit_callback ON master_task_audit_logs(callback_id)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_master_task_audit_date ON master_task_audit_logs(audit_date, audit_type)');
+  }
 }
 
 export function run(sql, params = []) {
