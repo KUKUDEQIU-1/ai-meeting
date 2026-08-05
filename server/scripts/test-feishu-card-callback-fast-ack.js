@@ -5,7 +5,8 @@ import { createFeishuCardActionDispatcher } from '../services/feishuCardActionDi
 import {
   handleFeishuCardAction,
   prepareFeishuCardAction,
-  processPreparedFeishuCardAction
+  processPreparedFeishuCardAction,
+  updatePreparedFeishuCardToProcessing
 } from '../services/feishuTaskCardActionService.js';
 import { resolveTaskCardRecipients } from '../services/feishuTaskCardService.js';
 import {
@@ -165,6 +166,32 @@ async function testProcessingPatchFailureStillProcessesAction() {
   assert.equal(diagnostics.some((item) => item.phase === 'processing_card_patch' && item.failure_class === 'feishu_processing_card_patch_failed'), true);
 }
 
+async function testSingleItemChoiceGreysOnlyClickedTask() {
+  const draft = await createDraftWithAssigneeState('single-item-no-grey');
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'mark_task_as_new',
+    draftId: draft.id,
+    itemId: 'item_single-item-no-grey',
+    eventId: 'evt_single_item_no_grey',
+    messageId: 'om_current_single-item-no-grey'
+  }));
+  let cardUpdate = null;
+  const processingUpdate = await updatePreparedFeishuCardToProcessing(prepared, {
+    updateCard: async (params) => {
+      cardUpdate = params;
+      return { status: 'updated' };
+    }
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(prepared.shouldProcess, true);
+  assert.equal(processingUpdate.status, 'updated');
+  assert.equal(cardUpdate.processing, undefined);
+  assert.equal(cardUpdate.itemId, '');
+  assert.equal(updatedDraft.draft_tasks[0].status, 'processing');
+  assert.equal(updatedDraft.draft_tasks[0].processing_callback_id, 'evt_single_item_no_grey');
+}
+
 function testTestRecipientOverridePreservesOriginalAssignees() {
   const previousOverride = process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID;
   process.env.FEISHU_TASK_CARD_TEST_RECEIVE_OPEN_ID = 'ou_tester';
@@ -230,6 +257,71 @@ async function createDraftWithAssigneeState(suffix, { cardKind = 'tasks' } = {})
   });
 
   return draft;
+}
+
+async function createMultiItemDraftWithAssigneeState(suffix) {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `callback-multi-${suffix}`,
+    meetingTitle: '会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{
+      item_id: `item_${suffix}_1`,
+      task_name: '第一项',
+      assignee: '张三'
+    }, {
+      item_id: `item_${suffix}_2`,
+      task_name: '第二项',
+      assignee: '张三'
+    }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_1',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent',
+    cardMessageId: `om_current_${suffix}`
+  });
+
+  return draft;
+}
+
+async function testSiblingItemProcessesWhileFirstItemIsProcessing() {
+  const draft = await createMultiItemDraftWithAssigneeState('sibling-after-processing');
+  await updatePreparedFeishuCardToProcessing(await prepareFeishuCardAction(buildActionPayload({
+    action: 'mark_task_as_new',
+    draftId: draft.id,
+    itemId: 'item_sibling-after-processing_1',
+    eventId: 'evt_first_item_processing',
+    messageId: 'om_current_sibling-after-processing'
+  })), { updateCard: async () => ({ status: 'updated' }) });
+
+  const siblingPrepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'mark_task_as_new',
+    draftId: draft.id,
+    itemId: 'item_sibling-after-processing_2',
+    eventId: 'evt_second_item_processing',
+    messageId: 'om_current_sibling-after-processing'
+  }));
+
+  assert.equal(siblingPrepared.shouldProcess, true);
+  assert.equal(siblingPrepared.response.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
 }
 
 function buildActionPayload({ action, draftId, itemId = '', eventId, taskName = '新任务名', messageId = '', cardKind = 'tasks' }) {
@@ -467,6 +559,8 @@ await testSlowPrepareReturnsProcessingAckBeforePreparationResolves();
 await testProcessingPatchFailureStillProcessesAction();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();
+await testSingleItemChoiceGreysOnlyClickedTask();
+await testSiblingItemProcessesWhileFirstItemIsProcessing();
 await testConfirmClaimOnlyOnce();
 await testStaleCardMessageIdDoesNotMutateDraft();
 await testCurrentCardMessageIdStillProcesses();

@@ -364,6 +364,37 @@ function testHandledTaskCardShowsOutcomeWhileSiblingRemainsActionable() {
   assert.equal(names.includes('discard_pending_sibling_task'), true);
 }
 
+function testProcessingTaskCardKeepsSiblingActionable() {
+  const draft = { id: 16, meeting_title: '例会', meeting_source: '飞书会议智能纪要' };
+  const assignee = { assignee_key: '张三', assignee_name: '张三' };
+  const card = buildAssigneeTaskCard({
+    draft,
+    assignee,
+    tasks: [{
+      item_id: 'processing_task',
+      task_name: '正在入表任务',
+      assignee: '张三',
+      status: 'processing'
+    }, {
+      item_id: 'pending_after_processing',
+      task_name: '仍可处理任务',
+      assignee: '张三',
+      status: 'pending'
+    }]
+  });
+  const text = JSON.stringify(card);
+  const names = buttonNames(card);
+
+  assert.match(text, /正在入表任务/);
+  assert.match(text, /处理中/);
+  assert.equal(names.includes('mark_new_processing_task'), false);
+  assert.equal(names.includes('mark_old_processing_task'), false);
+  assert.equal(names.includes('discard_processing_task'), false);
+  assert.equal(names.includes('mark_new_pending_after_processing'), true);
+  assert.equal(names.includes('mark_old_pending_after_processing'), true);
+  assert.equal(names.includes('discard_pending_after_processing'), true);
+}
+
 function testTerminalTaskCardShowsAggregateOutcomeSummary() {
   const card = buildAssigneeTaskCard({
     draft: { id: 15, meeting_title: '例会', meeting_source: '飞书会议智能纪要' },
@@ -5342,6 +5373,7 @@ testSingleTaskCardKeepsFullControlsAndScopedConfirmation();
 testTaskChoiceButtonsShowCurrentSelection();
 testDiscardedTaskDoesNotDisableRemainingTaskActions();
 testHandledTaskCardShowsOutcomeWhileSiblingRemainsActionable();
+testProcessingTaskCardKeepsSiblingActionable();
 testTerminalTaskCardShowsAggregateOutcomeSummary();
 testOldTaskDropdownUsesMatchedNameWhenProvided();
 testOldTaskSuggestionNeverUsesGeneratedBriefOrDescription();

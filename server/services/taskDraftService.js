@@ -24,7 +24,7 @@ function normalizeDraftTask(task, draftId, index) {
   return {
     ...task,
     item_id: compactItemId(task?.item_id, itemId),
-    status: ['pending', 'confirmed', 'discarded'].includes(task?.status) ? task.status : 'pending',
+    status: ['pending', 'processing', 'confirmed', 'discarded'].includes(task?.status) ? task.status : 'pending',
     task_choice: ['new_task', 'old_task_progress'].includes(task?.task_choice) ? task.task_choice : '',
     progress_summary: String(task?.progress_summary || ''),
     matched_task_name: String(task?.matched_task_name || ''),
@@ -34,6 +34,7 @@ function normalizeDraftTask(task, draftId, index) {
 	    confirmed_at: String(task?.confirmed_at || ''),
 	    action_result: ['new_task', 'old_task_progress', 'discarded'].includes(task?.action_result) ? task.action_result : '',
 	    action_result_at: String(task?.action_result_at || ''),
+	    processing_callback_id: String(task?.processing_callback_id || ''),
 	    comment: String(task?.comment || ''),
 	    task_role: String(task?.task_role || ''),
 	    task_context: String(task?.task_context || ''),
@@ -363,7 +364,7 @@ export async function resetDraftAssigneeConfirmationAfterFailure({ draftId, assi
   await run(
     `UPDATE meeting_task_draft_assignees
      SET confirmation_status = 'pending', confirmation_error = ?, last_callback_id = COALESCE(?, last_callback_id), updated_at = ?
-      WHERE draft_id = ? AND assignee_key = ? AND card_kind = ? AND confirmation_status = 'processing'`,
+      WHERE draft_id = ? AND assignee_key = ? AND card_kind = ? AND confirmation_status IN ('processing', 'pending')`,
     [String(errorMessage || '').slice(0, 500), callbackId || null, nowIso(), draftId, assigneeKey, cardKind]
   );
   return getDraftAssigneeState(draftId, assigneeKey, cardKind);

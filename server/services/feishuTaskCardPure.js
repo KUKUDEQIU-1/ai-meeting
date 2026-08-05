@@ -449,6 +449,7 @@ function discardedTaskSummary(task, itemId) {
 }
 
 function taskOutcome(task) {
+  if (task.status === 'processing') return 'processing';
   if (task.action_result === 'new_task' || task.status === 'confirmed') return 'new_task';
   if (task.action_result === 'old_task_progress' || task.task_choice === 'old_task_progress' && task.status === 'discarded') return 'old_task_progress';
   if (task.action_result === 'discarded' || task.status === 'discarded') return 'discarded';
@@ -456,6 +457,7 @@ function taskOutcome(task) {
 }
 
 function taskOutcomeTitle(outcome) {
+  if (outcome === 'processing') return '处理中';
   if (outcome === 'new_task') return '✅ 已处理为新任务';
   if (outcome === 'old_task_progress') return '✅ 已处理为旧任务进展';
   if (outcome === 'discarded') return '✅ 已丢弃';
