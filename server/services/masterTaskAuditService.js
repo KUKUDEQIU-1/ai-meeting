@@ -355,6 +355,30 @@ export function buildMasterTaskInspectionAdminSummary(results) {
   };
 }
 
+function inspectionTargets(record, evaluation) {
+  if (evaluation.route_to_owner) {
+    return [{ assigneeKey: MASTER_TASK_OWNER_NAME, assigneeName: MASTER_TASK_OWNER_NAME, originalAssigneeName: '' }];
+  }
+
+  const assignees = Array.isArray(record?.assignees) ? record.assignees : [];
+  const targets = assignees
+    .map((assignee) => ({
+      assigneeKey: normalizeText(assignee?.assigneeKey || assignee?.assignee_key),
+      assigneeName: normalizeText(assignee?.assigneeName || assignee?.assignee_name)
+    }))
+    .filter((assignee) => assignee.assigneeKey && assignee.assigneeName);
+
+  if (targets.length) {
+    return targets.map((target) => ({ ...target, originalAssigneeName: target.assigneeName }));
+  }
+
+  return [{
+    assigneeKey: record.assigneeKey,
+    assigneeName: record.assigneeName,
+    originalAssigneeName: record.assigneeName
+  }];
+}
+
 export async function auditMasterTaskTable(dependencies = {}) {
   const now = dependencies.now || new Date();
   const dryRun = dependencies.dryRun ?? envEnabled('FEISHU_MASTER_TASK_AUDIT_DRY_RUN', false);
@@ -381,99 +405,119 @@ export async function auditMasterTaskTable(dependencies = {}) {
     const startDate = normalizeDateOnlyText(record.startDate || record.start_date);
     const progressText = normalizeProgressEvaluation(record.progressEvaluation || record.progress_evaluation || record.progressText || record.progress_text);
     const taskNote = normalizeText(record.taskNote || record.task_note || record.remark);
-    const result = {
-      record_id: record.recordId,
-      task_name: record.taskName,
-      assignee_key: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeKey,
-      assignee_name: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeName,
-      original_assignee_name: record.assigneeName,
-      audit_type: evaluation.audit_type,
-      action: evaluation.action,
-      reason: evaluation.reason,
-      dry_run: dryRun
-    };
-    result.abnormal = Boolean(evaluation.abnormal);
-    result.due_soon = Boolean(evaluation.due_soon);
-    result.issues = evaluation.issues || [];
+    const targets = inspectionTargets(record, evaluation);
 
     if (evaluation.action === 'ignored' || evaluation.action === 'skipped') {
-      results.push(result);
-      continue;
-    }
-
-    if (evaluation.action === 'passed') {
-      const existing = evaluation.audit_type ? await getAuditLog(record.recordId, evaluation.audit_date, evaluation.audit_type) : null;
-      if (!existing) {
-        await createAuditLog({
-          recordId: record.recordId,
-          taskName: record.taskName,
-          assigneeKey: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeKey,
-          assigneeName: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeName,
-          taskStatus,
-          auditDate: evaluation.audit_date,
-          auditType: evaluation.audit_type,
-          actionTaken: 'passed',
-          submittedText: progressText,
-          submittedStatus: taskStatus,
-          submittedCompletionDate: completionDate,
-          submittedProgressText: progressText,
-          submittedStartDate: startDate,
-          submittedNote: taskNote
+      for (const target of targets) {
+        results.push({
+          record_id: record.recordId,
+          task_name: record.taskName,
+          assignee_key: target.assigneeKey,
+          assignee_name: target.assigneeName,
+          original_assignee_name: target.originalAssigneeName,
+          audit_type: evaluation.audit_type,
+          action: evaluation.action,
+          reason: evaluation.reason,
+          dry_run: dryRun,
+          abnormal: Boolean(evaluation.abnormal),
+          due_soon: Boolean(evaluation.due_soon),
+          issues: evaluation.issues || []
         });
       }
-      results.push(result);
       continue;
     }
 
-    const existing = await getAuditLog(record.recordId, evaluation.audit_date, evaluation.audit_type);
-    if (existing && ['sent', 'confirmed_no_update', 'confirmed_updated', 'skipped'].includes(existing.action_taken)) {
-      results.push({ ...result, action: 'skipped', reason: 'already_processed_today' });
-      continue;
-    }
-
-    const auditLog = await createAuditLog({
-      recordId: record.recordId,
-      taskName: record.taskName,
-      assigneeKey: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeKey,
-      assigneeName: evaluation.route_to_owner ? MASTER_TASK_OWNER_NAME : record.assigneeName,
-      taskStatus,
-      auditDate: evaluation.audit_date,
-      auditType: evaluation.audit_type,
-      actionTaken: dryRun ? 'skipped' : 'pending',
-      submittedText: progressText,
-      submittedStatus: taskStatus,
-      submittedCompletionDate: completionDate,
-      submittedProgressText: progressText,
-      submittedStartDate: startDate,
-      submittedNote: taskNote
-    });
-
-    if (dryRun) {
-      results.push({ ...result, action: 'skipped', reason: 'dry_run' });
-      continue;
-    }
-
-    try {
-      await sendCard({
-        ...auditLog,
-        task_status: taskStatus,
-        completion_date: completionDate,
-        start_date: startDate,
-        progress_text: progressText,
-        task_note: taskNote,
-        inspection_issues: evaluation.issues || [],
+    for (const target of targets) {
+      const result = {
+        record_id: record.recordId,
+        task_name: record.taskName,
+        assignee_key: target.assigneeKey,
+        assignee_name: target.assigneeName,
+        original_assignee_name: target.originalAssigneeName,
+        audit_type: evaluation.audit_type,
+        action: evaluation.action,
+        reason: evaluation.reason,
+        dry_run: dryRun,
+        abnormal: Boolean(evaluation.abnormal),
         due_soon: Boolean(evaluation.due_soon),
-        original_assignee_name: record.assigneeName
+        issues: evaluation.issues || []
+      };
+
+      if (evaluation.action === 'passed') {
+        const existing = evaluation.audit_type ? await getAuditLog(record.recordId, evaluation.audit_date, evaluation.audit_type, target.assigneeKey) : null;
+        if (!existing) {
+          await createAuditLog({
+            recordId: record.recordId,
+            taskName: record.taskName,
+            assigneeKey: target.assigneeKey,
+            assigneeName: target.assigneeName,
+            taskStatus,
+            auditDate: evaluation.audit_date,
+            auditType: evaluation.audit_type,
+            actionTaken: 'passed',
+            submittedText: progressText,
+            submittedStatus: taskStatus,
+            submittedCompletionDate: completionDate,
+            submittedProgressText: progressText,
+            submittedStartDate: startDate,
+            submittedNote: taskNote
+          });
+        }
+        results.push(result);
+        continue;
+      }
+
+      const existing = await getAuditLog(record.recordId, evaluation.audit_date, evaluation.audit_type, target.assigneeKey);
+      if (existing && ['sent', 'confirmed_no_update', 'confirmed_updated', 'skipped'].includes(existing.action_taken)) {
+        results.push({ ...result, action: 'skipped', reason: 'already_processed_today' });
+        continue;
+      }
+
+      const auditLog = await createAuditLog({
+        recordId: record.recordId,
+        taskName: record.taskName,
+        assigneeKey: target.assigneeKey,
+        assigneeName: target.assigneeName,
+        taskStatus,
+        auditDate: evaluation.audit_date,
+        auditType: evaluation.audit_type,
+        actionTaken: dryRun ? 'skipped' : 'pending',
+        submittedText: progressText,
+        submittedStatus: taskStatus,
+        submittedCompletionDate: completionDate,
+        submittedProgressText: progressText,
+        submittedStartDate: startDate,
+        submittedNote: taskNote
       });
-      results.push({ ...result, action: 'remind' });
-    } catch (error) {
-      await markFailed({
-        recordId: auditLog.record_id,
-        auditDate: auditLog.audit_date,
-        auditType: auditLog.audit_type,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      });
-      results.push({ ...result, action: 'failed', reason: error instanceof Error ? error.message : String(error) });
+
+      if (dryRun) {
+        results.push({ ...result, action: 'skipped', reason: 'dry_run' });
+        continue;
+      }
+
+      try {
+        await sendCard({
+          ...auditLog,
+          task_status: taskStatus,
+          completion_date: completionDate,
+          start_date: startDate,
+          progress_text: progressText,
+          task_note: taskNote,
+          inspection_issues: evaluation.issues || [],
+          due_soon: Boolean(evaluation.due_soon),
+          original_assignee_name: target.originalAssigneeName
+        });
+        results.push({ ...result, action: 'remind' });
+      } catch (error) {
+        await markFailed({
+          recordId: auditLog.record_id,
+          auditDate: auditLog.audit_date,
+          auditType: auditLog.audit_type,
+          assigneeKey: auditLog.assignee_key,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+        results.push({ ...result, action: 'failed', reason: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
 

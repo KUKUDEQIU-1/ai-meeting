@@ -1059,6 +1059,22 @@ function bitableCellText(value) {
   return String(value || '').trim();
 }
 
+function bitableAssignees(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const assignees = [];
+
+  for (const item of values) {
+    const assigneeName = bitableCellText(item);
+    const assigneeKey = assigneeName.replace(/\s+/g, '').trim();
+    if (!assigneeKey || seen.has(assigneeKey)) continue;
+    seen.add(assigneeKey);
+    assignees.push({ assigneeName, assigneeKey });
+  }
+
+  return assignees;
+}
+
 function recordFieldValue(fields, names) {
   for (const name of names) {
     const value = fields?.[name];
@@ -1072,6 +1088,10 @@ function recordFieldValue(fields, names) {
 
 function recordFieldText(fields, names) {
   return bitableCellText(recordFieldValue(fields, names));
+}
+
+function recordFieldAssignees(fields, names) {
+  return bitableAssignees(recordFieldValue(fields, names));
 }
 
 function linkedRecordIds(value) {
@@ -1264,6 +1284,9 @@ export async function listMasterTaskAuditRecords(context = {}) {
       const startDate = normalizeDateOnlyText(recordFieldText(record.fields, ['开始日期']));
       const completionDate = normalizeDateOnlyText(recordFieldText(record.fields, ['完成日期']));
       const taskNote = recordFieldText(record.fields, ['备注']);
+      const assignees = recordFieldAssignees(record.fields, ['跟进人']);
+      const assigneeName = assignees[0]?.assigneeName || recordFieldText(record.fields, ['跟进人']);
+      const assigneeKey = assignees[0]?.assigneeKey || recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim();
 
       return {
         recordId: record.record_id || record.id || '',
@@ -1273,8 +1296,9 @@ export async function listMasterTaskAuditRecords(context = {}) {
         status,
         taskStatus: status,
         task_status: status,
-        assigneeName: recordFieldText(record.fields, ['跟进人']),
-        assigneeKey: recordFieldText(record.fields, ['跟进人']).replace(/\s+/g, '').trim(),
+        assigneeName,
+        assigneeKey,
+        assignees,
         progressText,
         progress_text: progressText,
         progressEvaluation,
