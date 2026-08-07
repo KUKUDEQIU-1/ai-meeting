@@ -134,6 +134,71 @@ function testCardPayloadContainsOnlyOwnedTasks() {
   assert.match(text, /\*\*备注\*\*/);
 }
 
+async function testManualOwnerResendResetsConfirmedState() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: 'manual-owner-resend-reset',
+    meetingTitle: '例会',
+    meetingSource: 'Get笔记',
+    meetingTime: '2026-08-07',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [
+      { item_id: 'owner_reset_1', task_name: '修复续租问题', assignee: '简学勤', status: 'pending' }
+    ],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_1',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    cardKind: 'tasks',
+    assigneeName: '简学勤',
+    receiveIdType: 'open_id',
+    receiveId: 'ou_jian',
+    deliveryStatus: 'sent',
+    cardMessageId: 'om_owner_old_confirmed'
+  });
+  await markDraftAssigneeConfirmed({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    cardKind: 'tasks',
+    confirmedBy: 'ou_previous'
+  });
+
+  const before = await getDraftAssigneeState(draft.id, '简学勤', 'tasks');
+  assert.equal(before?.confirmation_status, 'confirmed');
+  assert.equal(Boolean(before?.confirmed_at), true);
+
+  const result = await dispatchDraftTaskCards(draft, {
+    assigneeMap: new Map([
+      ['简学勤', { assignee_key: '简学勤', assignee_name: '简学勤', receive_id_type: 'open_id', receive_id: 'ou_jian' }]
+    ]),
+    listGroupMembers: async () => ({ status: 'failed', members: [] }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async () => 'om_owner_new_manual_resend',
+    forceCardResend: true,
+    freshOwnerTaskConfirmationRound: true
+  });
+
+  assert.equal(result.status, 'success');
+  const after = await getDraftAssigneeState(draft.id, '简学勤', 'tasks');
+  assert.equal(after?.confirmation_status, 'pending');
+  assert.equal(after?.confirmed_at || '', '');
+  assert.equal(after?.confirmed_by || '', '');
+  assert.equal(after?.card_message_id, 'om_owner_new_manual_resend');
+}
+
 function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
   const longText = '洪伟填需要处理活动发布环境配置并回归测试。'.repeat(120);
   const card = buildAssigneeTaskCard({
@@ -5624,6 +5689,7 @@ await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOpt
 await testGetNoteSplitCompactRefreshKeepsClickedMessageScopeWithoutMessageId();
 await testGetNoteDispatchForceDoesNotResendExistingSentCard();
 await testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard();
+await testManualOwnerResendResetsConfirmedState();
 await testGetNoteDispatchForceResendsExistingOwnerCardForKnownAssignee();
 await testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard();
 await testGetNoteDispatchEmptyDraftSendsReviewOnlyCard();

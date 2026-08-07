@@ -42,7 +42,8 @@ export function getManualGetNoteImportOptions(body = {}) {
     ...getNoteImportOptions(body),
     force: true,
     reanalyze: true,
-    forceCardResend: true
+    forceCardResend: true,
+    freshOwnerTaskConfirmationRound: true
   };
 }
 

@@ -795,7 +795,13 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
     console.log(`[GetNote Sync] card dispatch mode note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks dispatch_mode=${cardDispatchMode || 'unset'}`);
     const cardStartedAt = performance.now();
-    const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: options.force, forceCardResend: options.forceCardResend });
+    const feishuResult = await dispatchGetNoteTaskCard(draft, {
+      ...(options.cardDispatchDeps || {}),
+      dispatchMode: cardDispatchMode,
+      force: options.force,
+      forceCardResend: options.forceCardResend,
+      freshOwnerTaskConfirmationRound: options.freshOwnerTaskConfirmationRound === true
+    });
     const dispatchSummary = summarizeDispatchResult(feishuResult);
     console.log(`[GetNote Sync] card dispatch result note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count} elapsed_ms=${Math.round(performance.now() - cardStartedAt)}`);
 

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { getTenantAccessToken, listMasterTaskAuditRecords } from './feishuBitableClient.js';
 import { assigneeMembersToMap, assigneeNameOf, buildAssigneeProgressCard, buildAssigneeTaskCard, buildGetNoteTaskReviewCard, buildTaskCardProcessingCard, classifyTaskCardDeliveryState, diagnoseAssigneeRecipient, groupDraftTasksByAssignee, itemScopeIncludes, normalizeAssigneeKey, parseAssigneeMap, resolveAssigneeRecipient } from './feishuTaskCardPure.js';
 import { listConfiguredFeishuGroupMembers } from './feishuChatMemberService.js';
-import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
+import { getDraftAssigneeState, getMeetingTaskDraftById, listDraftAssigneeStates, listDraftCardMessages, resetDraftAssigneeConfirmationForFreshRound, updateDraftAssigneeDelivery, upsertDraftAssigneeState, upsertDraftCardMessage } from './taskDraftService.js';
 
 const GETNOTE_MAX_OLD_TASK_OPTIONS = 10;
 const GETNOTE_MAX_ASSIGNEE_OPTIONS = 20;
@@ -740,6 +740,14 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
       deliveryStatus: 'pending'
     });
 
+    if (cardKind === 'tasks' && options.forceResend === true && options.freshOwnerTaskConfirmationRound === true) {
+      await resetDraftAssigneeConfirmationForFreshRound({
+        draftId: draft.id,
+        assigneeKey: assignee.assignee_key,
+        cardKind
+      });
+    }
+
     const tasks = Array.isArray(assignee.tasks) ? assignee.tasks : [];
     const chunks = cardKind === 'tasks'
       ? Array.from({ length: Math.ceil(tasks.length / GETNOTE_TASKS_PER_CARD) }, (_, index) => tasks.slice(index * GETNOTE_TASKS_PER_CARD, (index + 1) * GETNOTE_TASKS_PER_CARD))
@@ -964,12 +972,13 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
   await persistUnmappedAssignees(draft.id, progressGrouped.deliveryFailures, 'progress');
 
   for (const assignee of resolveTaskCardRecipients(taskGrouped.deliverable)) {
-    const options = await loadOldTaskOptionsForAssignee(assignee.assignee_key, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
-    oldTaskOptionsByAssignee.set(assignee.assignee_key, options);
-    results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage, options, diagnosticsLogger, {
-      forceResend: deps.forceCardResend === true
-    }));
-  }
+      const options = await loadOldTaskOptionsForAssignee(assignee.assignee_key, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
+      oldTaskOptionsByAssignee.set(assignee.assignee_key, options);
+      results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage, options, diagnosticsLogger, {
+      forceResend: deps.forceCardResend === true,
+      freshOwnerTaskConfirmationRound: deps.freshOwnerTaskConfirmationRound === true
+      }));
+    }
   for (const assignee of resolveTaskCardRecipients(progressGrouped.deliverable)) {
     results.push(await sendAssigneeCard(draft, assignee, 'progress', postMessage, [], diagnosticsLogger));
   }

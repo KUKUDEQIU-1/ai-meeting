@@ -435,6 +435,16 @@ export async function resetDraftAssigneeConfirmationToPending({ draftId, assigne
   return getDraftAssigneeState(draftId, assigneeKey, cardKind);
 }
 
+export async function resetDraftAssigneeConfirmationForFreshRound({ draftId, assigneeKey, cardKind = 'tasks' }) {
+  await run(
+    `UPDATE meeting_task_draft_assignees
+     SET confirmation_status = 'pending', confirmation_error = '', confirmed_at = NULL, confirmed_by = '', updated_at = ?
+      WHERE draft_id = ? AND assignee_key = ? AND card_kind = ?`,
+    [nowIso(), draftId, assigneeKey, cardKind]
+  );
+  return getDraftAssigneeState(draftId, assigneeKey, cardKind);
+}
+
 export async function updateDraftAssigneeCallbackId({ draftId, assigneeKey, cardKind = 'tasks', callbackId }) {
   await run(
     'UPDATE meeting_task_draft_assignees SET last_callback_id = COALESCE(?, last_callback_id), updated_at = ? WHERE draft_id = ? AND assignee_key = ? AND card_kind = ?',
@@ -544,10 +554,15 @@ export async function hasSuccessfulDraftCardDelivery(draftId, cardKind = '') {
 
   const splitDelivery = await get(
     `SELECT 1 AS delivered
-     FROM meeting_task_draft_card_messages
-     WHERE draft_id = ?${messageKindClause}
-       AND delivery_status = 'sent'
-       AND COALESCE(card_message_id, '') <> ''
+     FROM meeting_task_draft_card_messages messages
+     JOIN meeting_task_draft_assignees assignees
+       ON assignees.draft_id = messages.draft_id
+      AND assignees.assignee_key = messages.assignee_key
+      AND assignees.card_kind = messages.card_kind
+     WHERE messages.draft_id = ?${messageKindClause.replace(/card_kind/g, 'messages.card_kind')}
+       AND messages.delivery_status = 'sent'
+       AND COALESCE(messages.card_message_id, '') <> ''
+       AND assignees.delivery_status = 'sent'
      LIMIT 1`,
     messageParams
   );
