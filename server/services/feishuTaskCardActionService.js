@@ -33,6 +33,10 @@ const MAX_TASK_NAME_LENGTH = 120;
 const MAX_MATCHED_TASK_NAME_LENGTH = 120;
 const MAX_PROGRESS_SUMMARY_LENGTH = 500;
 
+function logCardActionEvent(event, record = {}) {
+  console.log('[Feishu Card Action]', JSON.stringify({ event, ...record }));
+}
+
 function firstString(...values) {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -1083,21 +1087,54 @@ export async function processPreparedFeishuCardAction(prepared, overrides = {}) 
   }
 
   const dependencies = dependencySet(overrides);
+  const taskChoice = prepared.parsed.action === 'mark_task_as_new'
+    ? 'new_task'
+    : prepared.parsed.action === 'mark_task_as_progress'
+      ? 'old_task_progress'
+      : '';
 
   if (!prepared.shouldProcess) {
     return prepared.response;
   }
-  if (prepared.parsed.action === 'edit_task') return editTask(prepared.parsed, prepared.state, dependencies);
-  if (prepared.parsed.action === 'mark_task_as_new') return markTaskChoice(prepared.parsed, prepared.state, dependencies, 'new_task');
-  if (prepared.parsed.action === 'mark_task_as_progress') return markTaskChoice(prepared.parsed, prepared.state, dependencies, 'old_task_progress');
-  if (prepared.parsed.action === 'discard_task') return discardTask(prepared.parsed, prepared.state, dependencies);
-  if (prepared.parsed.action === 'getnote_submit_task') return submitGetNoteTask(prepared.parsed, prepared.state, dependencies);
-  if (prepared.parsed.action === 'refresh_old_tasks') return refreshGetNoteOldTaskOptions(prepared.parsed, prepared.state, dependencies);
-  if (prepared.parsed.action === 'getnote_discard_task') return discardGetNoteTask(prepared.parsed, prepared.state, dependencies);
-  if (prepared.parsed.action === 'confirm_assignee_tasks') return confirmAssigneeTasks(prepared.parsed, prepared.state, dependencies);
-  if (prepared.parsed.action === 'confirm_assignee_progress') return confirmAssigneeProgress(prepared.parsed, prepared.state, dependencies);
+  logCardActionEvent('feishu_card_action.business.start', {
+    callback_id: prepared.parsed.callback_id,
+    action: prepared.parsed.action,
+    task_choice: taskChoice,
+    card_kind: prepared.parsed.card_kind,
+    draft_id: prepared.parsed.draft_id,
+    item_id: prepared.parsed.item_id,
+    assignee_key: prepared.state?.assignee_key || prepared.parsed.assignee_key,
+    message_id: prepared.parsed.message_id,
+    confirmation_status: prepared.state?.confirmation_status || ''
+  });
 
-  reject('不支持的卡片操作', 400);
+  let result;
+  if (prepared.parsed.action === 'edit_task') result = await editTask(prepared.parsed, prepared.state, dependencies);
+  else if (prepared.parsed.action === 'mark_task_as_new') result = await markTaskChoice(prepared.parsed, prepared.state, dependencies, 'new_task');
+  else if (prepared.parsed.action === 'mark_task_as_progress') result = await markTaskChoice(prepared.parsed, prepared.state, dependencies, 'old_task_progress');
+  else if (prepared.parsed.action === 'discard_task') result = await discardTask(prepared.parsed, prepared.state, dependencies);
+  else if (prepared.parsed.action === 'getnote_submit_task') result = await submitGetNoteTask(prepared.parsed, prepared.state, dependencies);
+  else if (prepared.parsed.action === 'refresh_old_tasks') result = await refreshGetNoteOldTaskOptions(prepared.parsed, prepared.state, dependencies);
+  else if (prepared.parsed.action === 'getnote_discard_task') result = await discardGetNoteTask(prepared.parsed, prepared.state, dependencies);
+  else if (prepared.parsed.action === 'confirm_assignee_tasks') result = await confirmAssigneeTasks(prepared.parsed, prepared.state, dependencies);
+  else if (prepared.parsed.action === 'confirm_assignee_progress') result = await confirmAssigneeProgress(prepared.parsed, prepared.state, dependencies);
+  else reject('不支持的卡片操作', 400);
+
+  logCardActionEvent('feishu_card_action.business.complete', {
+    callback_id: prepared.parsed.callback_id,
+    action: prepared.parsed.action,
+    task_choice: taskChoice,
+    card_kind: prepared.parsed.card_kind,
+    draft_id: prepared.parsed.draft_id,
+    item_id: prepared.parsed.item_id,
+    assignee_key: prepared.state?.assignee_key || prepared.parsed.assignee_key,
+    message_id: prepared.parsed.message_id,
+    result_type: result?.toast?.type || '',
+    result_content: result?.toast?.content || ''
+  });
+
+  return result;
+
 }
 
 export async function updatePreparedFeishuCardToProcessing(prepared, overrides = {}) {

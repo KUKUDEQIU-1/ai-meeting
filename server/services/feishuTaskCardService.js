@@ -36,6 +36,10 @@ function truncateMessage(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+function logCardActionEvent(event, record = {}) {
+  console.log('[Feishu Card Action]', JSON.stringify({ event, ...record }));
+}
+
 function getNoteDeliveryBase({ draft, cardKind, dispatchMode, receiveId, taskCount }) {
   return {
     card_kind: cardKind,
@@ -369,8 +373,31 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     ? cardMessages.find((row) => itemScopeIncludes(row.item_id, itemId))
     : null);
   const targetMessageId = messageId || scopedMessage?.card_message_id || state?.card_message_id || '';
+  const patchContext = {
+    draft_id: draftId,
+    assignee_key: assigneeKey,
+    card_kind: cardKind,
+    requested_message_id: maskIdentifier(messageId),
+    target_message_id: maskIdentifier(targetMessageId),
+    state_found: Boolean(state),
+    draft_found: Boolean(draft),
+    card_messages_count: cardMessages.length,
+    exact_message_found: Boolean(exactMessage),
+    scoped_message_found: Boolean(scopedMessage),
+    terminal,
+    processing,
+    compact_refresh: compactRefresh,
+    recoverable_failure: recoverableFailure,
+    scoped_item_id: exactMessage?.item_id || scopedMessage?.item_id || state?.split_item_id || ''
+  };
+
+  logCardActionEvent('feishu_card_action.card_patch.prepare', patchContext);
 
   if (!state || !draft || !targetMessageId) {
+    logCardActionEvent('feishu_card_action.card_patch.skipped', {
+      ...patchContext,
+      skip_reason: 'card_state_not_found'
+    });
     return { status: 'skipped', reason: 'card_state_not_found' };
   }
 
@@ -390,7 +417,35 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
       assigneeName: assignee.assignee_name,
       actionText: '已收到你的操作，正在处理，请稍候'
     });
-    return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
+    const patchStartedAt = performance.now();
+    logCardActionEvent('feishu_card_action.card_patch.start', {
+      ...patchContext,
+      target_message_id: maskIdentifier(targetMessageId),
+      card_variant: 'processing'
+    });
+    try {
+      const result = await patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
+      logCardActionEvent('feishu_card_action.card_patch.complete', {
+        ...patchContext,
+        target_message_id: maskIdentifier(targetMessageId),
+        card_variant: 'processing',
+        update_status: result?.status || 'updated',
+        patch_ms: elapsedMs(patchStartedAt)
+      });
+      return result;
+    } catch (error) {
+      logCardActionEvent('feishu_card_action.card_patch.failed', {
+        ...patchContext,
+        target_message_id: maskIdentifier(targetMessageId),
+        card_variant: 'processing',
+        patch_ms: elapsedMs(patchStartedAt),
+        http_status: error?.status,
+        feishu_code: error?.feishuResponse?.code,
+        feishu_msg: error?.feishuResponse?.msg || '',
+        feishu_log_id: error?.feishuResponse?.log_id || ''
+      });
+      throw error;
+    }
   }
   const listRecords = memoizeMasterTaskAuditRecords(deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
   const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));
@@ -412,7 +467,39 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   const card = confirmationError && !recoverableFailure
     ? buildFailureCard({ message: confirmationError })
     : buildCardForKind({ cardKind: effectiveCardKind, draft: cardDraft, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
-  return patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
+  const patchStartedAt = performance.now();
+  const cardVariant = confirmationError && !recoverableFailure ? 'failure' : 'normal';
+  logCardActionEvent('feishu_card_action.card_patch.start', {
+    ...patchContext,
+    target_message_id: maskIdentifier(targetMessageId),
+    card_variant: cardVariant,
+    effective_card_kind: effectiveCardKind
+  });
+  try {
+    const result = await patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
+    logCardActionEvent('feishu_card_action.card_patch.complete', {
+      ...patchContext,
+      target_message_id: maskIdentifier(targetMessageId),
+      card_variant: cardVariant,
+      effective_card_kind: effectiveCardKind,
+      update_status: result?.status || 'updated',
+      patch_ms: elapsedMs(patchStartedAt)
+    });
+    return result;
+  } catch (error) {
+    logCardActionEvent('feishu_card_action.card_patch.failed', {
+      ...patchContext,
+      target_message_id: maskIdentifier(targetMessageId),
+      card_variant: cardVariant,
+      effective_card_kind: effectiveCardKind,
+      patch_ms: elapsedMs(patchStartedAt),
+      http_status: error?.status,
+      feishu_code: error?.feishuResponse?.code,
+      feishu_msg: error?.feishuResponse?.msg || '',
+      feishu_log_id: error?.feishuResponse?.log_id || ''
+    });
+    throw error;
+  }
 }
 
 function memoizeMasterTaskAuditRecords(loadRecords) {

@@ -26,6 +26,10 @@ function elapsedMs(startedAt) {
   return Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100);
 }
 
+function logCardActionEvent(event, record = {}) {
+  console.log('[Feishu Card Action]', JSON.stringify({ event, ...record }));
+}
+
 function safeCardActionMetadata(payload) {
   const actionValue = payload?.event?.action?.value || payload?.action?.value || {};
   const callbackAction = actionValue?.action || payload?.event?.action?.name || payload?.action?.name || '';
@@ -134,14 +138,35 @@ function preparedMetadataFrom(prepared, metadata) {
     : metadata;
 }
 
+function preparedStateMetadata(prepared) {
+  return {
+    should_process: Boolean(prepared?.shouldProcess),
+    stale_card: Boolean(prepared?.state?.stale_card),
+    confirmation_status: prepared?.state?.confirmation_status || '',
+    state_card_kind: prepared?.state?.card_kind || '',
+    state_assignee_key: prepared?.state?.assignee_key || '',
+    response_type: prepared?.response?.toast?.type || ''
+  };
+}
+
 function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction, processPreparedCardAction, updateCardToProcessing, patchProcessFailureCard, processTimeoutMs, diagnosticsLogger }) {
   const response = prepared.response || {};
   const preparedMetadata = preparedMetadataFrom(prepared, metadata);
+  logCardActionEvent('feishu_card_action.callback.prepared', {
+    ...preparedMetadata,
+    ...preparedStateMetadata(prepared),
+    prepare_ms: prepareMs
+  });
 
   if (prepared.shouldProcess) {
     dispatchAction(response, async () => {
       const processStartedAt = performance.now();
       try {
+        logCardActionEvent('feishu_card_action.business.dispatch', {
+          ...preparedMetadata,
+          ...preparedStateMetadata(prepared),
+          prepare_ms: prepareMs
+        });
         const processPromise = Promise.resolve().then(() => processPreparedCardAction(prepared));
         let timedOut = false;
         processPromise.catch((error) => {
@@ -158,7 +183,24 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
         });
         Promise.resolve()
           .then(() => updateCardToProcessing(prepared))
+          .then((result) => {
+            logCardActionEvent(`feishu_card_action.processing_card_patch.${result?.status === 'skipped' ? 'skipped' : 'complete'}`, {
+              ...preparedMetadata,
+              prepare_ms: prepareMs,
+              process_ms: elapsedMs(processStartedAt),
+              update_status: result?.status || 'updated',
+              skip_reason: result?.reason || ''
+            });
+          })
           .catch((error) => {
+            logCardActionEvent('feishu_card_action.processing_card_patch.failed', {
+              ...preparedMetadata,
+              prepare_ms: prepareMs,
+              process_ms: elapsedMs(processStartedAt),
+              status: error?.status,
+              code: error?.feishuResponse?.code,
+              feishu_log_id: error?.feishuResponse?.log_id || ''
+            });
             emitDiagnostics(diagnosticsLogger, {
               phase: 'processing_card_patch',
               failure_class: 'feishu_processing_card_patch_failed',
@@ -169,6 +211,11 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
               ...preparedMetadata
             });
           });
+        logCardActionEvent('feishu_card_action.processing_card_patch.start', {
+          ...preparedMetadata,
+          prepare_ms: prepareMs,
+          process_ms: elapsedMs(processStartedAt)
+        });
         const timeoutPromise = new Promise((_, reject) => {
           const timer = setTimeout(() => {
             timedOut = true;
@@ -176,7 +223,13 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
           }, processTimeoutMs);
           processPromise.then(() => clearTimeout(timer), () => clearTimeout(timer));
         });
-        await Promise.race([processPromise, timeoutPromise]);
+        const result = await Promise.race([processPromise, timeoutPromise]);
+        logCardActionEvent('feishu_card_action.callback.processing_complete', {
+          ...preparedMetadata,
+          prepare_ms: prepareMs,
+          process_ms: elapsedMs(processStartedAt),
+          result_type: result?.toast?.type || ''
+        });
       } catch (error) {
         emitDiagnostics(diagnosticsLogger, {
           phase: processFailurePhase(error),
@@ -251,13 +304,16 @@ export function createFeishuCardActionHandler({
     try {
     const payload = req.body || {};
     const metadata = safeCardActionMetadata(payload);
-    console.log('[Feishu Card Action] inbound', JSON.stringify({
+    logCardActionEvent('feishu_card_action.callback.inbound', {
       event_type: payload?.header?.event_type || payload?.type || '',
       token_present: metadata.token_present,
       callback_action: metadata.callback_action,
       card_kind: metadata.card_kind,
-      message_id: metadata.message_id
-    }));
+      message_id: metadata.message_id,
+      draft_id: metadata.draft_id,
+      operator_open_id: metadata.operator_open_id,
+      form_fields_present: metadata.form_fields_present
+    });
 
     if (!verifyToken(payload)) {
       emitDiagnostics(diagnosticsLogger, {
@@ -276,8 +332,13 @@ export function createFeishuCardActionHandler({
       return;
     }
 
-    res.json(processingToast());
-    const preparePromise = Promise.resolve().then(() => prepareCardAction(payload));
+	    res.json(processingToast());
+	    logCardActionEvent('feishu_card_action.callback.ack_sent', {
+	      ...metadata,
+	      ack_ms: elapsedMs(startedAt),
+	      response_type: 'processing_toast'
+	    });
+	    const preparePromise = Promise.resolve().then(() => prepareCardAction(payload));
     const timeoutPromise = new Promise((_, reject) => {
       const timer = setTimeout(() => {
         const error = new Error('卡片状态读取超时，请稍后重试');
