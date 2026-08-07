@@ -90,11 +90,32 @@ async function testOnlyEligibleRecordsSendCards() {
     markFailed: async () => {}
   });
 
-  assert.equal(result.summary.remindable, 2);
-  assert.equal(result.summary.passed, 4);
+  assert.equal(result.summary.remindable, 1);
+  assert.equal(result.summary.passed, 5);
   assert.equal(result.summary.ignored, 0);
-  assert.deepEqual(sent, ['rec_pending', 'rec_done']);
+  assert.deepEqual(sent, ['rec_pending']);
   assert.deepEqual(created.map((item) => item.recordId), ['rec_recent', 'rec_stale', 'rec_due', 'rec_pending', 'rec_paused', 'rec_done']);
+}
+
+async function testCompletedTaskDoesNotSendStaleInspectionCard() {
+  let sent = 0;
+  const result = await auditMasterTaskTable({
+    now: new Date('2026-07-24 18:00:00'),
+    dryRun: false,
+    listRecords: async () => [record({ recordId: 'rec_completed_stale', status: '已完成', progressEvaluation: '100', progressText: '已完成', completionDate: '2026-07-23' })],
+    getAuditHistory: async () => [
+      { audit_type: 'task_inspection', audit_date: '2026-07-23', submitted_status: '已完成', submitted_progress_evaluation: '100', submitted_completion_date: '2026-07-23' },
+      { audit_type: 'task_inspection', audit_date: '2026-07-22', submitted_status: '已完成', submitted_progress_evaluation: '100', submitted_completion_date: '2026-07-23' }
+    ],
+    getAuditLog: async () => null,
+    createAuditLog: async (payload) => ({ ...payload, id: 99, record_id: payload.recordId, audit_date: payload.auditDate, audit_type: payload.auditType }),
+    sendCard: async () => { sent += 1; },
+    markFailed: async () => {}
+  });
+
+  assert.equal(sent, 0);
+  assert.equal(result.summary.remindable, 0);
+  assert.equal(result.summary.passed, 1);
 }
 
 async function testEmptyTaskNamesAreNotCountedOrSent() {
@@ -511,6 +532,7 @@ async function testReminderSendFailureIsIsolated() {
 await testDryRunDoesNotSendCard();
 await testAlreadyProcessedTodaySkips();
 await testOnlyEligibleRecordsSendCards();
+await testCompletedTaskDoesNotSendStaleInspectionCard();
 await testEmptyTaskNamesAreNotCountedOrSent();
 await testListMasterTaskAuditRecordsExposesCanonicalEditFields();
 await testListMasterTaskAuditRecordsExposesMultipleAssignees();

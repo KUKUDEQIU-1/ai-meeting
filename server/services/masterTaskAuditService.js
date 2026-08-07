@@ -33,6 +33,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const STALE_MODIFICATION_MS = 3 * DAY_MS;
 const DUE_SOON_MS = 3 * DAY_MS;
 const PENDING_STATUSES = new Set(['待开始', '未开始']);
+const TERMINAL_TASK_STATUSES = new Set(['已完成', '已取消']);
 const INSPECTION_AUDIT_TYPE = 'task_inspection';
 const DUE_SOON_AUDIT_TYPE = 'task_inspection_due_soon';
 const MISSING_ASSIGNEE_AUDIT_TYPE = 'task_inspection_missing_assignee';
@@ -160,6 +161,10 @@ export function evaluateMasterTaskInspectionRecord(record, options = {}) {
     return { audit_date: auditDate, action: 'ignored', audit_type: '', reason: 'missing_task_name', issues: [], due_soon: false, abnormal: false };
   }
 
+  if (TERMINAL_TASK_STATUSES.has(snapshot.status)) {
+    return { audit_date: auditDate, action: 'passed', audit_type: INSPECTION_AUDIT_TYPE, reason: 'inspection_passed', issues: [], due_soon: false, abnormal: false };
+  }
+
   if (!normalizeText(record?.assigneeKey) || !normalizeText(record?.assigneeName)) {
     return {
       audit_date: auditDate,
@@ -197,7 +202,7 @@ export function evaluateMasterTaskInspectionRecord(record, options = {}) {
     return { audit_date: auditDate, action: 'remind', audit_type: INSPECTION_AUDIT_TYPE, reason: issues[0].type, issues, due_soon: false, abnormal: true };
   }
 
-  if (snapshot.status !== '已完成' && dayDiff(snapshot.completionDate, now) === 1) {
+  if (!TERMINAL_TASK_STATUSES.has(snapshot.status) && dayDiff(snapshot.completionDate, now) === 1) {
     return {
       audit_date: auditDate,
       action: 'remind',

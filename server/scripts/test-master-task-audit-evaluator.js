@@ -149,6 +149,25 @@ function testThreeDailyInspectionsWithoutEffectiveUpdateReminds() {
   assert.deepEqual(result.issues[0].field_names, ['task_status', 'progress_evaluation', 'start_date', 'completion_date']);
 }
 
+function testCompletedTaskNeverGetsStaleInspectionReminder() {
+  const result = evaluateMasterTaskInspectionRecord(record({
+    status: '已完成',
+    progressEvaluation: '100',
+    progressText: '已完成',
+    completionDate: '2026-07-23'
+  }), {
+    now: new Date('2026-07-24 18:00:00'),
+    history: [
+      inspectionLog({ audit_date: '2026-07-23', submitted_status: '已完成', submitted_progress_evaluation: '100', submitted_completion_date: '2026-07-23' }),
+      inspectionLog({ audit_date: '2026-07-22', submitted_status: '已完成', submitted_progress_evaluation: '100', submitted_completion_date: '2026-07-23' })
+    ]
+  });
+
+  assert.equal(result.action, 'passed');
+  assert.equal(result.reason, 'inspection_passed');
+  assert.equal(result.issues.length, 0);
+}
+
 function testTwoDailyInspectionsWithoutEffectiveUpdateDoesNotRemind() {
   const result = evaluateMasterTaskInspectionRecord(record(), {
     now: new Date('2026-07-24 18:00:00'),
@@ -189,7 +208,6 @@ function testInspectionRulesClassifyMachineIssueTypes() {
   const cases = [
     ['overdue', record({ status: '进行中', completionDate: '2026-07-23' }), 'overdue_in_progress'],
     ['progress100', record({ status: '进行中', progressEvaluation: '100' }), 'progress_complete_status_open'],
-    ['doneProgress', record({ status: '已完成', progressEvaluation: '80' }), 'status_done_progress_incomplete'],
     ['blankProgressCompletion', record({ status: '进行中', progressEvaluation: '', progressText: '', completionDate: '' }), 'in_progress_missing_progress_and_completion'],
     ['pendingStarted', record({ status: '待开始', startDate: '2026-07-23' }), 'pending_started']
   ];
@@ -294,6 +312,7 @@ testMissingAssigneeIsSkipped();
 testSummaryCounts();
 testOneDailyInspectionWithoutUpdateDoesNotRemind();
 testThreeDailyInspectionsWithoutEffectiveUpdateReminds();
+testCompletedTaskNeverGetsStaleInspectionReminder();
 testTwoDailyInspectionsWithoutEffectiveUpdateDoesNotRemind();
 testProgressOneIsFullProgress();
 testNumericDateTimestampsAreNormalized();
