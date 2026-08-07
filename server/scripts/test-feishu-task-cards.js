@@ -2326,6 +2326,44 @@ async function testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard() {
   assert.equal(reviewerState, undefined);
 }
 
+async function testGetNoteDispatchForceResendsExistingOwnerCardForKnownAssignee() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'getnote',
+    sourceId: `getnote-known-assignee-force-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 已知负责人强制重发测试',
+    meetingSource: 'Get笔记',
+    draftTasks: [{ item_id: 'getnote_known_force_1', task_name: 'GetNote 已知负责人强制重发任务', assignee: '李嘉华', owner: '李嘉华', needs_confirmation: true }],
+    tableId: 'table_getnote_known_force',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+  const deps = {
+    dispatchMode: 'local',
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 李嘉华: 'ou_li' })),
+    listGroupMembers: async () => ({ status: 'failed' }),
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_getnote_known_force_${draft.id}_${sentMessages.length}`;
+    }
+  };
+
+  const first = await dispatchGetNoteTaskCard(draft, deps);
+  const skipped = await dispatchGetNoteTaskCard(draft, deps);
+  const resent = await dispatchGetNoteTaskCard(draft, { ...deps, forceCardResend: true });
+
+  assert.equal(first.sent_count, 1);
+  assert.equal(skipped.sent_count, 0);
+  assert.equal(skipped.skipped_count, 1);
+  assert.equal(skipped.results[0].reason, 'already_sent');
+  assert.equal(resent.sent_count, 1);
+  assert.equal(resent.skipped_count, 0);
+  assert.equal(sentMessages.length, 2);
+  assert.equal(sentMessages[0].receiveId, 'ou_li');
+  assert.equal(sentMessages[1].receiveId, 'ou_li');
+}
+
 async function testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -5574,6 +5612,7 @@ await testGetNoteCompactRefreshRebuildsRemainingTaskWithAssigneeScopedOldTaskOpt
 await testGetNoteSplitCompactRefreshKeepsClickedMessageScopeWithoutMessageId();
 await testGetNoteDispatchForceDoesNotResendExistingSentCard();
 await testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard();
+await testGetNoteDispatchForceResendsExistingOwnerCardForKnownAssignee();
 await testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard();
 await testGetNoteDispatchEmptyDraftSendsReviewOnlyCard();
 await testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees();

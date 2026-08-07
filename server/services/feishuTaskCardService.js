@@ -879,7 +879,9 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
   for (const assignee of resolveTaskCardRecipients(taskGrouped.deliverable)) {
     const options = await loadOldTaskOptionsForAssignee(assignee.assignee_key, deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
     oldTaskOptionsByAssignee.set(assignee.assignee_key, options);
-    results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage, options, diagnosticsLogger));
+    results.push(await sendAssigneeCard(draft, assignee, 'tasks', postMessage, options, diagnosticsLogger, {
+      forceResend: deps.forceCardResend === true
+    }));
   }
   for (const assignee of resolveTaskCardRecipients(progressGrouped.deliverable)) {
     results.push(await sendAssigneeCard(draft, assignee, 'progress', postMessage, [], diagnosticsLogger));
