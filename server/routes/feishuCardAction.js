@@ -108,6 +108,18 @@ function prepareFailureMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function processingFailureMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function processingTimeoutError(timeoutMs) {
+  const error = new Error(`卡片处理超时，请稍后重试（${timeoutMs}ms）`);
+  error.status = 504;
+  error.phase = 'process_timeout';
+  error.failureClass = 'process_timeout';
+  return error;
+}
+
 function preparedMetadataFrom(prepared, metadata) {
   return prepared.parsed
     ? {
@@ -122,7 +134,7 @@ function preparedMetadataFrom(prepared, metadata) {
     : metadata;
 }
 
-function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction, processPreparedCardAction, updateCardToProcessing, diagnosticsLogger }) {
+function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction, processPreparedCardAction, updateCardToProcessing, patchProcessFailureCard, processTimeoutMs, diagnosticsLogger }) {
   const response = prepared.response || {};
   const preparedMetadata = preparedMetadataFrom(prepared, metadata);
 
@@ -130,6 +142,20 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
     dispatchAction(response, async () => {
       const processStartedAt = performance.now();
       try {
+        const processPromise = Promise.resolve().then(() => processPreparedCardAction(prepared));
+        let timedOut = false;
+        processPromise.catch((error) => {
+          if (!timedOut) return;
+          emitDiagnostics(diagnosticsLogger, {
+            phase: 'process_late_rejection',
+            failure_class: processFailureClass(error),
+            status: error?.status,
+            code: error?.feishuResponse?.code,
+            prepare_ms: prepareMs,
+            process_ms: elapsedMs(processStartedAt),
+            ...preparedMetadata
+          });
+        });
         Promise.resolve()
           .then(() => updateCardToProcessing(prepared))
           .catch((error) => {
@@ -143,7 +169,14 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
               ...preparedMetadata
             });
           });
-        await processPreparedCardAction(prepared);
+        const timeoutPromise = new Promise((_, reject) => {
+          const timer = setTimeout(() => {
+            timedOut = true;
+            reject(processingTimeoutError(processTimeoutMs));
+          }, processTimeoutMs);
+          processPromise.then(() => clearTimeout(timer), () => clearTimeout(timer));
+        });
+        await Promise.race([processPromise, timeoutPromise]);
       } catch (error) {
         emitDiagnostics(diagnosticsLogger, {
           phase: processFailurePhase(error),
@@ -154,6 +187,19 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
           process_ms: elapsedMs(processStartedAt),
           ...preparedMetadata
         });
+        try {
+          await patchProcessFailureCard(prepared, error);
+        } catch (cardError) {
+          emitDiagnostics(diagnosticsLogger, {
+            phase: 'process_failure_card_patch',
+            failure_class: 'feishu_process_failure_card_patch_failed',
+            status: cardError?.status,
+            code: cardError?.feishuResponse?.code,
+            prepare_ms: prepareMs,
+            process_ms: elapsedMs(processStartedAt),
+            ...preparedMetadata
+          });
+        }
         throw error;
       }
     });
@@ -175,12 +221,21 @@ export function createFeishuCardActionHandler({
   processPreparedCardAction = processPreparedFeishuCardAction,
   updateCardToProcessing = updatePreparedFeishuCardToProcessing,
   prepareTimeoutMs = 15_000,
+  processTimeoutMs = Number(process.env.FEISHU_CARD_ACTION_PROCESS_TIMEOUT_MS || 60_000),
   patchPrepareFailureCard = async (payload, error) => {
     const messageId = callbackMessageId(payload);
     if (!messageId) return { status: 'skipped', reason: 'missing_message_id' };
     return patchInteractiveFeishuMessage({
       messageId,
       card: buildFailureCard({ message: prepareFailureMessage(error) })
+    });
+  },
+  patchProcessFailureCard = async (prepared, error) => {
+    const messageId = prepared?.parsed?.message_id || '';
+    if (!messageId) return { status: 'skipped', reason: 'missing_message_id' };
+    return patchInteractiveFeishuMessage({
+      messageId,
+      card: buildFailureCard({ message: processingFailureMessage(error) })
     });
   },
   diagnosticsLogger
@@ -240,6 +295,8 @@ export function createFeishuCardActionHandler({
         dispatchAction,
         processPreparedCardAction,
         updateCardToProcessing,
+        patchProcessFailureCard,
+        processTimeoutMs,
         diagnosticsLogger
       });
     }).catch(async (error) => {

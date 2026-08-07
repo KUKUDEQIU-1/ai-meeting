@@ -106,8 +106,8 @@ function assertNoSensitiveInput(record) {
 }
 
 function assertDiagnosticRecord(records, expected) {
-  assert.equal(records.length, 1);
-  const record = records[0];
+  const record = records.find((item) => item.phase === expected.phase);
+  assert.ok(record, `missing diagnostic phase ${expected.phase}`);
   assert.equal(record.phase, expected.phase);
   assert.equal(record.error_phase, expected.phase);
   assert.equal(record.failure_class, expected.failure_class);
@@ -190,6 +190,7 @@ async function testAsyncProcessingFailureDiagnostic() {
   });
 
   assertProcessingAck(res);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(dispatched.length, 1);
   await assert.rejects(dispatched[0], /diagnostic status 500/);
   assertDiagnosticRecord(logger.records, { phase: 'process_async', failure_class: 'processing_failed', status: 500 });
@@ -235,9 +236,10 @@ async function testDownstreamCardPatchDiagnostic() {
     logger
   });
 
+  await new Promise((resolve) => setImmediate(resolve));
   await assert.rejects(dispatched[0], /card patch failed/);
   assertDiagnosticRecord(logger.records, { phase: 'downstream_card_patch', failure_class: 'feishu_card_patch_failed', code: 200671 });
-  assert.equal(Number.isFinite(logger.records[0].process_ms), true);
+  assert.equal(Number.isFinite(logger.records.find((record) => record.phase === 'downstream_card_patch').process_ms), true);
 }
 
 async function testBitablePutDiagnostic() {
@@ -257,10 +259,12 @@ async function testBitablePutDiagnostic() {
     logger
   });
 
+  await new Promise((resolve) => setImmediate(resolve));
   await assert.rejects(dispatched[0], /bitable update failed/);
   assertDiagnosticRecord(logger.records, { phase: 'bitable_put', failure_class: 'feishu_bitable_update_failed', status: 502 });
-  assert.equal(logger.records[0].code, 200671);
-  assert.equal(Number.isFinite(logger.records[0].process_ms), true);
+  const record = logger.records.find((item) => item.phase === 'bitable_put');
+  assert.equal(record.code, 200671);
+  assert.equal(Number.isFinite(record.process_ms), true);
 }
 
 await testInvalidTokenDiagnostic();
