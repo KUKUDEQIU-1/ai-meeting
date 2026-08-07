@@ -121,10 +121,15 @@ async function testMergesCompatibleSemanticDuplicatesAfterDeterministicDedupe() 
 }
 
 async function testKeepsDistinctSemanticTasks() {
-  const result = await analyzeWith([task(), inventoryTask()], async () => ({ merge_groups: [] }));
+  let semanticDedupeCalled = false;
+  const result = await analyzeWith([task(), inventoryTask()], async () => {
+    semanticDedupeCalled = true;
+    return { merge_groups: [] };
+  });
 
   assert.equal(result.tasks.length, 2);
   assert.deepEqual(result.tasks.map((item) => item.candidate_id), ['candidate_1', 'candidate_2']);
+  assert.equal(semanticDedupeCalled, false);
 }
 
 async function testKeepsSemanticDuplicatesWithConflictingKnownFields() {

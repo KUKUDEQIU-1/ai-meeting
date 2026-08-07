@@ -89,6 +89,54 @@ function isUnclear(value) {
   return !text || text === '待确认' || text === '未提供' || text === '未明确';
 }
 
+function normalizedTaskOverlapText(task) {
+  return `${getTaskName(task)} ${task.task_brief || ''} ${task.task_description || ''}`
+    .toLowerCase()
+    .replace(/[\s，。！？、；：,.!?;:'"`~()[\]{}<>/\\|+*=#@_-]/g, '');
+}
+
+function hasPlausibleSemanticDuplicate(tasks) {
+  for (let leftIndex = 0; leftIndex < tasks.length; leftIndex += 1) {
+    const left = tasks[leftIndex];
+    const leftAssignee = String(left.assignee || left.owner || '').trim();
+    const leftDeadline = String(left.deadline || '').trim();
+    const leftText = normalizedTaskOverlapText(left);
+
+    for (let rightIndex = leftIndex + 1; rightIndex < tasks.length; rightIndex += 1) {
+      const right = tasks[rightIndex];
+      const rightAssignee = String(right.assignee || right.owner || '').trim();
+      const rightDeadline = String(right.deadline || '').trim();
+
+      if (isUnclear(leftAssignee) || isUnclear(rightAssignee) || isUnclear(leftDeadline) || isUnclear(rightDeadline)) {
+        return true;
+      }
+
+      if (leftAssignee !== rightAssignee && leftDeadline !== rightDeadline) {
+        continue;
+      }
+
+      const rightText = normalizedTaskOverlapText(right);
+      const shorterText = leftText.length <= rightText.length ? leftText : rightText;
+      const longerText = leftText.length <= rightText.length ? rightText : leftText;
+
+      if (shorterText.length >= 4 && longerText.includes(shorterText)) {
+        return true;
+      }
+
+      const sharedPhrases = new Set();
+      for (let index = 0; index < shorterText.length - 3; index += 1) {
+        sharedPhrases.add(shorterText.slice(index, index + 4));
+      }
+
+      for (let index = 0; index < longerText.length - 3; index += 1) {
+        if (sharedPhrases.has(longerText.slice(index, index + 4))) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function normalizeTaskType(task) {
   if (['action_item', 'follow_up', 'discussion_only'].includes(task.task_type)) {
     return task.task_type;
@@ -928,6 +976,7 @@ async function applySemanticDedupe(aiInput, tasks, dedupeTasks) {
 }
 
 export async function analyzeMeetingText(text, meetingSource = '手动输入', options = {}) {
+  const analysisStartedAt = performance.now();
   const summarizeMeeting = options.generateMeetingSummary || generateMeetingSummary;
   const extractMeetingTasks = options.generateMeetingTasks || generateMeetingTasks;
   const validateTasks = options.validateMeetingTasks || validateMeetingTasks;
@@ -940,10 +989,12 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
         getnote_summary: options.getnote_summary || ''
       }
     : text;
+  const parallelStartedAt = performance.now();
   const [summarySettled, extractionSettled] = await Promise.allSettled([
     summarizeMeeting(aiInput),
     extractMeetingTasks(aiInput)
   ]);
+  console.log(`[AI Analyze] stage=summary_extraction_parallel elapsed_ms=${Math.round(performance.now() - parallelStartedAt)}`);
 
   if (extractionSettled.status === 'rejected') {
     throw extractionSettled.reason;
@@ -966,15 +1017,22 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
   const aiProgressUpdates = Array.isArray(extractionResult?.progress_updates) ? extractionResult.progress_updates : [];
   const discardedItems = Array.isArray(extractionResult?.discarded_items) ? extractionResult.discarded_items : [];
   const rawCleanTasks = assignCandidateIds(rawTasks.map(cleanTask).filter(Boolean));
+  const validationStartedAt = performance.now();
   const validationResult = await validateCandidateTasks(aiInput, rawCleanTasks, validateTasks);
+  console.log(`[AI Analyze] stage=validator candidates=${rawCleanTasks.length} kept=${validationResult.tasks.length} removed=${validationResult.removed.length} elapsed_ms=${Math.round(performance.now() - validationStartedAt)}`);
   const filterResult = filterActionableTasks(validationResult.tasks);
-  const semanticDedupeResult = await applySemanticDedupe(aiInput, filterResult.tasks, dedupeTasks);
+  const dedupeStartedAt = performance.now();
+  const shouldRunSemanticDedupe = hasPlausibleSemanticDuplicate(filterResult.tasks);
+  const semanticDedupeResult = shouldRunSemanticDedupe
+    ? await applySemanticDedupe(aiInput, filterResult.tasks, dedupeTasks)
+    : { tasks: filterResult.tasks, removed: [] };
+  console.log(`[AI Analyze] stage=semantic_dedupe before=${filterResult.tasks.length} after=${semanticDedupeResult.tasks.length} removed=${semanticDedupeResult.removed.length} called=${shouldRunSemanticDedupe} elapsed_ms=${Math.round(performance.now() - dedupeStartedAt)}`);
   const progressUpdates = [...aiProgressUpdates, ...(filterResult.progress_updates || [])];
   const removedTasks = [...validationResult.removed, ...filterResult.removed, ...semanticDedupeResult.removed];
   const finalTasks = semanticDedupeResult.tasks;
   const candidateAudit = createCandidateAudit(rawCleanTasks, removedTasks, finalTasks);
 
-  return {
+  const result = {
     meeting_title: meetingTitle,
     meeting_source: meetingSource,
     summary,
@@ -991,6 +1049,8 @@ export async function analyzeMeetingText(text, meetingSource = '手动输入', o
     progress_updates_count: progressUpdates.length,
     discarded_items_count: discardedItems.length
   };
+  console.log(`[AI Analyze] stage=total content_source=${aiInput.content_source} content_length=${aiInput.content_length} elapsed_ms=${Math.round(performance.now() - analysisStartedAt)}`);
+  return result;
 }
 
 export async function syncTasksToFeishu(tasks, meetingMeta, options = {}) {
