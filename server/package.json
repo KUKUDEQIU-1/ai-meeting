@@ -3,6 +3,17 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "nodemonConfig": {
+    "ignore": [
+      "data/**",
+      "**/*.sqlite",
+      "**/*.sqlite3",
+      "**/*.db-*",
+      "**/*-journal",
+      "**/*-wal",
+      "**/*-shm"
+    ]
+  },
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js",
@@ -55,7 +66,8 @@
     "test:feishu-operations": "node scripts/test-feishu-operations.js",
     "test:feishu-wiki-worker": "node scripts/test-feishu-wiki-worker.js",
     "test:feishu-resident-reliability": "node scripts/test-feishu-resident-reliability.js",
-    "test:feishu-resident-stability": "node scripts/test-feishu-resident-stability.js"
+    "test:feishu-resident-stability": "node scripts/test-feishu-resident-stability.js",
+    "test:nodemon-config": "node scripts/test-nodemon-config.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
