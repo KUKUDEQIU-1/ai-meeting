@@ -27,6 +27,15 @@ function getNoteImportOptions(body) {
   };
 }
 
+export function getManualGetNoteImportOptions(body = {}) {
+  return {
+    ...getNoteImportOptions(body),
+    force: true,
+    reanalyze: true,
+    forceCardResend: true
+  };
+}
+
 function deliveryErrorStatus(error) {
   return String(error || '').trim() ? 'present' : '';
 }
@@ -903,7 +912,7 @@ router.post('/maintenance/analyze-getnote-note', requireMaintenanceToken, async 
       return;
     }
 
-    const result = await analyzeSelectedGetNote(noteId, getNoteImportOptions(req.body || {}));
+    const result = await analyzeSelectedGetNote(noteId, getManualGetNoteImportOptions(req.body || {}));
     res.json(getGetNoteSyncResponse(result));
   } catch (error) {
     res.status(error.status || 502).json(getGetNoteSyncErrorResponse(error, req.body?.note_id));

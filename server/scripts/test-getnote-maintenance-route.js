@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import express from 'express';
-import meetingRouter, { getGetNoteSyncErrorResponse, getGetNoteSyncResponse, getMaintenanceGetNotePayload } from '../routes/meeting.js';
+import meetingRouter, { getGetNoteSyncErrorResponse, getGetNoteSyncResponse, getMaintenanceGetNotePayload, getManualGetNoteImportOptions } from '../routes/meeting.js';
 import { initDatabase, run } from '../db/database.js';
 import { createMeetingTaskDraft, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
 import { getMasterTaskAuditLogById, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
@@ -227,6 +227,28 @@ function testMaintenanceGetNotePayloadIsNarrow() {
   assert.deepEqual(payload, {
     noteId: 'note_route_1',
     options: { force: true, reanalyze: true, forceCardResend: false }
+  });
+}
+
+function testManualGetNoteImportOptionsAlwaysForceProcessing() {
+  assert.deepEqual(getManualGetNoteImportOptions({
+    force: false,
+    reanalyze: false,
+    force_card_resend: false
+  }), {
+    force: true,
+    reanalyze: true,
+    forceCardResend: true
+  });
+
+  assert.deepEqual(getManualGetNoteImportOptions({
+    force: 'false',
+    reanalyze: 'false',
+    forceCardResend: false
+  }), {
+    force: true,
+    reanalyze: true,
+    forceCardResend: true
   });
 }
 
@@ -529,6 +551,7 @@ await testGetNoteListRouteRequiresMaintenanceToken();
 await testMaintenanceGetNoteRouteRejectsMissingNoteIdBeforeImport();
 await testGetNoteMutationRoutesRequireMaintenanceToken();
 testMaintenanceGetNotePayloadIsNarrow();
+testManualGetNoteImportOptionsAlwaysForceProcessing();
 testGetNoteSyncResponseShowsPendingConfirmationAsImported();
 testGetNoteSyncResponseShowsDispatchLockSkip();
 testGetNoteSyncErrorResponseHasStableEnvelope();
