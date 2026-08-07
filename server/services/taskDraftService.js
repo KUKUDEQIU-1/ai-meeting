@@ -5,6 +5,8 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+const activeDraftItemClaims = new Map();
+
 function buildDraftItemId(draftId, index) {
   return `draft_${draftId}_item_${index + 1}`;
 }
@@ -282,6 +284,57 @@ export async function updateMeetingTaskDraftItem(id, itemId, updater) {
   tasks[index] = nextTask;
   const updatedDraft = await updateMeetingTaskDraftTasks(id, tasks);
   return { draft: updatedDraft, item: nextTask };
+}
+
+export async function claimMeetingTaskDraftItemProcessing(id, itemId, callbackId, operatorOpenId) {
+  const claimKey = `${id}:${itemId}`;
+  const activeCallbackId = activeDraftItemClaims.get(claimKey);
+  if (activeCallbackId) {
+    if (activeCallbackId === callbackId) {
+      const draft = await getMeetingTaskDraftById(id);
+      const item = (draft?.draft_tasks || []).find((task) => task.item_id === itemId) || null;
+      return { claimed: Boolean(item), reason: 'already_claimed', draft, item };
+    }
+    return { claimed: false, reason: 'claim_in_progress', draft: await getMeetingTaskDraftById(id), item: null };
+  }
+
+  activeDraftItemClaims.set(claimKey, callbackId);
+  try {
+    const draft = await getMeetingTaskDraftById(id);
+    const tasks = normalizeDraftTasks(draft?.draft_tasks || [], id);
+    const index = tasks.findIndex((task) => task.item_id === itemId);
+    const item = index >= 0 ? tasks[index] : null;
+
+    if (!item) {
+      activeDraftItemClaims.delete(claimKey);
+      return { claimed: false, reason: 'item_not_found', draft, item: null };
+    }
+    if (item.status === 'processing' && item.processing_callback_id === callbackId) {
+      return { claimed: true, reason: 'already_claimed', draft, item };
+    }
+    if (item.status !== 'pending') {
+      activeDraftItemClaims.delete(claimKey);
+      return { claimed: false, reason: 'item_not_pending', draft, item };
+    }
+
+    const nextItem = normalizeDraftTask({
+      ...item,
+      status: 'processing',
+      processing_callback_id: callbackId,
+      updated_by: operatorOpenId,
+      updated_at: nowIso()
+    }, id, index);
+    tasks[index] = nextItem;
+    const updatedDraft = await updateMeetingTaskDraftTasks(id, tasks);
+    return { claimed: true, reason: '', draft: updatedDraft, item: nextItem };
+  } catch (error) {
+    activeDraftItemClaims.delete(claimKey);
+    throw error;
+  }
+}
+
+export function releaseMeetingTaskDraftItemProcessing(id, itemId) {
+  activeDraftItemClaims.delete(`${id}:${itemId}`);
 }
 
 export async function upsertDraftAssigneeState({

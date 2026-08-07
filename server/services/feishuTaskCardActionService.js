@@ -9,6 +9,7 @@ import {
 } from './feishuTaskCardPure.js';
 import {
   claimDraftAssigneeConfirmation,
+  claimMeetingTaskDraftItemProcessing,
   getDraftCardMessageByMessageId,
   getDraftAssigneeState,
   getDraftAssigneeStateByMessageId,
@@ -16,6 +17,7 @@ import {
   markDraftAssigneeConfirmed,
   resetDraftAssigneeConfirmationAfterFailure,
   resetDraftAssigneeConfirmationToPending,
+  releaseMeetingTaskDraftItemProcessing,
   updateDraftAssigneeCallbackId,
   updateMeetingTaskDraftItem,
   updateMeetingTaskDraftProgressUpdates
@@ -327,20 +329,14 @@ function isSingleItemTaskAction(parsed) {
 async function updateSingleItemToProcessing(prepared, dependencies) {
   const parsed = prepared.parsed;
   const state = prepared.state;
-  const draft = await getMeetingTaskDraftById(parsed.draft_id);
-  const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
+  const claim = await claimMeetingTaskDraftItemProcessing(
+    parsed.draft_id,
+    parsed.item_id,
+    parsed.callback_id,
+    parsed.operator_open_id
+  );
 
-  if (!currentTask || currentTask.status !== 'pending') {
-    return { status: 'skipped', reason: 'item_not_pending' };
-  }
-
-  await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
-    ...task,
-    status: 'processing',
-    processing_callback_id: parsed.callback_id,
-    updated_by: parsed.operator_open_id,
-    updated_at: new Date().toISOString()
-  }));
+  if (!claim.claimed) return { status: 'skipped', reason: claim.reason };
 
   const itemId = state.split_item_id || state.split_card_message_id ? (state.split_item_id || parsed.item_id || '') : '';
   return dependencies.updateCard({
@@ -459,7 +455,25 @@ async function editTask(parsed, state, dependencies) {
 }
 
 async function markTaskChoice(parsed, state, dependencies, taskChoice) {
-  if (state.card_kind === 'getnote_tasks') {
+  const singleItemAction = isSingleItemTaskAction(parsed);
+  let itemClaimed = false;
+
+  try {
+    console.log('[Feishu Card Action] task choice start', JSON.stringify({ action: parsed.action, task_choice: taskChoice, draft_id: parsed.draft_id, item_id: parsed.item_id, message_id: parsed.message_id }));
+  if (singleItemAction) {
+    const claim = await claimMeetingTaskDraftItemProcessing(
+      parsed.draft_id,
+      parsed.item_id,
+      parsed.callback_id,
+      parsed.operator_open_id
+    );
+    if (!claim.claimed) {
+      return feishuCallbackToast(claim.reason === 'claim_in_progress' ? '确认处理中，暂不能重复操作' : '已处理，无需重复操作');
+    }
+    itemClaimed = true;
+  }
+
+  if (state.card_kind === 'getnote_tasks' && !singleItemAction) {
     const draft = await getMeetingTaskDraftById(parsed.draft_id);
     const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -478,7 +492,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     });
   }
 
-  if (!isSingleItemTaskAction(parsed)) {
+  if (!singleItemAction) {
     const claim = await claimDraftAssigneeConfirmation({
       draftId: parsed.draft_id,
       assigneeKey: state.assignee_key,
@@ -491,14 +505,15 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     }
   }
 
-  try {
     const draft = await getMeetingTaskDraftById(parsed.draft_id);
     const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
     if (!currentTask || !['pending', 'processing'].includes(currentTask.status)) {
+      if (itemClaimed) releaseMeetingTaskDraftItemProcessing(parsed.draft_id, parsed.item_id);
       return feishuCallbackToast('已处理，无需重复操作');
     }
     if (currentTask.status === 'processing' && currentTask.processing_callback_id && currentTask.processing_callback_id !== parsed.callback_id) {
+      if (itemClaimed) releaseMeetingTaskDraftItemProcessing(parsed.draft_id, parsed.item_id);
       return feishuCallbackToast('确认处理中，暂不能重复操作');
     }
 
@@ -554,12 +569,14 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     assertOwnedItem(result?.item, ownerKey, '只能修改本人名下任务');
 
     if (taskChoice === 'new_task') {
+      console.log('[Feishu Card Action] task choice finalize start', JSON.stringify({ draft_id: parsed.draft_id, item_id: parsed.item_id, task_choice: taskChoice }));
       await dependencies.finalizeAssignee({
         draftId: parsed.draft_id,
         assigneeKey: ownerKey,
         confirmedBy: parsed.operator_open_id,
         itemIds: [parsed.item_id]
       });
+      console.log('[Feishu Card Action] task choice finalize complete', JSON.stringify({ draft_id: parsed.draft_id, item_id: parsed.item_id, task_choice: taskChoice }));
     } else {
       const progressUpdate = progressUpdateFromTask(result.item, parsed.operator_open_id, new Date().toISOString());
       await updateMeetingTaskDraftProgressUpdates(parsed.draft_id, [
@@ -604,10 +621,13 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
       compactRefresh: state.card_kind === 'getnote_tasks',
       itemId: scopedItemId
     });
+    console.log('[Feishu Card Action] task choice complete', JSON.stringify({ draft_id: parsed.draft_id, item_id: parsed.item_id, task_choice: taskChoice }));
+    if (itemClaimed) releaseMeetingTaskDraftItemProcessing(parsed.draft_id, parsed.item_id);
     return feishuCallbackToast(taskChoice === 'old_task_progress' ? '旧任务进展已处理' : '新任务已处理');
   } catch (error) {
+    console.error('[Feishu Card Action] task choice failed', JSON.stringify({ action: parsed.action, task_choice: taskChoice, draft_id: parsed.draft_id, item_id: parsed.item_id, phase: error?.phase || 'task_choice', error: error instanceof Error ? error.message : String(error) }));
     const recoverable = isRecoverableTaskChoiceFailure(error, taskChoice);
-    if (recoverable) {
+    if (itemClaimed || recoverable) {
       await updateMeetingTaskDraftItem(parsed.draft_id, parsed.item_id, (task) => ({
         ...task,
         matched_task_name: '',
@@ -634,6 +654,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
     } catch (cardError) {
       console.warn(`[Feishu Card Action] failure card update failed draft_id=${parsed.draft_id} assignee=${state.assignee_key} error=${cardError instanceof Error ? cardError.message : String(cardError)}`);
     }
+    if (itemClaimed) releaseMeetingTaskDraftItemProcessing(parsed.draft_id, parsed.item_id);
     throw error;
   }
 }
