@@ -544,6 +544,41 @@ async function testMasterTaskAuditMaintenanceListRequiresToken() {
   }
 }
 
+async function testMasterTaskAuditRunRequiresMaintenanceToken() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'audit-run-token';
+  const server = await listen(createApp());
+
+  try {
+    const missing = await requestPath(server, '/api/meeting/maintenance/master-task-audit/run', {
+      body: { execute: true, dry_run: false }
+    });
+    assert.equal(missing.response.status, 401);
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+  }
+}
+
+async function testMasterTaskAuditRunRequiresExplicitExecuteForSending() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'audit-run-token';
+  const server = await listen(createApp());
+
+  try {
+    const result = await requestPath(server, '/api/meeting/maintenance/master-task-audit/run', {
+      headers: { Authorization: 'Bearer audit-run-token' },
+      body: { dry_run: false }
+    });
+    assert.equal(result.response.status, 400);
+    assert.equal(result.body.status, 'validation_failed');
+    assert.match(result.body.message, /execute must be true/);
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+  }
+}
+
 await testMaintenanceGetNoteRouteFailsClosedWithoutToken();
 await testMaintenanceGetNoteRouteRequiresBearerToken();
 await testSelectedGetNoteRouteRequiresTokenAndNoteId();
@@ -561,5 +596,7 @@ await testGetNoteCardDeliveryAuditIsSanitized();
 await testGetNoteCardDeliveryAuditRejectsNonGetNoteDraft();
 await testCompletedInspectionCardCanBeClosedWithoutChangingTask();
 await testMasterTaskAuditMaintenanceListRequiresToken();
+await testMasterTaskAuditRunRequiresMaintenanceToken();
+await testMasterTaskAuditRunRequiresExplicitExecuteForSending();
 
 console.log('getnote maintenance route tests passed');
