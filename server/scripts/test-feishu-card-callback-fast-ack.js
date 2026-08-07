@@ -166,6 +166,39 @@ async function testProcessingPatchFailureStillProcessesAction() {
   assert.equal(diagnostics.some((item) => item.phase === 'processing_card_patch' && item.failure_class === 'feishu_processing_card_patch_failed'), true);
 }
 
+async function testPrepareFailurePatchesOriginalCard() {
+  const updates = [];
+  const handler = createFeishuCardActionHandler({
+    prepareCardAction: async () => {
+      const error = new Error('卡片状态不存在');
+      error.status = 404;
+      throw error;
+    },
+    patchPrepareFailureCard: async (payload, error) => {
+      updates.push({ payload, error });
+      return { status: 'updated' };
+    }
+  });
+  const req = {
+    body: buildActionPayload({
+      action: 'mark_task_as_progress',
+      draftId: 3219,
+      eventId: 'evt_prepare_failure',
+      messageId: 'om_prepare_failure'
+    })
+  };
+  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+
+  await handler(req, res, (error) => { throw error; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].payload.event.context.open_message_id, 'om_prepare_failure');
+  assert.equal(updates[0].error.status, 404);
+}
+
 async function testSingleItemChoiceGreysOnlyClickedTask() {
   const draft = await createDraftWithAssigneeState('single-item-no-grey');
   const prepared = await prepareFeishuCardAction(buildActionPayload({
@@ -526,16 +559,16 @@ async function testBackgroundFailureStoresErrorAndKeepsFastAck() {
     draftId: draft.id,
     eventId: 'evt_background_failure'
   }));
-  let failureCardUpdates = 0;
+  const failureCardUpdates = [];
 
   const ack = dispatcher(prepared.response, async () => {
     await processPreparedFeishuCardAction(prepared, {
       finalizeAssignee: async () => {
         throw new Error('后台入表失败');
       },
-      updateCard: async ({ terminal }) => {
-        assert.equal(terminal, undefined);
-        failureCardUpdates += 1;
+      updateCard: async (params) => {
+        assert.equal(params.terminal, undefined);
+        failureCardUpdates.push(params);
         return { status: 'updated' };
       }
     });
@@ -549,14 +582,44 @@ async function testBackgroundFailureStoresErrorAndKeepsFastAck() {
 
   assert.equal(errors.length, 1);
   assert.match(errors[0].message, /后台入表失败/);
-  assert.equal(failureCardUpdates, 1);
+  assert.equal(failureCardUpdates.length, 1);
+  assert.equal(failureCardUpdates[0].recoverableFailure, false);
   assert.equal(state.confirmation_status, 'pending');
   assert.equal(state.confirmation_error, '后台入表失败');
+}
+
+async function testEditFailureStoresErrorAndRequestsFailureCard() {
+  const draft = await createDraftWithAssigneeState('edit-failure');
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'edit_task',
+    draftId: draft.id,
+    itemId: 'item_edit-failure',
+    eventId: 'evt_edit_failure',
+    taskName: '修改后的任务'
+  }));
+  const updates = [];
+
+  await assert.rejects(
+    () => processPreparedFeishuCardAction(prepared, {
+      updateCard: async (params) => {
+        updates.push(params);
+        throw new Error('卡片刷新失败');
+      }
+    }),
+    /卡片刷新失败/
+  );
+
+  const state = await getDraftAssigneeState(draft.id, '张三');
+  assert.equal(state.confirmation_status, 'pending');
+  assert.equal(state.confirmation_error, '卡片刷新失败');
+  assert.equal(updates.length, 2);
+  assert.equal(updates[1].recoverableFailure, false);
 }
 
 await testFastAckDispatchDoesNotAwaitSlowHandler();
 await testSlowPrepareReturnsProcessingAckBeforePreparationResolves();
 await testProcessingPatchFailureStillProcessesAction();
+await testPrepareFailurePatchesOriginalCard();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();
 await testSingleItemChoiceGreysOnlyClickedTask();
@@ -569,5 +632,6 @@ await testUnmappedAggregateMessageIdStillProcessesByLegacyFallback();
 await testEditDuringProcessingDoesNotFinalizeOrMutate();
 await testDuplicateConfirmIsIdempotent();
 await testBackgroundFailureStoresErrorAndKeepsFastAck();
+await testEditFailureStoresErrorAndRequestsFailureCard();
 
 console.log('feishu card callback fast-ack tests passed');
