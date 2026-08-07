@@ -54,12 +54,27 @@ function combinedLatestScanStatus(wiki, getnote) {
 }
 
 function failedGetNoteResult(error) {
+  const feishuResult = error?.feishuSync;
   return {
     success: false,
     status: 'failed',
     imported: [],
     skipped: [],
-    failed: [{ note_id: error?.note_id || '', title: error?.meeting_title || '', error: error?.message || 'GetNote sync failed' }]
+    failed: [{
+      note_id: error?.note_id || '',
+      title: error?.meeting_title || '',
+      error: error?.message || 'GetNote sync failed',
+      ...(feishuResult ? {
+        feishu_result: {
+          status: feishuResult.status,
+          sent_count: feishuResult.sent_count,
+          skipped_count: feishuResult.skipped_count,
+          failed_count: feishuResult.failed_count,
+          results: feishuResult.results,
+          delivery_failures: feishuResult.delivery_failures
+        }
+      } : {})
+    }]
   };
 }
 

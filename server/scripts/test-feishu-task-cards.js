@@ -3591,9 +3591,9 @@ async function testDraftNormalizationDetectsAndPreservesWorkType() {
   assert.equal(draft.draft_tasks[2].work_type, '事务类(运营/对接)');
 }
 
-async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
+async function testDispatchSplitsOversizedTaskCard() {
   const suffix = Date.now();
-  const itemIds = [`split_retry_1_${suffix}`, `split_retry_2_${suffix}`, `split_retry_3_${suffix}`];
+  const itemIds = Array.from({ length: 5 }, (_, index) => `split_retry_${index + 1}_${suffix}`);
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
     sourceId: `compact-retry-${Date.now()}`,
@@ -3606,7 +3606,9 @@ async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
     draftTasks: [
       { item_id: itemIds[0], task_name: '处理活动发布环境配置', progress_summary: '回归测试', assignee: '洪伟填' },
       { item_id: itemIds[1], task_name: '修复活动发布链路', progress_summary: '联调', assignee: '洪伟填' },
-      { item_id: itemIds[2], task_name: '回归活动发布测试', progress_summary: '验收', assignee: '洪伟填' }
+      { item_id: itemIds[2], task_name: '回归活动发布测试', progress_summary: '验收', assignee: '洪伟填' },
+      { item_id: itemIds[3], task_name: '补充活动发布说明', progress_summary: '文档', assignee: '洪伟填' },
+      { item_id: itemIds[4], task_name: '确认活动发布结果', progress_summary: '确认', assignee: '洪伟填' }
     ],
     existingMatches: [],
     uncertainTasks: [],
@@ -3625,22 +3627,21 @@ async function testDispatchKeepsOversizedTaskCardAsOneAttempt() {
     listGroupMembers: async () => ({ status: 'failed' }),
     postMessage: async ({ card }) => {
       sentCards.push(card);
-      throw new Error('飞书任务卡片发送失败：Failed to create card content, ext=ErrCode: 11310; ErrMsg: element exceeds the limit; ');
+      return `om_split_${suffix}_${sentCards.length}`;
     }
   });
   const state = await getDraftAssigneeState(draft.id, '洪伟填', 'tasks');
   const splitMessages = await listDraftCardMessages(draft.id, '洪伟填', 'tasks');
 
-  assert.equal(result.sent_count, 0);
-  assert.equal(result.failed_count, 1);
-  assert.equal(sentCards.length, 1);
-  assert.equal(splitMessages.length, 0);
-  assert.equal(state.delivery_status, 'failed');
-  assert.match(state.delivery_error, /element exceeds the limit/);
-  const text = JSON.stringify(sentCards[0]);
-  assert.match(text, /split_retry_1_/);
-  assert.match(text, /split_retry_2_/);
-  assert.match(text, /split_retry_3_/);
+  assert.equal(result.sent_count, 2);
+  assert.equal(result.failed_count, 0);
+  assert.equal(sentCards.length, 2);
+  assert.equal(splitMessages.length, 2);
+  assert.equal(state.delivery_status, 'sent');
+  const text = JSON.stringify(sentCards);
+  for (const itemId of itemIds) assert.match(text, new RegExp(itemId));
+  assert.equal(splitMessages[0].item_id, itemIds.slice(0, 3).join(','));
+  assert.equal(splitMessages[1].item_id, itemIds.slice(3).join(','));
 }
 
 async function testOldTaskDropdownIncludesSharedAssigneeTasks() {
@@ -3666,6 +3667,7 @@ async function testOldTaskDropdownIncludesSharedAssigneeTasks() {
     tableUrl: 'https://example.com'
   });
   const sentCards = [];
+  const messageId = `om_shared_old_task_${Date.now()}`;
 
   const result = await dispatchDraftTaskCards(draft, {
     assigneeMap: parseAssigneeMap(JSON.stringify({ '洪伟填skill.md': 'ou_hong' })),
@@ -3677,7 +3679,7 @@ async function testOldTaskDropdownIncludesSharedAssigneeTasks() {
     ],
     postMessage: async ({ card }) => {
       sentCards.push(card);
-      return 'om_shared_old_task';
+      return messageId;
     }
   });
 
@@ -5552,7 +5554,7 @@ await initDatabase();
 await testLongDraftItemIdsAreCompactedBeforeCardRendering();
 await testDraftNormalizationPreservesSemanticTaskFields();
 await testDraftNormalizationDetectsAndPreservesWorkType();
-await testDispatchKeepsOversizedTaskCardAsOneAttempt();
+await testDispatchSplitsOversizedTaskCard();
 await testOldTaskDropdownIncludesSharedAssigneeTasks();
 await testDispatchEmptyDraftDoesNotReportFailure();
 await testEditAndDiscardPreserveStoredFields();

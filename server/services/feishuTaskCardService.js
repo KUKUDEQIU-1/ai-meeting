@@ -640,6 +640,7 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
   }
 
   inFlightAssigneeCardSends.add(sendKey);
+  const results = [];
 
   try {
     await upsertDraftAssigneeState({
@@ -652,24 +653,39 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
       deliveryStatus: 'pending'
     });
 
-    const prepareStartedAt = performance.now();
-    const card = cardKind === 'progress'
-      ? buildAssigneeProgressCard({ draft, assignee, progressUpdates: assignee.tasks })
-      : buildAssigneeTaskCard({ draft, assignee, tasks: assignee.tasks, oldTaskOptions });
-    const prepareMs = elapsedMs(prepareStartedAt);
-    const messageId = await postMessage({ receiveId: assignee.receive_id, card });
+    const tasks = Array.isArray(assignee.tasks) ? assignee.tasks : [];
+    const chunks = cardKind === 'tasks'
+      ? Array.from({ length: Math.ceil(tasks.length / GETNOTE_TASKS_PER_CARD) }, (_, index) => tasks.slice(index * GETNOTE_TASKS_PER_CARD, (index + 1) * GETNOTE_TASKS_PER_CARD))
+      : [tasks];
+    const cardChunks = chunks.length ? chunks : [[]];
+    for (const [index, chunk] of cardChunks.entries()) {
+      const prepareStartedAt = performance.now();
+      const chunkAssignee = { ...assignee, tasks: chunk };
+      const card = cardKind === 'progress'
+        ? buildAssigneeProgressCard({ draft, assignee: chunkAssignee, progressUpdates: chunk })
+        : buildAssigneeTaskCard({ draft, assignee: chunkAssignee, tasks: chunk, oldTaskOptions });
+      const prepareMs = elapsedMs(prepareStartedAt);
+      const messageId = await postMessage({ receiveId: assignee.receive_id, card });
+      const itemId = chunk.map((task) => task.item_id || '').filter(Boolean).join(',');
 
-    await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
-    emitDeliveryDiagnostics(diagnosticsLogger, {
-      phase: 'delivery_send',
-      status: 'sent',
-      card_kind: cardKind,
-      draft_id: draft.id,
-      message_id: maskIdentifier(messageId),
-      prepare_ms: prepareMs,
-      process_ms: elapsedMs(startedAt)
-    });
-    return { assignee_key: assignee.assignee_key, status: 'sent', message_id: messageId };
+      await upsertDraftCardMessage({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, itemId, cardMessageId: messageId });
+      await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'sent', cardMessageId: messageId });
+      emitDeliveryDiagnostics(diagnosticsLogger, {
+        phase: 'delivery_send',
+        status: 'sent',
+        card_kind: cardKind,
+        draft_id: draft.id,
+        chunk_index: index + 1,
+        chunk_count: cardChunks.length,
+        item_count: chunk.length,
+        message_id: maskIdentifier(messageId),
+        prepare_ms: prepareMs,
+        process_ms: elapsedMs(startedAt)
+      });
+      results.push({ status: 'sent', message_id: messageId, item_ids: chunk.map((task) => task.item_id || '').filter(Boolean) });
+    }
+
+    return { assignee_key: assignee.assignee_key, status: 'sent', sent_count: results.length, failed_count: 0, results, message_id: results.at(-1)?.message_id || '' };
   } catch (error) {
     await updateDraftAssigneeDelivery({ draftId: draft.id, assigneeKey: assignee.assignee_key, cardKind, deliveryStatus: 'failed', deliveryError: error.message });
     emitDeliveryDiagnostics(diagnosticsLogger, {
@@ -682,7 +698,7 @@ async function sendAssigneeCard(draft, assignee, cardKind, postMessage = sendInt
       prepare_ms: elapsedMs(startedAt),
       process_ms: elapsedMs(startedAt)
     });
-    return { assignee_key: assignee.assignee_key, status: 'failed', error: error.message };
+    return { assignee_key: assignee.assignee_key, status: 'failed', sent_count: results.length, failed_count: 1, results, error: error.message };
   } finally {
     inFlightAssigneeCardSends.delete(sendKey);
   }
@@ -762,9 +778,9 @@ export async function resendFailedDraftTaskCards({ draftId, assigneeKeys, cardKi
 
   return {
     status: results.some((item) => item.status === 'sent' || item.status === 'dry_run') ? 'success' : 'failed',
-    sent_count: results.filter((item) => item.status === 'sent').length,
+    sent_count: results.reduce((sum, item) => sum + (item.sent_count || (item.status === 'sent' ? 1 : 0)), 0),
     skipped_count: results.filter((item) => item.status === 'skipped').length,
-    failed_count: results.filter((item) => item.status === 'failed').length,
+    failed_count: results.reduce((sum, item) => sum + (item.failed_count || (item.status === 'failed' ? 1 : 0)), 0),
     dry_run_count: results.filter((item) => item.status === 'dry_run').length,
     results
   };
@@ -827,9 +843,9 @@ export async function forceResendDraftTaskCard({ draftId, assigneeKey, cardKind 
 
   return {
     status: result.status === 'sent' ? 'success' : 'failed',
-    sent_count: result.status === 'sent' ? 1 : 0,
+    sent_count: result.sent_count || 0,
     skipped_count: result.status === 'skipped' ? 1 : 0,
-    failed_count: result.status === 'failed' ? 1 : 0,
+    failed_count: result.failed_count || (result.status === 'failed' ? 1 : 0),
     results
   };
 }
@@ -869,9 +885,9 @@ export async function dispatchDraftTaskCards(draft, deps = {}) {
     results.push(await sendAssigneeCard(draft, assignee, 'progress', postMessage, [], diagnosticsLogger));
   }
 
-  const sentCount = results.filter((item) => item.status === 'sent').length;
+  const sentCount = results.reduce((sum, item) => sum + (item.sent_count || (item.status === 'sent' ? 1 : 0)), 0);
   const skippedCount = results.filter((item) => item.status === 'skipped').length;
-  const failedCount = taskGrouped.deliveryFailures.length + progressGrouped.deliveryFailures.length + results.filter((item) => item.status === 'failed').length;
+  const failedCount = taskGrouped.deliveryFailures.length + progressGrouped.deliveryFailures.length + results.reduce((sum, item) => sum + (item.failed_count || (item.status === 'failed' ? 1 : 0)), 0);
   const hasDeliverableCards = taskGrouped.deliverable.length > 0 || progressGrouped.deliverable.length > 0;
 
   return {
