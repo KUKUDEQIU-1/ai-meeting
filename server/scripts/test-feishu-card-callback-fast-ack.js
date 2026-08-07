@@ -284,11 +284,11 @@ async function testSingleItemChoiceGreysOnlyClickedTask() {
   const updatedDraft = await getMeetingTaskDraftById(draft.id);
 
   assert.equal(prepared.shouldProcess, true);
-  assert.equal(processingUpdate.status, 'updated');
-  assert.equal(cardUpdate.processing, undefined);
-  assert.equal(cardUpdate.itemId, '');
-  assert.equal(updatedDraft.draft_tasks[0].status, 'processing');
-  assert.equal(updatedDraft.draft_tasks[0].processing_callback_id, 'evt_single_item_no_grey');
+  assert.equal(processingUpdate.status, 'skipped');
+  assert.equal(processingUpdate.reason, 'owner_task_processing_patch_skipped');
+  assert.equal(cardUpdate, null);
+  assert.equal(updatedDraft.draft_tasks[0].status, 'pending');
+  assert.equal(updatedDraft.draft_tasks[0].processing_callback_id, '');
 }
 
 function testTestRecipientOverridePreservesOriginalAssignees() {

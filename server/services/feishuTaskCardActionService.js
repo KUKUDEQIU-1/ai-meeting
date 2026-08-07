@@ -333,6 +333,9 @@ function isSingleItemTaskAction(parsed) {
 async function updateSingleItemToProcessing(prepared, dependencies) {
   const parsed = prepared.parsed;
   const state = prepared.state;
+  if ((state.card_kind || parsed.card_kind || 'tasks') === 'tasks' && parsed.message_id) {
+    return { status: 'skipped', reason: 'owner_task_processing_patch_skipped' };
+  }
   const claim = await claimMeetingTaskDraftItemProcessing(
     parsed.draft_id,
     parsed.item_id,
