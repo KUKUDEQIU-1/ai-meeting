@@ -2,6 +2,31 @@ import crypto from 'crypto';
 import { normalizeWorkType } from '../utils/workType.js';
 
 const FEISHU_BASE_URL = 'https://open.feishu.cn';
+const FEISHU_REQUEST_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.FEISHU_BITABLE_REQUEST_TIMEOUT_MS || FEISHU_REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await globalThis.fetch(url, { ...options, signal: options.signal || controller.signal });
+    return response;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`飞书多维表格请求超时：${timeoutMs}ms`);
+      timeoutError.status = 504;
+      timeoutError.phase = 'bitable_fetch_timeout';
+      timeoutError.failureClass = 'feishu_bitable_fetch_timeout';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const fetch = fetchWithTimeout;
 export const MEETING_TASK_TABLE_SCHEMA_VERSION = 'meeting_task_v4';
 export const MEETING_TASK_TABLE_SCHEMA = [
   { name: '任务名称', type: 'text', primary: true, required: true },
@@ -419,6 +444,7 @@ export async function getTenantAccessToken() {
     });
     data = await response.json().catch(() => ({}));
   } catch (error) {
+    if (error?.phase === 'bitable_fetch_timeout') throw error;
     const tokenError = new Error(`飞书 tenant_access_token 获取失败：${error.message}`);
     tokenError.status = 502;
     throw tokenError;

@@ -22,6 +22,7 @@
     "test:master-task-audit-cards": "node scripts/test-master-task-audit-cards.js",
     "test:master-task-audit-actions": "node scripts/test-master-task-audit-actions.js",
     "test:feishu-card-action-diagnostics": "node scripts/test-feishu-card-action-diagnostics.js",
+    "test:feishu-bitable-timeouts": "node scripts/test-feishu-bitable-timeouts.js",
     "test:feishu-bitable-cache": "node scripts/test-feishu-bitable-cache.js",
     "test:master-task-audit-runner": "node scripts/test-master-task-audit-runner.js",
     "test:getnote-import": "node scripts/test-getnote-import.js",
