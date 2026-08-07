@@ -295,7 +295,7 @@ function buildStaleCard({ title = '卡片已失效', message = '此卡片已失�
   };
 }
 
-function buildFailureCard({ message }) {
+export function buildFailureCard({ message }) {
   return buildStaleCard({
     title: '任务处理失败',
     message: `任务处理失败：${truncateMessage(message || '后台处理失败，请稍后重试。', 500)}`

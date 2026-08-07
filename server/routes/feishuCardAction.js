@@ -1,6 +1,7 @@
 import express from 'express';
 import { createFeishuCardActionDispatcher } from '../services/feishuCardActionDispatcher.js';
 import { prepareFeishuCardAction, processPreparedFeishuCardAction, updatePreparedFeishuCardToProcessing } from '../services/feishuTaskCardActionService.js';
+import { buildFailureCard, patchInteractiveFeishuMessage } from '../services/feishuTaskCardService.js';
 
 function configuredVerificationToken() {
   return process.env.FEISHU_EVENT_VERIFICATION_TOKEN?.trim() || '';
@@ -98,6 +99,14 @@ function processingToast() {
   return { toast: { type: 'info', content: '已收到，正在后台处理，稍后卡片会自动更新' } };
 }
 
+function callbackMessageId(payload) {
+  return payload?.event?.context?.open_message_id || payload?.event?.context?.message_id || payload?.message_id || '';
+}
+
+function prepareFailureMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function preparedMetadataFrom(prepared, metadata) {
   return prepared.parsed
     ? {
@@ -164,6 +173,14 @@ export function createFeishuCardActionHandler({
   prepareCardAction = prepareFeishuCardAction,
   processPreparedCardAction = processPreparedFeishuCardAction,
   updateCardToProcessing = updatePreparedFeishuCardToProcessing,
+  patchPrepareFailureCard = async (payload, error) => {
+    const messageId = callbackMessageId(payload);
+    if (!messageId) return { status: 'skipped', reason: 'missing_message_id' };
+    return patchInteractiveFeishuMessage({
+      messageId,
+      card: buildFailureCard({ message: prepareFailureMessage(error) })
+    });
+  },
   diagnosticsLogger
 } = {}) {
   const dispatchAction = dispatchFeishuCardAction || createFeishuCardActionDispatcher({
@@ -213,7 +230,7 @@ export function createFeishuCardActionHandler({
         updateCardToProcessing,
         diagnosticsLogger
       });
-    }).catch((error) => {
+    }).catch(async (error) => {
       emitDiagnostics(diagnosticsLogger, {
         phase: 'prepare_async',
         failure_class: prepareFailureClass(error),
@@ -221,6 +238,25 @@ export function createFeishuCardActionHandler({
         prepare_ms: elapsedMs(startedAt),
         ...metadata
       });
+      try {
+        const result = await patchPrepareFailureCard(payload, error);
+        if (result?.status === 'skipped') {
+          console.warn('[Feishu Card Action] prepare failure card update skipped', JSON.stringify({
+            reason: result.reason || '',
+            message_id: metadata.message_id,
+            draft_id: metadata.draft_id
+          }));
+        }
+      } catch (cardError) {
+        emitDiagnostics(diagnosticsLogger, {
+          phase: 'prepare_failure_card_patch',
+          failure_class: 'feishu_prepare_failure_card_patch_failed',
+          status: cardError?.status,
+          code: cardError?.feishuResponse?.code,
+          prepare_ms: elapsedMs(startedAt),
+          ...metadata
+        });
+      }
     });
     } catch (error) {
     emitDiagnostics(diagnosticsLogger, {

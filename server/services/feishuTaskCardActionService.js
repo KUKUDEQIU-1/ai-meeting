@@ -153,6 +153,33 @@ async function updateCardAfterConfirmationFailure(dependencies, parsed, state, {
   }
 }
 
+function actionErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function processWithFailureCard(dependencies, parsed, state, action) {
+  try {
+    return await action();
+  } catch (error) {
+    const recoverable = error?.status === 400;
+    await resetDraftAssigneeConfirmationAfterFailure({
+      draftId: parsed.draft_id,
+      assigneeKey: state.assignee_key,
+      cardKind: state.card_kind,
+      errorMessage: actionErrorMessage(error),
+      callbackId: parsed.callback_id
+    });
+
+    try {
+      await updateCardAfterConfirmationFailure(dependencies, parsed, state, { recoverable });
+    } catch (cardError) {
+      console.warn(`[Feishu Card Action] failure card update failed draft_id=${parsed.draft_id} assignee=${state.assignee_key} error=${actionErrorMessage(cardError)}`);
+    }
+
+    throw error;
+  }
+}
+
 function progressUpdateFromTask(task, operatorOpenId, timestamp) {
   return {
     item_id: `${task.item_id}_progress`,
@@ -382,7 +409,7 @@ function assertOwnedItem(item, assigneeKey, message) {
   }
 }
 
-async function editTask(parsed, state, dependencies) {
+async function editTaskInternal(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -421,6 +448,10 @@ async function editTask(parsed, state, dependencies) {
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
   await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, itemId: parsed.item_id || state.split_item_id || '' });
   return feishuCallbackToast('任务已更新');
+}
+
+async function editTask(parsed, state, dependencies) {
+  return processWithFailureCard(dependencies, parsed, state, () => editTaskInternal(parsed, state, dependencies));
 }
 
 async function markTaskChoice(parsed, state, dependencies, taskChoice) {
@@ -603,7 +634,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
   }
 }
 
-async function discardTask(parsed, state, dependencies) {
+async function discardTaskInternal(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -659,7 +690,11 @@ async function discardTask(parsed, state, dependencies) {
   return feishuCallbackToast('任务已丢弃');
 }
 
-async function submitGetNoteTask(parsed, state, dependencies) {
+async function discardTask(parsed, state, dependencies) {
+  return processWithFailureCard(dependencies, parsed, state, () => discardTaskInternal(parsed, state, dependencies));
+}
+
+async function submitGetNoteTaskInternal(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -695,7 +730,11 @@ async function submitGetNoteTask(parsed, state, dependencies) {
   return feishuCallbackToast('任务已提交');
 }
 
-async function refreshGetNoteOldTaskOptions(parsed, state, dependencies) {
+async function submitGetNoteTask(parsed, state, dependencies) {
+  return processWithFailureCard(dependencies, parsed, state, () => submitGetNoteTaskInternal(parsed, state, dependencies));
+}
+
+async function refreshGetNoteOldTaskOptionsInternal(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -744,7 +783,11 @@ async function refreshGetNoteOldTaskOptions(parsed, state, dependencies) {
   }
 }
 
-async function discardGetNoteTask(parsed, state, dependencies) {
+async function refreshGetNoteOldTaskOptions(parsed, state, dependencies) {
+  return refreshGetNoteOldTaskOptionsInternal(parsed, state, dependencies);
+}
+
+async function discardGetNoteTaskInternal(parsed, state, dependencies) {
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -763,6 +806,10 @@ async function discardGetNoteTask(parsed, state, dependencies) {
   await updateDraftAssigneeCallbackId({ draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, callbackId: parsed.callback_id });
   await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind });
   return feishuCallbackToast('任务已丢弃');
+}
+
+async function discardGetNoteTask(parsed, state, dependencies) {
+  return processWithFailureCard(dependencies, parsed, state, () => discardGetNoteTaskInternal(parsed, state, dependencies));
 }
 
 async function confirmAssigneeTasks(parsed, state, dependencies) {
