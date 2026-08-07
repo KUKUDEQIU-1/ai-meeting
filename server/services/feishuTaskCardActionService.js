@@ -418,6 +418,11 @@ async function loadAuthorizedState(parsed) {
     state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
   }
 
+  if (!state && parsed.message_id && isGetNoteItemAction(parsed)) {
+    state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, 'getnote_tasks');
+    if (state) parsed.card_kind = state.card_kind;
+  }
+
   if (!state || Number(state.draft_id) !== parsed.draft_id || state.assignee_key !== parsed.assignee_key) {
     reject('飞书卡片回调未匹配到负责人状态', 404);
   }
@@ -685,6 +690,7 @@ async function markTaskChoice(parsed, state, dependencies, taskChoice) {
 }
 
 async function discardTaskInternal(parsed, state, dependencies) {
+  console.log('[Feishu Card Action] discard start', JSON.stringify({ action: parsed.action, draft_id: parsed.draft_id, item_id: parsed.item_id, message_id: parsed.message_id, card_kind: state.card_kind }));
   const draft = await getMeetingTaskDraftById(parsed.draft_id);
   const currentTask = (draft?.draft_tasks || []).find((task) => String(task.item_id || '') === String(parsed.item_id || ''));
 
@@ -737,6 +743,7 @@ async function discardTaskInternal(parsed, state, dependencies) {
     });
   }
   await dependencies.updateCard({ messageId: parsed.message_id, draftId: parsed.draft_id, assigneeKey: state.assignee_key, cardKind: state.card_kind, terminal: itemActionTerminal(state, hasRemainingScopedTasks), compactRefresh: state.card_kind === 'getnote_tasks', itemId: scopedItemId });
+  console.log('[Feishu Card Action] discard complete', JSON.stringify({ draft_id: parsed.draft_id, item_id: parsed.item_id, card_kind: state.card_kind }));
   return feishuCallbackToast('任务已丢弃');
 }
 

@@ -448,21 +448,21 @@ export async function getDraftAssigneeState(draftId, assigneeKey, cardKind = 'ta
 
 export async function getDraftAssigneeStateByMessageId(messageId) {
   if (!messageId) return null;
-  const aggregate = await get('SELECT * FROM meeting_task_draft_assignees WHERE card_message_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [messageId]);
-  if (aggregate) return aggregate;
-
   const split = await get(
     `SELECT assignees.*, messages.item_id AS split_item_id, messages.card_message_id AS split_card_message_id
      FROM meeting_task_draft_card_messages messages
      JOIN meeting_task_draft_assignees assignees
        ON assignees.draft_id = messages.draft_id
       AND assignees.assignee_key = messages.assignee_key
+      AND assignees.card_kind = messages.card_kind
      WHERE messages.card_message_id = ?
      ORDER BY messages.updated_at DESC, messages.id DESC
      LIMIT 1`,
     [messageId]
   );
-  return split || null;
+  if (split) return split;
+
+  return get('SELECT * FROM meeting_task_draft_assignees WHERE card_message_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1', [messageId]);
 }
 
 export async function getDraftCardMessageByMessageId(messageId) {

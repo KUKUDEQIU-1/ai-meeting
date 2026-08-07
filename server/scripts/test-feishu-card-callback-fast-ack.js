@@ -552,6 +552,48 @@ async function testGetNoteSplitCardSubmitWithLegacyKind(suffix, eventId) {
   assert.equal(updates[0].messageId, messageId);
 }
 
+async function testSplitMessageStateWinsOverConflictingAggregateState() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: 'callback-conflicting-card-kind',
+    meetingTitle: '会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-21',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'item_conflicting_card_kind', task_name: '原任务', assignee: '张三' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_1',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+  const messageId = `om_conflicting_card_kind_${draft.id}`;
+
+  await upsertDraftAssigneeState({ draftId: draft.id, assigneeKey: '张三', cardKind: 'tasks', assigneeName: '张三', receiveId: 'ou_actor', cardMessageId: messageId });
+  await upsertDraftAssigneeState({ draftId: draft.id, assigneeKey: '张三', cardKind: 'getnote_tasks', assigneeName: '张三', receiveId: 'ou_actor' });
+  await upsertDraftCardMessage({ draftId: draft.id, assigneeKey: '张三', cardKind: 'getnote_tasks', itemId: 'item_conflicting_card_kind', cardMessageId: messageId });
+
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'getnote_submit_task',
+    draftId: draft.id,
+    itemId: 'item_conflicting_card_kind',
+    eventId: 'evt_conflicting_card_kind',
+    messageId,
+    cardKind: 'tasks'
+  }));
+
+  assert.equal(prepared.state.card_kind, 'getnote_tasks');
+  assert.equal(prepared.parsed.card_kind, 'getnote_tasks');
+  assert.equal(prepared.shouldProcess, true);
+}
+
 async function testCurrentCardMessageIdStillProcesses() {
   const draft = await createDraftWithAssigneeState('current-card');
   const response = await handleFeishuCardAction(buildActionPayload({
@@ -770,6 +812,7 @@ await testStaleCardMessageIdDoesNotMutateDraft();
 await testLegacyGetNoteMessageRestoresCardKindFromStoredState();
 await testGetNoteSplitCardSubmitWithLegacyKind('auto-getnote-split', 'evt_auto_getnote_split');
 await testGetNoteSplitCardSubmitWithLegacyKind('manual-getnote-split', 'evt_manual_getnote_split');
+await testSplitMessageStateWinsOverConflictingAggregateState();
 await testCurrentCardMessageIdStillProcesses();
 await testStaleSplitCardMessageIdDoesNotMutateDraft();
 await testUnmappedAggregateMessageIdStillProcessesByLegacyFallback();
