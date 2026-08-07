@@ -362,6 +362,10 @@ async function loadAuthorizedState(parsed) {
     ? await getDraftAssigneeStateByMessageId(parsed.message_id)
     : await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
 
+  if (state?.card_kind && state.card_kind !== parsed.card_kind) {
+    parsed.card_kind = state.card_kind;
+  }
+
   if (!state && parsed.message_id && isGetNoteItemAction(parsed) && parsed.item_id) {
     const message = await getDraftCardMessageByMessageId(parsed.message_id);
 

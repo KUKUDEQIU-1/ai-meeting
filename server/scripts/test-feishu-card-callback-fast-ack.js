@@ -479,6 +479,32 @@ async function testStaleCardMessageIdDoesNotMutateDraft() {
   assert.equal(updatedDraft.draft_tasks[0].task_name, '原任务');
 }
 
+async function testLegacyGetNoteMessageRestoresCardKindFromStoredState() {
+  const draft = await createDraftWithAssigneeState('legacy-getnote-kind', { cardKind: 'getnote_tasks' });
+  const messageId = `om_legacy_getnote_kind_${draft.id}`;
+
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    cardKind: 'getnote_tasks',
+    itemId: `item_legacy-getnote-kind`,
+    cardMessageId: messageId
+  });
+
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'mark_task_as_new',
+    draftId: draft.id,
+    itemId: `item_legacy-getnote-kind`,
+    eventId: 'evt_legacy_getnote_kind',
+    messageId,
+    cardKind: 'tasks'
+  }));
+
+  assert.equal(prepared.parsed.card_kind, 'getnote_tasks');
+  assert.equal(prepared.state.card_kind, 'getnote_tasks');
+  assert.equal(prepared.shouldProcess, true);
+}
+
 async function testCurrentCardMessageIdStillProcesses() {
   const draft = await createDraftWithAssigneeState('current-card');
   const response = await handleFeishuCardAction(buildActionPayload({
@@ -694,6 +720,7 @@ await testSingleItemChoiceGreysOnlyClickedTask();
 await testSiblingItemProcessesWhileFirstItemIsProcessing();
 await testConfirmClaimOnlyOnce();
 await testStaleCardMessageIdDoesNotMutateDraft();
+await testLegacyGetNoteMessageRestoresCardKindFromStoredState();
 await testCurrentCardMessageIdStillProcesses();
 await testStaleSplitCardMessageIdDoesNotMutateDraft();
 await testUnmappedAggregateMessageIdStillProcessesByLegacyFallback();
