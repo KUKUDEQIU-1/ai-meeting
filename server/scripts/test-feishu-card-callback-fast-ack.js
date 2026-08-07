@@ -206,6 +206,32 @@ async function testProcessingPatchHangStillProcessesAction() {
   assert.equal(res.statusCode, 200);
 }
 
+async function testHangingPrepareTimesOutAndPatchesOriginalCard() {
+  const updates = [];
+  const diagnostics = [];
+  const handler = createFeishuCardActionHandler({
+    prepareTimeoutMs: 20,
+    prepareCardAction: async () => new Promise(() => {}),
+    patchPrepareFailureCard: async (payload, error) => {
+      updates.push({ payload, error });
+      return { status: 'updated' };
+    },
+    diagnosticsLogger: { warn: (record) => diagnostics.push(record) }
+  });
+  const req = { body: buildActionPayload({ action: 'mark_task_as_new', draftId: 1, eventId: 'evt_prepare_timeout', messageId: 'om_prepare_timeout' }) };
+  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+
+  await handler(req, res, (error) => { throw error; });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].payload.event.context.open_message_id, 'om_prepare_timeout');
+  assert.equal(updates[0].error.status, 504);
+  assert.equal(diagnostics.some((item) => item.failure_class === 'prepare_timeout'), true);
+}
+
 async function testPrepareFailurePatchesOriginalCard() {
   const updates = [];
   const handler = createFeishuCardActionHandler({
@@ -660,6 +686,7 @@ await testFastAckDispatchDoesNotAwaitSlowHandler();
 await testSlowPrepareReturnsProcessingAckBeforePreparationResolves();
 await testProcessingPatchFailureStillProcessesAction();
 await testProcessingPatchHangStillProcessesAction();
+await testHangingPrepareTimesOutAndPatchesOriginalCard();
 await testPrepareFailurePatchesOriginalCard();
 testTestRecipientOverridePreservesOriginalAssignees();
 await initDatabase();

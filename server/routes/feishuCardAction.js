@@ -72,6 +72,7 @@ function emitDiagnostics(logger, record) {
 }
 
 function prepareFailureClass(error) {
+  if (error?.failureClass) return error.failureClass;
   const status = Number(error?.status);
 
   if (status === 404) return 'missing_state';
@@ -173,6 +174,7 @@ export function createFeishuCardActionHandler({
   prepareCardAction = prepareFeishuCardAction,
   processPreparedCardAction = processPreparedFeishuCardAction,
   updateCardToProcessing = updatePreparedFeishuCardToProcessing,
+  prepareTimeoutMs = 15_000,
   patchPrepareFailureCard = async (payload, error) => {
     const messageId = callbackMessageId(payload);
     if (!messageId) return { status: 'skipped', reason: 'missing_message_id' };
@@ -220,7 +222,17 @@ export function createFeishuCardActionHandler({
     }
 
     res.json(processingToast());
-    prepareCardAction(payload).then((prepared) => {
+    const preparePromise = Promise.resolve().then(() => prepareCardAction(payload));
+    const timeoutPromise = new Promise((_, reject) => {
+      const timer = setTimeout(() => {
+        const error = new Error('卡片状态读取超时，请稍后重试');
+        error.status = 504;
+        error.failureClass = 'prepare_timeout';
+        reject(error);
+      }, prepareTimeoutMs);
+      preparePromise.then(() => clearTimeout(timer), () => clearTimeout(timer));
+    });
+    Promise.race([preparePromise, timeoutPromise]).then((prepared) => {
       dispatchPreparedAction({
         prepared,
         metadata,
