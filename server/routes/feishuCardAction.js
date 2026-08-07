@@ -129,19 +129,19 @@ function dispatchPreparedAction({ prepared, metadata, prepareMs, dispatchAction,
     dispatchAction(response, async () => {
       const processStartedAt = performance.now();
       try {
-        try {
-          await updateCardToProcessing(prepared);
-        } catch (error) {
-          emitDiagnostics(diagnosticsLogger, {
-            phase: 'processing_card_patch',
-            failure_class: 'feishu_processing_card_patch_failed',
-            status: error?.status,
-            code: error?.feishuResponse?.code,
-            prepare_ms: prepareMs,
-            process_ms: elapsedMs(processStartedAt),
-            ...preparedMetadata
+        Promise.resolve()
+          .then(() => updateCardToProcessing(prepared))
+          .catch((error) => {
+            emitDiagnostics(diagnosticsLogger, {
+              phase: 'processing_card_patch',
+              failure_class: 'feishu_processing_card_patch_failed',
+              status: error?.status,
+              code: error?.feishuResponse?.code,
+              prepare_ms: prepareMs,
+              process_ms: elapsedMs(processStartedAt),
+              ...preparedMetadata
+            });
           });
-        }
         await processPreparedCardAction(prepared);
       } catch (error) {
         emitDiagnostics(diagnosticsLogger, {
