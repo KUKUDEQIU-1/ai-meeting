@@ -137,15 +137,15 @@ function testCardPayloadContainsOnlyOwnedTasks() {
 async function testManualOwnerResendResetsConfirmedState() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
-    sourceId: 'manual-owner-resend-reset',
-    meetingTitle: '例会',
+    sourceId: `manual-owner-resend-reset-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'GetNote 已确认负责人手动重发测试',
     meetingSource: 'Get笔记',
     meetingTime: '2026-08-07',
     summary: 'summary',
     segments: [],
     discardedSegments: [],
     draftTasks: [
-      { item_id: 'owner_reset_1', task_name: '修复续租问题', assignee: '简学勤', status: 'pending' }
+      { item_id: 'owner_reset_1', task_name: '修复续租问题', assignee: '简学勤', owner: '简学勤', needs_confirmation: true, status: 'pending' }
     ],
     existingMatches: [],
     uncertainTasks: [],
@@ -180,23 +180,29 @@ async function testManualOwnerResendResetsConfirmedState() {
   assert.equal(before?.confirmation_status, 'confirmed');
   assert.equal(Boolean(before?.confirmed_at), true);
 
-  const result = await dispatchDraftTaskCards(draft, {
-    assigneeMap: new Map([
-      ['简学勤', { assignee_key: '简学勤', assignee_name: '简学勤', receive_id_type: 'open_id', receive_id: 'ou_jian' }]
-    ]),
+  const sentMessages = [];
+  const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    assigneeMap: parseAssigneeMap(JSON.stringify({ 简学勤: 'ou_jian' })),
     listGroupMembers: async () => ({ status: 'failed', members: [] }),
     listMasterTaskAuditRecords: async () => [],
-    postMessage: async () => 'om_owner_new_manual_resend',
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_owner_new_manual_resend_${draft.id}_${sentMessages.length}`;
+    },
     forceCardResend: true,
     freshOwnerTaskConfirmationRound: true
   });
 
-  assert.equal(result.status, 'success');
+  assert.notEqual(result.status, 'failed');
+  assert.ok((result.sent_count || 0) >= 1 || result.results?.some((item) => item.status === 'sent'));
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].receiveId, 'ou_jian');
   const after = await getDraftAssigneeState(draft.id, '简学勤', 'tasks');
   assert.equal(after?.confirmation_status, 'pending');
   assert.equal(after?.confirmed_at || '', '');
   assert.equal(after?.confirmed_by || '', '');
-  assert.equal(after?.card_message_id, 'om_owner_new_manual_resend');
+  assert.equal(after?.card_message_id, `om_owner_new_manual_resend_${draft.id}_1`);
 }
 
 function testTaskCardInputDefaultsAreBoundedForLongDraftContent() {
@@ -5452,6 +5458,92 @@ async function testFailureCardUpdateUsesNonFormCard() {
   }
 }
 
+async function testOwnerScopedHandledTaskForcesTerminalPatchCard() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  let patchedCard = null;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `owner-terminal-patch-${Date.now()}`,
+    meetingTitle: '任务归类会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-08-03',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [{ item_id: 'handled_owner_1', task_name: '优化任务时间卡片', assignee: '简学勤', status: 'discarded' }],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_owner_terminal',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_actor',
+    cardMessageId: 'om_owner_terminal_card',
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    cardKind: 'tasks',
+    itemId: 'handled_owner_1',
+    cardMessageId: 'om_owner_terminal_card'
+  });
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/im/v1/messages/') && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      patchedCard = JSON.parse(body.content);
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const result = await updateFeishuTaskCard({
+      messageId: 'om_owner_terminal_card',
+      draftId: draft.id,
+      assigneeKey: '简学勤',
+      cardKind: 'tasks',
+      itemId: 'handled_owner_1',
+      terminal: false
+    });
+
+    assert.equal(result.status, 'updated');
+    assert.equal(patchedCard.header.title.content, '会议任务已确认');
+    const form = patchedCard.body.elements.find((item) => item.tag === 'form');
+    assert.ok(form);
+    assert.equal(form.elements.some((item) => item.tag === 'button' && item.form_action_type === 'submit'), true);
+    assert.match(JSON.stringify(patchedCard), /已丢弃/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
+}
+
 async function testRecoverableFailureCardUpdateKeepsEditableControls() {
   const previousFetch = globalThis.fetch;
   const previousAppId = process.env.FEISHU_APP_ID;
@@ -5739,6 +5831,7 @@ await testConfirmedProgressUsesDraftMasterTableWhenFallbackEnvDiffers();
 await testConfirmedNewTaskCreateRecordWritesFollowerField();
 await testConfirmedNewTaskCreateRecordSkipsInvalidPersonFollowerField();
 await testFailureCardUpdateUsesNonFormCard();
+await testOwnerScopedHandledTaskForcesTerminalPatchCard();
 await testRecoverableFailureCardUpdateKeepsEditableControls();
 await testProgressConfirmationUsesProgressOnlyAction();
 

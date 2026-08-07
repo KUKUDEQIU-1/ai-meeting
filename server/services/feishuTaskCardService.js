@@ -409,6 +409,18 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   };
   const scopedItemId = exactMessage?.item_id || scopedMessage?.item_id || state.split_item_id || '';
   const effectiveCardKind = state.card_kind || cardKind;
+  const ownerScopedTasks = effectiveCardKind === 'tasks'
+    ? itemsForAssignee(draft.draft_tasks || [], assignee.assignee_key)
+      .filter((task) => !scopedItemId || String(task.item_id || '') === String(scopedItemId))
+    : [];
+  const effectiveTerminal = terminal || (
+    effectiveCardKind === 'tasks'
+    && ownerScopedTasks.length > 0
+    && ownerScopedTasks.every((task) => task.status && task.status !== 'pending')
+  );
+  const forcedTerminalReason = !terminal && effectiveTerminal && effectiveCardKind === 'tasks'
+    ? 'owner_scoped_tasks_all_handled'
+    : '';
   if (processing) {
     const taskName = String(draft.meeting_title || draft.title || draft.topic || '').trim();
     const card = buildTaskCardProcessingCard({
@@ -449,15 +461,15 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   }
   const listRecords = memoizeMasterTaskAuditRecords(deps.listMasterTaskAuditRecords || listMasterTaskAuditRecords);
   const scopedTasks = (draft.draft_tasks || []).filter((task) => itemScopeIncludes(scopedItemId, task.item_id));
-  const oldTaskOptionsByItemId = !terminal && effectiveCardKind === 'getnote_tasks'
+  const oldTaskOptionsByItemId = !effectiveTerminal && effectiveCardKind === 'getnote_tasks'
     ? await loadGetNoteOldTaskOptionsByItemId(scopedTasks, listRecords)
     : null;
-  const oldTaskOptions = terminal || compactRefresh || effectiveCardKind === 'getnote_tasks'
+  const oldTaskOptions = effectiveTerminal || compactRefresh || effectiveCardKind === 'getnote_tasks'
     ? []
     : effectiveCardKind === 'tasks'
       ? await loadOldTaskOptionsForAssignee(assignee.assignee_key, listRecords)
       : [];
-  const assigneeOptions = !terminal && effectiveCardKind === 'getnote_tasks'
+  const assigneeOptions = !effectiveTerminal && effectiveCardKind === 'getnote_tasks'
     ? await buildMasterAssigneeOptions(listRecords)
     : [];
   const confirmationError = state.confirmation_error || '';
@@ -466,14 +478,16 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
     : draft;
   const card = confirmationError && !recoverableFailure
     ? buildFailureCard({ message: confirmationError })
-    : buildCardForKind({ cardKind: effectiveCardKind, draft: cardDraft, assignee, terminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
+    : buildCardForKind({ cardKind: effectiveCardKind, draft: cardDraft, assignee, terminal: effectiveTerminal, itemId: scopedItemId, oldTaskOptions, oldTaskOptionsByItemId, assigneeOptions });
   const patchStartedAt = performance.now();
   const cardVariant = confirmationError && !recoverableFailure ? 'failure' : 'normal';
   logCardActionEvent('feishu_card_action.card_patch.start', {
     ...patchContext,
     target_message_id: maskIdentifier(targetMessageId),
     card_variant: cardVariant,
-    effective_card_kind: effectiveCardKind
+    effective_card_kind: effectiveCardKind,
+    effective_terminal: effectiveTerminal,
+    forced_terminal_reason: forcedTerminalReason
   });
   try {
     const result = await patchInteractiveFeishuMessage({ messageId: targetMessageId, card });
@@ -482,6 +496,8 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
       target_message_id: maskIdentifier(targetMessageId),
       card_variant: cardVariant,
       effective_card_kind: effectiveCardKind,
+      effective_terminal: effectiveTerminal,
+      forced_terminal_reason: forcedTerminalReason,
       update_status: result?.status || 'updated',
       patch_ms: elapsedMs(patchStartedAt)
     });
@@ -492,6 +508,8 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
       target_message_id: maskIdentifier(targetMessageId),
       card_variant: cardVariant,
       effective_card_kind: effectiveCardKind,
+      effective_terminal: effectiveTerminal,
+      forced_terminal_reason: forcedTerminalReason,
       patch_ms: elapsedMs(patchStartedAt),
       http_status: error?.status,
       feishu_code: error?.feishuResponse?.code,
