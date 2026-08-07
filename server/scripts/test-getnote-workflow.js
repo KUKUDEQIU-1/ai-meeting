@@ -514,6 +514,8 @@ async function testBatchSyncDefaultsForceCardResendToFalse() {
   });
 
   assert.equal(importedOptions.length, 1);
+  assert.equal(importedOptions[0].options.force, false);
+  assert.equal(importedOptions[0].options.reanalyze, false);
   assert.equal(importedOptions[0].options.forceCardResend, false);
 }
 
