@@ -293,6 +293,31 @@ async function loadCandidateGetNotes({ scanLimit, syncTag, requireTag, getNoteLi
   return mergedNotes;
 }
 
+export async function listRecentGetNotes({ limit = 20, tag, ignoreTag = false, getNoteListImpl = getNoteList, getTopicNoteListImpl = getTopicNoteList } = {}) {
+  const scanLimit = Number(limit) > 0 ? Number(limit) : envNumber('GETNOTE_SCAN_LIMIT', 20);
+  const requireTag = !ignoreTag && envBool('GETNOTE_REQUIRE_TAG', false);
+  const syncTag = tag || process.env.GETNOTE_SYNC_TAG?.trim() || '';
+  const notes = await loadCandidateGetNotes({ scanLimit, syncTag, requireTag, getNoteListImpl, getTopicNoteListImpl });
+
+  return {
+    success: true,
+    status: 'success',
+    notes: notes.slice(0, scanLimit).map((note) => ({
+      note_id: getNoteId(note),
+      title: getNoteTitle(note),
+      created_at: note?.created_at || note?.createdAt || note?.create_time || note?.created_time || null,
+      updated_at: note?.updated_at || note?.updatedAt || null,
+      tags: getNoteTags(note),
+      created_today: isCreatedOnSameLocalDay(note),
+      title_eligible: isDatedTodayWorkArrangementTitle(getNoteTitle(note))
+    }))
+  };
+}
+
+export async function analyzeSelectedGetNote(noteId, options = {}) {
+  return importGetNoteMeeting(noteId, options);
+}
+
 function parseJson(value) {
   if (!value) {
     return null;
@@ -527,6 +552,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
   let meetingTable = null;
   let notifyStatus = 'pending';
   let notifyError = null;
+  const importStartedAt = performance.now();
   const { notifyTargetType, notifyTargetId } = getNotifyTarget();
 
   try {
@@ -541,9 +567,10 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       };
     }
 
+    const detailStartedAt = performance.now();
     note = options.note || await getNoteDetail(normalizedNoteId);
     meetingTitle = note.title || 'Get笔记会议';
-    console.log(`[GetNote Sync] note detail loaded note_id=${normalizedNoteId} title=${meetingTitle}`);
+    console.log(`[GetNote Sync] note detail loaded note_id=${normalizedNoteId} title=${meetingTitle} elapsed_ms=${Math.round(performance.now() - detailStartedAt)}`);
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,
@@ -665,6 +692,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     if (aiResult?.tasks) {
       console.log(`[GetNote Sync] reuse cached analysis note_id=${normalizedNoteId} tasks_count=${aiResult.tasks.length}`);
     } else {
+      const analysisStartedAt = performance.now();
       aiResult = await (options.analyzeMeetingText || analyzeMeetingText)(rawText, 'Get笔记', {
         content_source: contentMeta.source,
         content_length: contentMeta.length,
@@ -677,7 +705,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
       const rawTasksBeforeHistory = countRawTasks(aiResult);
       const candidateTasksBeforeHistory = aiResult.tasks.length;
       const removedTasksBeforeHistory = aiResult.removed_tasks?.length || 0;
-      console.log(`[GetNote Sync] AI analyzed note_id=${normalizedNoteId} summary_length=${aiResult.summary.length} raw_tasks_count=${rawTasksBeforeHistory} candidate_tasks_count=${candidateTasksBeforeHistory} removed_tasks_count=${removedTasksBeforeHistory}`);
+      console.log(`[GetNote Sync] AI analyzed note_id=${normalizedNoteId} summary_length=${aiResult.summary.length} raw_tasks_count=${rawTasksBeforeHistory} candidate_tasks_count=${candidateTasksBeforeHistory} removed_tasks_count=${removedTasksBeforeHistory} elapsed_ms=${Math.round(performance.now() - analysisStartedAt)}`);
 
       const historyResult = await (options.suppressHistoricalTasks || suppressHistoricalTasks)(aiResult.tasks, {
         note_id: normalizedNoteId,
@@ -714,9 +742,10 @@ export async function importGetNoteMeeting(noteId, options = {}) {
 
     console.log(`[GetNote Sync] load master task table start note_id=${normalizedNoteId} title=${meetingTitle}`);
 
+    const tableStartedAt = performance.now();
     meetingTable = await (options.getMasterTaskTable || getMasterTaskTable)();
 
-    console.log(`[GetNote Sync] master task table ready table_id=${meetingTable.table_id} table_name=${meetingTable.table_name} table_url=${meetingTable.table_url || ''}`);
+    console.log(`[GetNote Sync] master task table ready table_id=${meetingTable.table_id} table_name=${meetingTable.table_name} table_url=${meetingTable.table_url || ''} elapsed_ms=${Math.round(performance.now() - tableStartedAt)}`);
 
     if (!meetingTable.table_id) {
       throw new Error('Get笔记同步流程必须配置 FEISHU_MASTER_TASK_TABLE_ID，禁止默认写入 FEISHU_BITABLE_TABLE_ID');
@@ -765,9 +794,10 @@ export async function importGetNoteMeeting(noteId, options = {}) {
     console.log(`[GetNote Sync] draft ready note_id=${normalizedNoteId} draft_id=${draft.id} action=${existingDraft ? 'updated' : 'created'} today_tasks_count=${todayTasksCount} progress_updates_count=${progressUpdatesCount} needs_confirmation_count=${needsConfirmationCount}`);
     const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
     console.log(`[GetNote Sync] card dispatch mode note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks dispatch_mode=${cardDispatchMode || 'unset'}`);
+    const cardStartedAt = performance.now();
     const feishuResult = await dispatchGetNoteTaskCard(draft, { ...(options.cardDispatchDeps || {}), dispatchMode: cardDispatchMode, force: options.force, forceCardResend: options.forceCardResend });
     const dispatchSummary = summarizeDispatchResult(feishuResult);
-    console.log(`[GetNote Sync] card dispatch result note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count}`);
+    console.log(`[GetNote Sync] card dispatch result note_id=${normalizedNoteId} draft_id=${draft.id} card_kind=getnote_tasks status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count} elapsed_ms=${Math.round(performance.now() - cardStartedAt)}`);
 
     if (feishuResult.status !== 'success') {
       const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片发送失败');
@@ -868,6 +898,7 @@ export async function importGetNoteMeeting(noteId, options = {}) {
 
     await (options.addTags || addTagsToNote)(normalizedNoteId, [process.env.GETNOTE_PROCESSED_TAG?.trim() || '已同步飞书']);
 
+    console.log(`[GetNote Sync] import complete note_id=${normalizedNoteId} status=pending_confirmation elapsed_ms=${Math.round(performance.now() - importStartedAt)}`);
     return {
       success: true,
       note_id: normalizedNoteId,
@@ -952,6 +983,7 @@ export async function syncRecentGetNotes({
   ignoreTag = false,
   reanalyze = false,
   force = false,
+  forceCardResend = false,
   getNoteListImpl = getNoteList,
   getTopicNoteListImpl = getTopicNoteList,
   getNoteDetailImpl = getNoteDetail,
@@ -1051,7 +1083,7 @@ export async function syncRecentGetNotes({
       }
 
       console.log(`[GetNote Sync] import start note_id=${noteId} title=${title}`);
-      const result = await importGetNoteMeetingImpl(noteId, detailNote ? { note: detailNote, skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force } : { skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force });
+      const result = await importGetNoteMeetingImpl(noteId, detailNote ? { note: detailNote, skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force, forceCardResend } : { skipIfTranscriptNotReady: true, minNoteAgeMinutes, reanalyze, force, forceCardResend });
 
       if (result.status === 'skipped') {
         skipped.push({

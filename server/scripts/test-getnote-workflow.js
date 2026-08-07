@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { all, get, initDatabase, run } from '../db/database.js';
 import { parseAssigneeMap } from '../services/feishuTaskCardPure.js';
-import { extractGetNoteContentWithMeta } from '../services/getnoteClient.js';
+import { extractGetNoteContentWithMeta, getNoteList } from '../services/getnoteClient.js';
 import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { listDraftCardMessages } from '../services/taskDraftService.js';
 
@@ -80,6 +80,36 @@ function workflowOptions(noteId, content, sentCards) {
     writeMeetingIndex: async () => ({ status: 'skipped' }),
     addTags: async () => ({ status: 'skipped' })
   };
+}
+
+async function testGetNoteListForwardsLimit() {
+  const previousFetch = globalThis.fetch;
+  let requestedUrl = '';
+
+  globalThis.fetch = async (url) => {
+    requestedUrl = String(url);
+    return {
+      status: 200,
+      ok: true,
+      text: async () => JSON.stringify({ data: { items: [] } })
+    };
+  };
+
+  const previousApiKey = process.env.GETNOTE_API_KEY;
+  const previousClientId = process.env.GETNOTE_CLIENT_ID;
+  process.env.GETNOTE_API_KEY = 'test-api-key';
+  process.env.GETNOTE_CLIENT_ID = 'test-client-id';
+
+  try {
+    await getNoteList({ limit: 7 });
+    assert.equal(new URL(requestedUrl).searchParams.get('limit'), '7');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousApiKey === undefined) delete process.env.GETNOTE_API_KEY;
+    else process.env.GETNOTE_API_KEY = previousApiKey;
+    if (previousClientId === undefined) delete process.env.GETNOTE_CLIENT_ID;
+    else process.env.GETNOTE_CLIENT_ID = previousClientId;
+  }
 }
 
 async function testImportCreatesPendingDraftAndSkipsUnchangedContent() {
@@ -428,6 +458,65 @@ async function testBatchSyncImportsOnlyCurrentDayNotesFromDirectList() {
   assert.equal(result.failed.length, 0);
 }
 
+async function testBatchSyncForwardsForceCardResendToImport() {
+  const importedOptions = [];
+  const notes = [{
+    note_id: 'latest_note_force_resend',
+    title: '8.4团队每日工作任务同步会议',
+    created_at: '2026-08-04 10:00:00',
+    audio: { transcript: '张三今天修复最新上传文档的同步问题。' }
+  }];
+
+  const result = await syncRecentGetNotes({
+    limit: 1,
+    ignoreTag: true,
+    force: true,
+    reanalyze: true,
+    forceCardResend: true,
+    now: new Date('2026-08-04T03:00:00+08:00'),
+    getNoteListImpl: async () => ({ notes }),
+    getTopicNoteListImpl: async () => ({ notes: [] }),
+    getNoteDetailImpl: async (noteId) => notes.find((item) => item.note_id === noteId),
+    importGetNoteMeetingImpl: async (noteId, options) => {
+      importedOptions.push({ noteId, options });
+      return { note_id: noteId, status: 'pending_confirmation' };
+    }
+  });
+
+  assert.equal(result.failed.length, 0);
+  assert.equal(importedOptions.length, 1);
+  assert.equal(importedOptions[0].noteId, 'latest_note_force_resend');
+  assert.equal(importedOptions[0].options.force, true);
+  assert.equal(importedOptions[0].options.reanalyze, true);
+  assert.equal(importedOptions[0].options.forceCardResend, true);
+}
+
+async function testBatchSyncDefaultsForceCardResendToFalse() {
+  const importedOptions = [];
+  const notes = [{
+    note_id: 'latest_note_default_resend',
+    title: '8.4团队每日工作任务同步会议',
+    created_at: '2026-08-04 10:00:00',
+    audio: { transcript: '张三今天修复最新上传文档的同步问题。' }
+  }];
+
+  await syncRecentGetNotes({
+    limit: 1,
+    ignoreTag: true,
+    now: new Date('2026-08-04T03:00:00+08:00'),
+    getNoteListImpl: async () => ({ notes }),
+    getTopicNoteListImpl: async () => ({ notes: [] }),
+    getNoteDetailImpl: async (noteId) => notes.find((item) => item.note_id === noteId),
+    importGetNoteMeetingImpl: async (noteId, options) => {
+      importedOptions.push({ noteId, options });
+      return { note_id: noteId, status: 'pending_confirmation' };
+    }
+  });
+
+  assert.equal(importedOptions.length, 1);
+  assert.equal(importedOptions[0].options.forceCardResend, false);
+}
+
 async function testBatchSyncDoesNotFallBackToOlderEligibleNote() {
   const detailedNotes = [];
   const importedNotes = [];
@@ -572,9 +661,12 @@ async function testBatchSyncSkipsHistoricalTopicNotes() {
 }
 
 await initDatabase();
+await testGetNoteListForwardsLimit();
 testGetNoteSummaryIsNotUsedAsTaskSource();
 testGetNoteSyncOnlyAllowsDatedTodayWorkArrangementTitles();
 await testBatchSyncImportsOnlyCurrentDayNotesFromDirectList();
+await testBatchSyncForwardsForceCardResendToImport();
+await testBatchSyncDefaultsForceCardResendToFalse();
 await testBatchSyncDoesNotFallBackToOlderEligibleNote();
 await testBatchSyncDiscoversCurrentDayNoteFromTopicList();
 await testBatchSyncSkipsHistoricalTopicNotes();
