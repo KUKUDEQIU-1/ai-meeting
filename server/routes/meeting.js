@@ -4,8 +4,9 @@ import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingServic
 import { analyzeSelectedGetNote, importGetNoteMeeting, listRecentGetNotes, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import { listMasterTaskAuditRecords } from '../services/feishuBitableClient.js';
-import { sendMasterTaskAuditCard, updateMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
-import { getMasterTaskAuditLogById, listMasterTaskAuditLogs, markMasterTaskAuditAction, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
+import { sendMasterTaskAuditCard, sendMasterTaskInspectionAdminSummary, updateMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
+import { getMasterTaskAuditLog, getMasterTaskAuditLogById, listMasterTaskAuditLogs, listMasterTaskInspectionHistory, markMasterTaskAuditAction, markMasterTaskAuditFailed, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
+import { auditMasterTaskTable } from '../services/masterTaskAuditService.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
@@ -17,6 +18,15 @@ const router = express.Router();
 
 function requestBool(value) {
   return value === true || value === 'true' || value === '1';
+}
+
+function beijingDateKey(value = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(value);
 }
 
 function getNoteImportOptions(body) {
@@ -614,6 +624,86 @@ router.get('/maintenance/master-task-audit-cards', requireMaintenanceToken, asyn
 
     res.json({ success: true, audit_date: auditDate || null, active_only: activeOnly, cards });
   } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/maintenance/master-task-audit/run', requireMaintenanceToken, async (req, res, next) => {
+  const route = '/api/meeting/maintenance/master-task-audit/run';
+  const execute = requestBool(req.body?.execute);
+  const dryRunValue = req.body?.dry_run ?? req.body?.dryRun;
+  const dryRun = dryRunValue === undefined ? undefined : requestBool(dryRunValue);
+
+  try {
+    if (dryRun === false && !execute) {
+      res.status(400).json({
+        success: false,
+        status: 'validation_failed',
+        message: 'execute must be true to send master task inspection cards'
+      });
+      return;
+    }
+
+    console.log(`[Master Task Audit] manual trigger start route=${route} execute=${execute} dry_run=${dryRun ?? 'env'}`);
+    const result = await feishuScanCoordinator.runScan('master_task_audit', () => auditMasterTaskTable({
+      dryRun,
+      listRecords: () => listMasterTaskAuditRecords({ inspection: true }),
+      getAuditLog: getMasterTaskAuditLog,
+      getAuditHistory: (recordId) => listMasterTaskInspectionHistory(recordId, beijingDateKey()),
+      createAuditLog: upsertMasterTaskAuditLog,
+      sendCard: sendMasterTaskAuditCard,
+      sendAdminSummary: sendMasterTaskInspectionAdminSummary,
+      markFailed: markMasterTaskAuditFailed
+    }), {
+      route,
+      capability: 'master_task_inspection_manual',
+      equivalenceKey: 'master-task-audit-active-run',
+      mode: 'master_task_audit_manual'
+    });
+
+    const failedResults = (result.results || []).filter((item) => item.action === 'failed');
+    const status = result.status === 'already_running'
+      ? 'already_running'
+      : failedResults.length || result.admin_summary_delivery?.status === 'failed' ? 'partial_failed' : result.status;
+    const success = status !== 'partial_failed' && status !== 'already_running';
+
+    if (failedResults.length || result.admin_summary_delivery?.status === 'failed') {
+      console.error('[Master Task Audit] manual trigger partial failure', JSON.stringify({
+        route,
+        audit_date: result.audit_date,
+        summary: result.summary,
+        failed_results: failedResults,
+        admin_summary_delivery: result.admin_summary_delivery
+      }));
+    } else {
+      console.log('[Master Task Audit] manual trigger complete', JSON.stringify({
+        route,
+        audit_date: result.audit_date,
+        dry_run: result.dry_run,
+        summary: result.summary,
+        admin_summary_delivery: result.admin_summary_delivery
+      }));
+    }
+
+    res.status(status === 'already_running' ? 409 : 200).json({
+      ...result,
+      success,
+      status,
+      route,
+      capability: 'master_task_inspection_manual',
+      scan_source: 'master_task_audit_manual',
+      canonical_runner: 'auditMasterTaskTable',
+      execute,
+      details: {
+        sent_count: result.summary?.remindable || 0,
+        failed_count: result.summary?.failed || 0,
+        skipped_count: result.summary?.skipped || 0,
+        passed_count: result.summary?.passed || 0,
+        admin_summary_status: result.admin_summary_delivery?.status || 'unknown'
+      }
+    });
+  } catch (error) {
+    console.error(`[Master Task Audit] manual trigger failed route=${route} error=${error.stack || error.message}`);
     next(error);
   }
 });

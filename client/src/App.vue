@@ -100,6 +100,12 @@ async function parseResponse(response) {
 
 function maintenanceFailure(error) {
   if (error?.status === 409) {
+    if (error.data?.capability === 'master_task_inspection_manual') {
+      return {
+        title: '总表巡检正在运行',
+        detail: `已有一个飞书巡检任务正在执行，请稍候再试。\n\n运行信息：\n${JSON.stringify(error.data, null, 2)}`
+      };
+    }
     return {
       title: 'Wiki 扫描正在运行，GetNote 结果已返回',
       detail: JSON.stringify(error.data, null, 2)
@@ -144,6 +150,16 @@ function getNoteSuccessMessage(result) {
   return sentCount > 0 || result?.imported?.[0]?.draft_id
     ? 'Get笔记扫描完成，任务卡片已发送'
     : 'Get笔记扫描完成，请查看返回结果';
+}
+
+function masterTaskAuditSuccessMessage(result) {
+  const failed = Number(result?.summary?.failed || 0);
+  const remindable = Number(result?.summary?.remindable || 0);
+
+  if (failed > 0 || result?.status === 'partial_failed') return `总表巡检完成，但有 ${failed} 张巡检卡片发送失败`;
+  if (result?.dry_run) return '总表巡检完成（预演模式，未发送卡片）';
+  if (remindable > 0) return `总表巡检完成，已发送 ${remindable} 张巡检卡片`;
+  return '总表巡检完成，暂无需要发送的巡检卡片';
 }
 
 function authHeaders() {
@@ -194,6 +210,50 @@ async function triggerMaintenance() {
       detail: JSON.stringify(await parseResponse(response), null, 2)
     };
     maintenanceState.value = 'success';
+  } catch (error) {
+    const failure = maintenanceFailure(error);
+    maintenanceResult.value = {
+      type: 'error',
+      title: failure.title,
+      detail: failure.detail
+    };
+    maintenanceState.value = 'error';
+  }
+}
+
+async function triggerMasterTaskAudit() {
+  if (maintenanceState.value === 'submitting') return;
+
+  if (!maintenanceToken.value.trim()) {
+    maintenanceResult.value = {
+      type: 'error',
+      title: '请先输入维护令牌',
+      detail: '手动触发总表巡检需要维护令牌。'
+    };
+    return;
+  }
+
+  maintenanceState.value = 'submitting';
+  maintenanceResult.value = {
+    type: 'info',
+    title: '正在触发总表任务巡检',
+    detail: '正在读取正式总表、判断异常任务并发送负责人巡检卡片，请稍候…'
+  };
+
+  try {
+    const response = await fetch('/api/meeting/maintenance/master-task-audit/run', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ execute: true, dry_run: false })
+    });
+    const result = await parseResponse(response);
+    const failed = Number(result?.summary?.failed || 0) > 0 || result?.status === 'partial_failed';
+    maintenanceResult.value = {
+      type: failed ? 'error' : 'success',
+      title: masterTaskAuditSuccessMessage(result),
+      detail: JSON.stringify(result, null, 2)
+    };
+    maintenanceState.value = failed ? 'error' : 'success';
   } catch (error) {
     const failure = maintenanceFailure(error);
     maintenanceResult.value = {
@@ -511,6 +571,21 @@ onMounted(() => {
                 </button>
               </div>
               <p class="field-hint">下拉列表来自 Get笔记最近列表；点击“扫描选中笔记”只处理这条 Get笔记，不会扫描飞书 Wiki。</p>
+            </div>
+
+            <div class="document-picker audit-picker" aria-labelledby="master-task-audit-title">
+              <div class="document-picker-heading">
+                <div>
+                  <strong id="master-task-audit-title">正式总表任务巡检</strong>
+                  <span>读取当前总表并发送需要处理的巡检卡片</span>
+                </div>
+                <span class="panel-index">AUDIT</span>
+              </div>
+              <button class="primary-button" type="button" :disabled="!maintenanceToken.trim() || maintenanceState === 'submitting'" @click="triggerMasterTaskAudit">
+                <span v-if="maintenanceState === 'submitting'" class="button-spinner" aria-hidden="true"></span>
+                {{ maintenanceState === 'submitting' ? '巡检中…' : '触发巡检并发送卡片' }}
+              </button>
+              <p class="field-hint">仅此按钮会显式发送巡检卡片；已处理任务仍按当天幂等规则跳过。失败时会显示失败任务和具体原因。</p>
             </div>
           </form>
 
