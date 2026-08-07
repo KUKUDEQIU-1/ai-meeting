@@ -451,6 +451,8 @@ function testTerminalTaskCardShowsAggregateOutcomeSummary() {
   assert.match(text, /不需要跟进的讨论/);
   assert.doesNotMatch(text, /标记为新任务/);
   assert.doesNotMatch(text, /discard_task/);
+  assert.equal(card.body.elements[0].tag, 'form');
+  assert.equal(card.body.elements[0].elements.some((element) => element.form_action_type === 'submit'), true);
 }
 
 function testOldTaskDropdownUsesMatchedNameWhenProvided() {
@@ -2762,7 +2764,8 @@ async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
   assert.equal(sentCards.length, 1);
   assert.match(cardText, /GetNote 任务已处理/);
   assert.equal(formControl(sentCards[0], 'getnote_task_form'), undefined);
-  assert.doesNotMatch(cardText, /"tag":"form"/);
+  assert.equal(sentCards[0].body.elements[0].tag, 'form');
+  assert.equal(sentCards[0].body.elements[0].elements.some((element) => element.form_action_type === 'submit'), true);
 }
 
 async function testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership() {

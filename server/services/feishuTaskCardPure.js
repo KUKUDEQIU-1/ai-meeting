@@ -632,8 +632,22 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
       },
       body: {
         elements: [{
-          tag: 'markdown',
-          content: terminalTaskSummaryContent({ draft, assignee, tasks })
+          tag: 'form',
+          name: 'meeting_task_terminal_form',
+          elements: [
+            {
+              tag: 'markdown',
+              content: terminalTaskSummaryContent({ draft, assignee, tasks })
+            },
+            {
+              tag: 'button',
+              name: 'meeting_task_terminal_acknowledged',
+              form_action_type: 'submit',
+              type: 'default',
+              disabled: true,
+              text: { tag: 'plain_text', content: '已处理' }
+            }
+          ]
         }]
       }
     };
