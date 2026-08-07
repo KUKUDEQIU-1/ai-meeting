@@ -1,7 +1,9 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import meetingsRouter from './routes/meetings.js';
 import meetingRouter from './routes/meeting.js';
 import feishuCardActionRouter from './routes/feishuCardAction.js';
@@ -9,8 +11,13 @@ import { initDatabase } from './db/database.js';
 import { feishuResidentWorker } from './services/feishuResidentWorker.js';
 import { feishuScanCoordinator } from './services/feishuScanCoordinator.js';
 
+dotenv.config({ path: new URL('./.env', import.meta.url) });
+
 const app = express();
 const port = process.env.PORT || 3000;
+const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
+const clientDistDirectory = path.join(serverDirectory, 'public');
+const clientIndexFile = path.join(clientDistDirectory, 'index.html');
 let httpServer = null;
 const canonicalWikiSyncRoute = '/api/meeting/sync-feishu-wiki-docx';
 const canonicalCardActionRoute = '/api/feishu/card-action';
@@ -146,19 +153,6 @@ function residentWorkerHealthSnapshot() {
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }));
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/', (req, res) => {
-  res.type('text/plain; charset=utf-8').send([
-    'AI Meeting service is running.',
-    '',
-    'Available paths:',
-    '/api/health',
-    `Canonical wiki DOCX sync: POST ${canonicalWikiSyncRoute}`,
-    `Canonical Feishu callback: POST ${canonicalCardActionRoute}`,
-    `Recovery route: POST ${recoveryRoute}`,
-    'GetNote delivery audit: GET /api/meeting/getnote-card-deliveries/:noteId'
-  ].join('\n'));
-});
-
 app.get('/api/health', async (req, res, next) => {
   try {
     res.json({
@@ -182,6 +176,18 @@ app.get('/api/health', async (req, res, next) => {
 app.use('/api/meetings', meetingsRouter);
 app.use('/api/meeting', meetingRouter);
 app.use('/api/feishu', feishuCardActionRouter);
+
+app.use('/api', (req, res) => {
+  res.status(404).json({ message: 'API route not found' });
+});
+
+app.use(express.static(clientDistDirectory, { index: false }));
+
+app.get('*', (req, res, next) => {
+  res.sendFile(clientIndexFile, (error) => {
+    if (error) next(error);
+  });
+});
 
 app.use((err, req, res, next) => {
   console.error(err);
