@@ -3,6 +3,7 @@ import express from 'express';
 import meetingRouter, { getGetNoteSyncErrorResponse, getGetNoteSyncResponse, getMaintenanceGetNotePayload } from '../routes/meeting.js';
 import { initDatabase, run } from '../db/database.js';
 import { createMeetingTaskDraft, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
+import { getMasterTaskAuditLogById, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
 
 function createApp() {
   const app = express();
@@ -136,6 +137,47 @@ async function testMaintenanceGetNoteRouteRequiresBearerToken() {
     // Then: OPS_MAINTENANCE_TOKEN is authoritative when present.
     assert.equal(missing.response.status, 401);
     assert.equal(fallback.response.status, 401);
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+    restoreEnv('FEISHU_DOCX_SOURCE_API_TOKEN', previousDocxToken);
+  }
+}
+
+async function testSelectedGetNoteRouteRequiresTokenAndNoteId() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  const previousDocxToken = process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'selected-getnote-token';
+  delete process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  const server = await listen(createApp());
+
+  try {
+    const missingToken = await requestPath(server, '/api/meeting/maintenance/analyze-getnote-note', { body: {} });
+    const missingNoteId = await requestPath(server, '/api/meeting/maintenance/analyze-getnote-note', {
+      headers: { Authorization: 'Bearer selected-getnote-token' },
+      body: {}
+    });
+
+    assert.equal(missingToken.response.status, 401);
+    assert.equal(missingNoteId.response.status, 400);
+    assert.equal(missingNoteId.body.status, 'validation_failed');
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+    restoreEnv('FEISHU_DOCX_SOURCE_API_TOKEN', previousDocxToken);
+  }
+}
+
+async function testGetNoteListRouteRequiresMaintenanceToken() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  const previousDocxToken = process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'getnote-list-token';
+  delete process.env.FEISHU_DOCX_SOURCE_API_TOKEN;
+  const server = await listen(createApp());
+
+  try {
+    const missing = await getPath(server, '/api/meeting/maintenance/getnote-notes');
+    assert.equal(missing.response.status, 401);
   } finally {
     await close(server);
     restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
@@ -384,8 +426,106 @@ async function testGetNoteCardDeliveryAuditRejectsNonGetNoteDraft() {
   }
 }
 
+async function testCompletedInspectionCardCanBeClosedWithoutChangingTask() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const previousMasterAppToken = process.env.FEISHU_MASTER_TASK_APP_TOKEN;
+  const previousMasterTableId = process.env.FEISHU_MASTER_TASK_TABLE_ID;
+  const previousFetch = globalThis.fetch;
+  const auditLog = await upsertMasterTaskAuditLog({
+    recordId: 'rec_completed_close',
+    taskName: '已完成的误发巡检任务',
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    taskStatus: '已完成',
+    auditDate: '2026-08-07',
+    auditType: 'task_inspection',
+    actionTaken: 'sent',
+    cardMessageId: 'om_completed_close'
+  });
+
+  process.env.OPS_MAINTENANCE_TOKEN = 'close-audit-token';
+  process.env.FEISHU_APP_ID = 'cli_close_audit';
+  process.env.FEISHU_APP_SECRET = 'secret_close_audit';
+  process.env.FEISHU_MASTER_TASK_APP_TOKEN = 'app_close_audit';
+  process.env.FEISHU_MASTER_TASK_TABLE_ID = 'tbl_close_audit';
+  const patched = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+    if (href.startsWith('http://127.0.0.1:')) return previousFetch(url, options);
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_close_audit' }), { status: 200 });
+    }
+    if (href.endsWith('/fields')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: ['事务需求名称', '需求状态', '跟进人', '进度评估', '开始日期', '完成日期', '备注'].map((field_name) => ({ field_name })) }
+      }), { status: 200 });
+    }
+    if (href.endsWith('/records')) {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { items: [{ record_id: 'rec_completed_close', fields: { 事务需求名称: '已完成的误发巡检任务', 需求状态: '已完成', 跟进人: '简学勤', 进度评估: '100', 完成日期: '2026-08-06' } }] }
+      }), { status: 200 });
+    }
+    if (href.includes('/im/v1/messages/') && options.method === 'PATCH') {
+      patched.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+    throw new Error(`unexpected request ${href}`);
+  };
+
+  const server = await listen(createApp());
+  try {
+    const { response, body } = await requestPath(server, `/api/meeting/maintenance/master-task-audit-cards/${auditLog.id}/close`, {
+      headers: { Authorization: 'Bearer close-audit-token' },
+      body: { reason: '已完成任务误发三天未更新提醒' }
+    });
+    const stored = await getMasterTaskAuditLogById(auditLog.id);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.success, true);
+    assert.equal(body.action_taken, 'skipped');
+    assert.equal(body.task_status, '已完成');
+    assert.equal(stored.action_taken, 'skipped');
+    assert.equal(patched.length, 1);
+    assert.equal(JSON.parse(patched[0].content).header.title.content, '任务巡检已处理');
+  } finally {
+    await close(server);
+    globalThis.fetch = previousFetch;
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+    restoreEnv('FEISHU_APP_ID', previousAppId);
+    restoreEnv('FEISHU_APP_SECRET', previousAppSecret);
+    restoreEnv('FEISHU_MASTER_TASK_APP_TOKEN', previousMasterAppToken);
+    restoreEnv('FEISHU_MASTER_TASK_TABLE_ID', previousMasterTableId);
+  }
+}
+
+async function testMasterTaskAuditMaintenanceListRequiresToken() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'audit-list-token';
+  const server = await listen(createApp());
+
+  try {
+    const missing = await getPath(server, '/api/meeting/maintenance/master-task-audit-cards');
+    const authorized = await getPath(server, '/api/meeting/maintenance/master-task-audit-cards?active_only=false', {
+      headers: { Authorization: 'Bearer audit-list-token' }
+    });
+
+    assert.equal(missing.response.status, 401);
+    assert.equal(authorized.response.status, 200);
+    assert.equal(Array.isArray(authorized.body.cards), true);
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+  }
+}
+
 await testMaintenanceGetNoteRouteFailsClosedWithoutToken();
 await testMaintenanceGetNoteRouteRequiresBearerToken();
+await testSelectedGetNoteRouteRequiresTokenAndNoteId();
+await testGetNoteListRouteRequiresMaintenanceToken();
 await testMaintenanceGetNoteRouteRejectsMissingNoteIdBeforeImport();
 await testGetNoteMutationRoutesRequireMaintenanceToken();
 testMaintenanceGetNotePayloadIsNarrow();
@@ -396,5 +536,7 @@ await initDatabase();
 await testGetNoteCardDeliveryAuditRequiresMaintenanceToken();
 await testGetNoteCardDeliveryAuditIsSanitized();
 await testGetNoteCardDeliveryAuditRejectsNonGetNoteDraft();
+await testCompletedInspectionCardCanBeClosedWithoutChangingTask();
+await testMasterTaskAuditMaintenanceListRequiresToken();
 
 console.log('getnote maintenance route tests passed');

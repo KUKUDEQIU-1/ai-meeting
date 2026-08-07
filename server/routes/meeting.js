@@ -1,11 +1,11 @@
 import express from 'express';
 import { createTaskRecord } from '../services/feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingService.js';
-import { importGetNoteMeeting, syncRecentGetNotes } from '../services/getnoteImportService.js';
+import { analyzeSelectedGetNote, importGetNoteMeeting, listRecentGetNotes, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import { listMasterTaskAuditRecords } from '../services/feishuBitableClient.js';
-import { sendMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
-import { upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
+import { sendMasterTaskAuditCard, updateMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
+import { getMasterTaskAuditLogById, listMasterTaskAuditLogs, markMasterTaskAuditAction, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
 import feishuMeetingNotesSyncRouter from './feishuMeetingNotesSync.js';
 import feishuDocxNoteSourcesRouter from './feishuDocxNoteSources.js';
 import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssigneeStates, listDraftCardMessages } from '../services/taskDraftService.js';
@@ -29,6 +29,38 @@ function getNoteImportOptions(body) {
 
 function deliveryErrorStatus(error) {
   return String(error || '').trim() ? 'present' : '';
+}
+
+function resultCount(result, key) {
+  return Array.isArray(result?.[key]) ? result[key].length : 0;
+}
+
+function combinedLatestScanSummary(wiki, getnote) {
+  return {
+    imported_count: resultCount(wiki, 'imported') + resultCount(getnote, 'imported'),
+    skipped_count: resultCount(wiki, 'skipped') + resultCount(getnote, 'skipped'),
+    failed_count: resultCount(wiki, 'failed') + resultCount(getnote, 'failed')
+  };
+}
+
+function combinedLatestScanStatus(wiki, getnote) {
+  const wikiFailed = wiki?.success === false || wiki?.status === 'already_running' || resultCount(wiki, 'failed') > 0;
+  const getnoteFailed = getnote?.success === false || resultCount(getnote, 'failed') > 0;
+
+  if (wikiFailed && getnoteFailed) return 'failed';
+  if (wikiFailed || getnoteFailed) return 'partial';
+
+  return 'success';
+}
+
+function failedGetNoteResult(error) {
+  return {
+    success: false,
+    status: 'failed',
+    imported: [],
+    skipped: [],
+    failed: [{ note_id: error?.note_id || '', title: error?.meeting_title || '', error: error?.message || 'GetNote sync failed' }]
+  };
 }
 
 export function buildTestMasterTaskAuditLogInput({ target = {}, auditDate = '', forceUnique = false, testToken = '', timestampLabel = '' } = {}) {
@@ -528,6 +560,90 @@ router.post('/test-master-task-audit-card', requireMaintenanceToken, async (req,
   }
 });
 
+router.get('/maintenance/master-task-audit-cards', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const auditDate = String(req.query?.audit_date || '').trim();
+    const activeOnly = req.query?.active_only !== 'false';
+    const logs = await listMasterTaskAuditLogs(auditDate);
+    const cards = logs
+      .filter((log) => ['task_inspection', 'task_inspection_due_soon'].includes(log.audit_type))
+      .filter((log) => !activeOnly || ['sent', 'pending', 'failed'].includes(log.action_taken))
+      .map((log) => ({
+        audit_log_id: log.id,
+        record_id: log.record_id,
+        task_name: log.task_name,
+        task_status: log.task_status,
+        assignee_name: log.assignee_name,
+        audit_date: log.audit_date,
+        audit_type: log.audit_type,
+        action_taken: log.action_taken,
+        has_message_id: Boolean(log.card_message_id)
+      }));
+
+    res.json({ success: true, audit_date: auditDate || null, active_only: activeOnly, cards });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/maintenance/master-task-audit-cards/:auditLogId/close', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const auditLogId = Number(req.params.auditLogId);
+    const reason = String(req.body?.reason || '').trim();
+
+    if (!Number.isInteger(auditLogId) || auditLogId <= 0) {
+      res.status(400).json({ success: false, message: 'auditLogId 必须是正整数' });
+      return;
+    }
+    if (!reason) {
+      res.status(400).json({ success: false, message: 'reason 不能为空' });
+      return;
+    }
+
+    const auditLog = await getMasterTaskAuditLogById(auditLogId);
+    if (!auditLog) {
+      res.status(404).json({ success: false, message: '巡检审计记录不存在' });
+      return;
+    }
+    if (!['task_inspection', 'task_inspection_due_soon'].includes(auditLog.audit_type)) {
+      res.status(400).json({ success: false, message: '只允许关闭任务巡检卡片' });
+      return;
+    }
+
+    const records = await listMasterTaskAuditRecords({ inspection: true });
+    const record = records.find((item) => item.recordId === auditLog.record_id);
+    if (!record) {
+      res.status(404).json({ success: false, message: '正式总表任务不存在' });
+      return;
+    }
+    if (!['已完成', '已取消'].includes(record.taskStatus)) {
+      res.status(409).json({ success: false, message: '只有已完成或已取消任务可以关闭误发巡检卡片' });
+      return;
+    }
+
+    const updatedLog = await markMasterTaskAuditAction({
+      recordId: auditLog.record_id,
+      auditDate: auditLog.audit_date,
+      auditType: auditLog.audit_type,
+      assigneeKey: auditLog.assignee_key,
+      actionTaken: 'skipped',
+      submittedText: reason
+    });
+    const card = await updateMasterTaskAuditCard({ auditLogId, terminal: true });
+
+    res.json({
+      success: true,
+      audit_log_id: auditLogId,
+      record_id: auditLog.record_id,
+      task_status: record.taskStatus,
+      action_taken: updatedLog?.action_taken || 'skipped',
+      card_patch: card
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/sync-feishu', async (req, res, next) => {
   try {
     const { meeting_title, meeting_source, summary, tasks } = req.body || {};
@@ -737,18 +853,114 @@ router.post('/maintenance/sync-getnote', requireMaintenanceToken, async (req, re
   }
 });
 
+router.get('/maintenance/getnote-notes', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const result = await listRecentGetNotes({
+      limit: Number(req.query?.limit) || 20,
+      tag: req.query?.tag,
+      ignoreTag: req.query?.ignore_tag === 'true'
+    });
+
+    res.json({
+      ...result,
+      route: '/api/meeting/maintenance/getnote-notes',
+      capability: 'getnote_note_list'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/maintenance/analyze-getnote-note', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const noteId = String(req.body?.note_id || req.body?.noteId || '').trim();
+
+    if (!noteId) {
+      res.status(400).json({ success: false, status: 'validation_failed', message: 'note_id is required' });
+      return;
+    }
+
+    const result = await analyzeSelectedGetNote(noteId, getNoteImportOptions(req.body || {}));
+    res.json(getGetNoteSyncResponse(result));
+  } catch (error) {
+    res.status(error.status || 502).json(getGetNoteSyncErrorResponse(error, req.body?.note_id));
+  }
+});
+
+router.get('/maintenance/feishu-wiki-docx-documents', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const limit = Number(req.query?.limit) || undefined;
+    const nodeTokenOrUrl = req.query?.node_url || req.query?.node_token || undefined;
+    const { listFeishuWikiDocxDocuments } = await import('../services/feishuWikiDocxImportService.js');
+    const result = await listFeishuWikiDocxDocuments({ limit, nodeTokenOrUrl });
+
+    res.json({
+      ...result,
+      route: '/api/meeting/maintenance/feishu-wiki-docx-documents',
+      capability: 'feishu_wiki_docx_document_list',
+      scan_source: 'feishu_wiki_docx_library'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/maintenance/analyze-feishu-wiki-docx-document', requireMaintenanceToken, async (req, res, next) => {
+  const route = '/api/meeting/maintenance/analyze-feishu-wiki-docx-document';
+
+  try {
+    const force = requestBool(req.body?.force);
+    const reanalyze = requestBool(req.body?.reanalyze);
+    const nodeTokenOrUrl = req.body?.node_url || req.body?.node_token_or_url || undefined;
+    const nodeToken = String(req.body?.selected_node_token || req.body?.node_token || '').trim();
+    const documentId = String(req.body?.document_id || '').trim();
+    const { analyzeSelectedFeishuWikiDocx } = await import('../services/feishuWikiDocxImportService.js');
+
+    if (!nodeToken && !documentId) {
+      res.status(400).json({ success: false, status: 'validation_failed', message: 'selected_node_token or document_id is required' });
+      return;
+    }
+
+    const result = await feishuScanCoordinator.runScan('wiki', () => analyzeSelectedFeishuWikiDocx({
+      nodeToken,
+      documentId,
+      force,
+      reanalyze,
+      nodeTokenOrUrl
+    }), {
+      route,
+      capability: 'feishu_wiki_docx_import',
+      equivalenceKey: 'wiki-docx-library-active-scan',
+      mode: 'selected_wiki_docx_manual'
+    });
+
+    res.status(result.status === 'already_running' ? 409 : result.status === 'not_found' ? 404 : 200).json({
+      ...result,
+      status: result.status,
+      route,
+      capability: 'feishu_wiki_docx_import',
+      scan_source: 'feishu_wiki_docx_selected_manual',
+      canonical_route: '/api/meeting/sync-feishu-wiki-docx'
+    });
+  } catch (error) {
+    console.log(`[Feishu Wiki Sync] selected document analysis failed route=${route} error=${error.message}`);
+    next(error);
+  }
+});
+
 router.post('/maintenance/analyze-latest-feishu-wiki-docx', requireMaintenanceToken, async (req, res, next) => {
   const route = '/api/meeting/maintenance/analyze-latest-feishu-wiki-docx';
 
   try {
     const force = req.body?.force === true || req.body?.force === 'true';
     const reanalyze = req.body?.reanalyze === true || req.body?.reanalyze === 'true';
+    const forceCardResend = requestBool(req.body?.force_card_resend) || requestBool(req.body?.forceCardResend);
     const nodeTokenOrUrl = req.body?.node_url || req.body?.node_token || undefined;
     const { analyzeLatestFeishuWikiDocx } = await import('../services/feishuWikiDocxImportService.js');
 
-    console.log(`[Feishu Wiki Sync] manual latest trigger start route=${route} force=${force} reanalyze=${reanalyze}`);
+    console.log(`[Feishu Wiki Sync] manual latest trigger start route=${route} force=${force} reanalyze=${reanalyze} include_getnote=true`);
 
-    const result = await feishuScanCoordinator.runScan('wiki', () => analyzeLatestFeishuWikiDocx({
+    const wikiPromise = feishuScanCoordinator.runScan('wiki', () => analyzeLatestFeishuWikiDocx({
       force,
       reanalyze,
       nodeTokenOrUrl
@@ -758,18 +970,30 @@ router.post('/maintenance/analyze-latest-feishu-wiki-docx', requireMaintenanceTo
       equivalenceKey: 'wiki-docx-library-active-scan',
       mode: 'latest_wiki_docx_manual'
     });
+    const getnotePromise = syncRecentGetNotes({ limit: 1, force, reanalyze, forceCardResend });
+    const [wikiSettled, getnoteSettled] = await Promise.allSettled([wikiPromise, getnotePromise]);
+    const wiki = wikiSettled.status === 'fulfilled'
+      ? wikiSettled.value
+      : { success: false, status: 'failed', imported: [], skipped: [], failed: [{ error: wikiSettled.reason?.message || 'Wiki latest scan failed' }] };
+    const getnote = getnoteSettled.status === 'fulfilled' ? getnoteSettled.value : failedGetNoteResult(getnoteSettled.reason);
+    const summary = combinedLatestScanSummary(wiki, getnote);
+    const status = combinedLatestScanStatus(wiki, getnote);
 
-    if (result.status === 'already_running') {
-      console.log(`[Feishu Wiki Sync] manual latest analysis skipped reason=${result.reason}`);
+    if (wiki.status === 'already_running') {
+      console.log(`[Feishu Wiki Sync] manual latest analysis skipped reason=${wiki.reason}`);
     }
 
-    res.status(result.status === 'already_running' ? 409 : 200).json({
-      ...result,
-      status: result.status,
+    res.status(wiki.status === 'already_running' ? 409 : 200).json({
+      ...wiki,
+      success: status !== 'failed',
+      status,
       route,
-      capability: 'feishu_wiki_docx_import',
-      scan_source: 'feishu_wiki_docx_latest_manual',
-      canonical_route: '/api/meeting/sync-feishu-wiki-docx'
+      capability: 'feishu_wiki_docx_and_getnote_latest_manual',
+      scan_source: 'feishu_wiki_docx_latest_manual_and_getnote_latest_manual',
+      canonical_route: '/api/meeting/sync-feishu-wiki-docx',
+      wiki,
+      getnote,
+      summary
     });
   } catch (error) {
     console.log(`[Feishu Wiki Sync] manual latest analysis failed route=${route} error=${error.message}`);
