@@ -55,6 +55,13 @@ function combinedLatestScanStatus(wiki, getnote) {
 
 function failedGetNoteResult(error) {
   const feishuResult = error?.feishuSync;
+  const failedDelivery = feishuResult?.results?.find((item) => item?.status === 'failed' || item?.error);
+  const deliveryFailure = feishuResult?.delivery_failures?.[0];
+  const deliveryError = failedDelivery?.error || deliveryFailure?.error;
+  const reason = feishuResult
+    ? `任务卡片发送阶段失败：已发送 ${Number(feishuResult.sent_count || 0)} 张，失败 ${Number(feishuResult.failed_count || 0)} 张。${deliveryError ? `具体原因：${deliveryError}` : ''}`
+    : error?.message || 'GetNote sync failed';
+
   return {
     success: false,
     status: 'failed',
@@ -64,6 +71,7 @@ function failedGetNoteResult(error) {
       note_id: error?.note_id || '',
       title: error?.meeting_title || '',
       error: error?.message || 'GetNote sync failed',
+      reason,
       ...(feishuResult ? {
         feishu_result: {
           status: feishuResult.status,
