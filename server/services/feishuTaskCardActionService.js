@@ -354,9 +354,26 @@ async function loadAuthorizedState(parsed) {
     reject('飞书卡片回调缺少 draft_id 或 assignee_key', 400);
   }
 
+  console.log('[Feishu Card Action] state lookup start', JSON.stringify({
+    callback_id: parsed.callback_id,
+    message_id: parsed.message_id,
+    draft_id: parsed.draft_id,
+    item_id: parsed.item_id,
+    card_kind: parsed.card_kind,
+    assignee_key: parsed.assignee_key
+  }));
   let state = parsed.message_id
     ? await getDraftAssigneeStateByMessageId(parsed.message_id)
     : await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
+  console.log('[Feishu Card Action] state lookup complete', JSON.stringify({
+    callback_id: parsed.callback_id,
+    message_id: parsed.message_id,
+    found: Boolean(state),
+    resolved_card_kind: state?.card_kind || '',
+    resolved_draft_id: state?.draft_id || '',
+    resolved_assignee_key: state?.assignee_key || '',
+    split_item_id: state?.split_item_id || ''
+  }));
 
   if (state?.card_kind && state.card_kind !== parsed.card_kind) {
     parsed.card_kind = state.card_kind;
@@ -364,14 +381,22 @@ async function loadAuthorizedState(parsed) {
 
   if (!state && parsed.message_id && isGetNoteItemAction(parsed) && parsed.item_id) {
     const message = await getDraftCardMessageByMessageId(parsed.message_id);
+    console.log('[Feishu Card Action] split message fallback', JSON.stringify({
+      callback_id: parsed.callback_id,
+      message_id: parsed.message_id,
+      found: Boolean(message),
+      message_card_kind: message?.card_kind || '',
+      message_draft_id: message?.draft_id || '',
+      message_assignee_key: message?.assignee_key || '',
+      message_item_id: message?.item_id || ''
+    }));
 
     if (message
       && Number(message.draft_id) === parsed.draft_id
       && message.assignee_key === parsed.assignee_key
-      && message.card_kind === parsed.card_kind
       && !itemScopeIncludes(message.item_id, parsed.item_id)
     ) {
-      state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, parsed.card_kind);
+      state = await getDraftAssigneeState(parsed.draft_id, parsed.assignee_key, message.card_kind || parsed.card_kind);
 
       if (state && validateCallbackActor(state, parsed)) {
         return { ...state, stale_card: true };

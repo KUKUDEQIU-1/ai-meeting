@@ -505,6 +505,53 @@ async function testLegacyGetNoteMessageRestoresCardKindFromStoredState() {
   assert.equal(prepared.shouldProcess, true);
 }
 
+async function testGetNoteSplitCardSubmitWithLegacyKind(suffix, eventId) {
+  const draft = await createDraftWithAssigneeState(suffix, { cardKind: 'getnote_tasks' });
+  const messageId = `om_${suffix}_${draft.id}`;
+  const itemId = `item_${suffix}`;
+
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    cardKind: 'getnote_tasks',
+    itemId,
+    cardMessageId: messageId
+  });
+
+  const prepared = await prepareFeishuCardAction(buildActionPayload({
+    action: 'getnote_submit_task',
+    draftId: draft.id,
+    itemId,
+    eventId,
+    messageId,
+    cardKind: 'tasks'
+  }));
+  const updates = [];
+  let finalizeCount = 0;
+
+  const response = await processPreparedFeishuCardAction(prepared, {
+    listMasterTaskAuditRecords: async () => [{ assigneeName: '张三', assigneeKey: '张三' }],
+    finalizeGetNoteTask: async () => {
+      finalizeCount += 1;
+    },
+    updateCard: async (params) => {
+      updates.push(params);
+      return { status: 'updated' };
+    }
+  });
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(prepared.parsed.card_kind, 'getnote_tasks');
+  assert.equal(prepared.state.card_kind, 'getnote_tasks');
+  assert.equal(prepared.shouldProcess, true);
+  assert.equal(response.toast.content, '任务已提交');
+  assert.equal(finalizeCount, 1);
+  assert.equal(updatedDraft.draft_tasks[0].status, 'confirmed');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].cardKind, 'getnote_tasks');
+  assert.equal(updates[0].messageId, messageId);
+}
+
 async function testCurrentCardMessageIdStillProcesses() {
   const draft = await createDraftWithAssigneeState('current-card');
   const response = await handleFeishuCardAction(buildActionPayload({
@@ -721,6 +768,8 @@ await testSiblingItemProcessesWhileFirstItemIsProcessing();
 await testConfirmClaimOnlyOnce();
 await testStaleCardMessageIdDoesNotMutateDraft();
 await testLegacyGetNoteMessageRestoresCardKindFromStoredState();
+await testGetNoteSplitCardSubmitWithLegacyKind('auto-getnote-split', 'evt_auto_getnote_split');
+await testGetNoteSplitCardSubmitWithLegacyKind('manual-getnote-split', 'evt_manual_getnote_split');
 await testCurrentCardMessageIdStillProcesses();
 await testStaleSplitCardMessageIdDoesNotMutateDraft();
 await testUnmappedAggregateMessageIdStillProcessesByLegacyFallback();

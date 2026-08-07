@@ -457,7 +457,6 @@ export async function getDraftAssigneeStateByMessageId(messageId) {
      JOIN meeting_task_draft_assignees assignees
        ON assignees.draft_id = messages.draft_id
       AND assignees.assignee_key = messages.assignee_key
-      AND assignees.card_kind = messages.card_kind
      WHERE messages.card_message_id = ?
      ORDER BY messages.updated_at DESC, messages.id DESC
      LIMIT 1`,
