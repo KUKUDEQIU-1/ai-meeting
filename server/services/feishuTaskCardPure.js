@@ -751,8 +751,22 @@ export function buildAssigneeProgressCard({ draft, assignee, progressUpdates, te
       },
       body: {
         elements: [{
-          tag: 'markdown',
-          content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的历史任务进展已确认并更新。`
+          tag: 'form',
+          name: 'meeting_task_progress_terminal_form',
+          elements: [
+            {
+              tag: 'markdown',
+              content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 80)}\n**负责人：** ${truncateText(assignee.assignee_name, 40)}\n\n你的历史任务进展已确认并更新。`
+            },
+            {
+              tag: 'button',
+              name: 'meeting_task_progress_terminal_acknowledged',
+              form_action_type: 'submit',
+              type: 'default',
+              disabled: true,
+              text: { tag: 'plain_text', content: '已处理' }
+            }
+          ]
         }]
       }
     };

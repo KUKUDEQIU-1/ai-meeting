@@ -2806,6 +2806,18 @@ async function testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled() {
   assert.equal(sentCards[0].body.elements[0].elements.some((element) => element.form_action_type === 'submit'), true);
 }
 
+function testTerminalProgressCardKeepsValidFormSubmitButton() {
+  const card = buildAssigneeProgressCard({
+    draft: { meeting_title: '进展终态测试' },
+    assignee: { assignee_name: '李嘉华', assignee_key: '李嘉华' },
+    progressUpdates: [],
+    terminal: true
+  });
+
+  assert.equal(card.body.elements[0].tag, 'form');
+  assert.equal(card.body.elements[0].elements.some((element) => element.form_action_type === 'submit'), true);
+}
+
 async function testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership() {
   const draft = await createGetNoteActionDraft(`getnote-regular-mark-new-${Date.now()}`);
   const finalized = [];
@@ -5623,6 +5635,7 @@ await testRegularTaskAndProgressDispatchDoesNotResendExistingSentCards();
 await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
 await testDraftCardDeliveryDiagnosticsMaskIdentifiers();
 await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();
+testTerminalProgressCardKeepsValidFormSubmitButton();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkNewPersistsSelectedWorkType();
 await testGetNoteRegularMarkNewRejectsInvalidWorkType();
