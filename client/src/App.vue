@@ -331,10 +331,22 @@ async function triggerSelectedDocument() {
         reanalyze: false
       })
     });
+    const result = await parseResponse(response);
+    if (result.success === false || ['failed', 'blocked'].includes(result.status)) {
+      const error = new Error(result.message || result.reason || '选中文档处理失败');
+      error.status = response.status;
+      error.data = result;
+      throw error;
+    }
+
+    const imported = Array.isArray(result.imported) ? result.imported[0] : null;
+    const sentCount = Number(imported?.sent_count || imported?.feishu_result?.sent_count || 0);
+    const skippedCount = Number(imported?.skipped_count || imported?.feishu_result?.skipped_count || 0);
+    const failedCount = Number(imported?.failed_count || imported?.feishu_result?.failed_count || 0);
     maintenanceResult.value = {
       type: 'success',
-      title: '选中文档扫描已完成',
-      detail: JSON.stringify(await parseResponse(response), null, 2)
+      title: failedCount > 0 ? '文档已处理，但卡片部分发送失败' : '选中文档扫描已完成',
+      detail: `卡片发送：${sentCount} 张，跳过：${skippedCount} 张，失败：${failedCount} 张\n\n${JSON.stringify(result, null, 2)}`
     };
     maintenanceState.value = 'success';
   } catch (error) {

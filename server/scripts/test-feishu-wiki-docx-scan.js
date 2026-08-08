@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { initDatabase, all } from '../db/database.js';
 import { extractWikiNodeToken } from '../services/feishuWikiClient.js';
-import { analyzeLatestFeishuWikiDocx, listFeishuWikiDocxDocuments, selectLatestWikiDocxNode, selectWikiDocxNodes } from '../services/feishuWikiDocxImportService.js';
+import { analyzeLatestFeishuWikiDocx, analyzeSelectedFeishuWikiDocx, listFeishuWikiDocxDocuments, selectLatestWikiDocxNode, selectWikiDocxNodes } from '../services/feishuWikiDocxImportService.js';
 
 async function testSchemaExists() {
   const rows = await all("PRAGMA table_info(feishu_wiki_docx_sources)");
@@ -113,6 +113,85 @@ async function testAnalyzeLatestWikiDocxImportsOnlySelectedLatestNode() {
   }
 }
 
+async function testSelectedWikiAnalysisPreservesCardDispatchResult() {
+  const dispatchResult = {
+    status: 'success',
+    sent_count: 2,
+    skipped_count: 1,
+    failed_count: 0,
+    delivery_failures: []
+  };
+  const result = await analyzeSelectedFeishuWikiDocx({
+    nodeToken: 'dispatch-node',
+    nodeTokenOrUrl: 'root-node',
+    dependencies: {
+      getWikiNode: async () => ({ node_token: 'root-node', obj_type: 'wiki', space_id: 'space-test' }),
+      listWikiChildNodes: async () => ([{
+        node_token: 'dispatch-node',
+        obj_token: 'dispatch-doc',
+        obj_type: 'docx',
+        title: '卡片投递文档'
+      }]),
+      getDocxRawContent: async () => ({ content: '张三负责处理卡片投递', length: 10 }),
+      getMeetingNoteSyncRecord: async () => null,
+      importMeetingNote: async () => ({
+        status: 'pending_confirmation',
+        title: '卡片投递文档',
+        tasks_count: 2,
+        draft_id: 456,
+        table_url: 'https://example.com/table',
+        feishu_result: dispatchResult
+      }),
+      getWikiDocxSource: async () => null,
+      upsertDiscoveredWikiDocxSource: async () => {},
+      updateWikiSourceResult: async () => {}
+    }
+  });
+
+  assert.equal(result.status, 'pending_confirmation');
+  assert.deepEqual(result.imported[0].feishu_result, dispatchResult);
+  assert.equal(result.imported[0].sent_count, 2);
+  assert.equal(result.imported[0].skipped_count, 1);
+  assert.equal(result.imported[0].failed_count, 0);
+}
+
+async function testSelectedWikiAnalysisPreservesFailedCardDispatchResult() {
+  const dispatchResult = {
+    status: 'failed',
+    sent_count: 1,
+    skipped_count: 0,
+    failed_count: 1,
+    delivery_failures: [{ assignee_key: '张三', error: 'card send failed' }]
+  };
+  const error = new Error('card dispatch failed');
+  error.feishuSync = dispatchResult;
+  const result = await analyzeSelectedFeishuWikiDocx({
+    nodeToken: 'failed-dispatch-node',
+    nodeTokenOrUrl: 'root-node',
+    dependencies: {
+      getWikiNode: async () => ({ node_token: 'root-node', obj_type: 'wiki', space_id: 'space-test' }),
+      listWikiChildNodes: async () => ([{
+        node_token: 'failed-dispatch-node',
+        obj_token: 'failed-dispatch-doc',
+        obj_type: 'docx',
+        title: '投递失败文档'
+      }]),
+      getDocxRawContent: async () => ({ content: '卡片发送失败测试正文', length: 10 }),
+      getMeetingNoteSyncRecord: async () => null,
+      importMeetingNote: async () => { throw error; },
+      getWikiDocxSource: async () => null,
+      upsertDiscoveredWikiDocxSource: async () => {},
+      updateWikiSourceResult: async () => {}
+    }
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(result.failed[0].feishu_result, dispatchResult);
+  assert.equal(result.failed[0].sent_count, 1);
+  assert.equal(result.failed[0].failed_count, 1);
+}
+
 await initDatabase();
 await testSchemaExists();
 testExtractWikiNodeToken();
@@ -120,5 +199,7 @@ testDirectDocxNodeSelectsRequestedNodeAndChildDocs();
 testLatestWikiDocxNodeSelectsMostRecentlyEditedNode();
 await testListWikiDocxDocumentsReturnsSelectedNodes();
 await testAnalyzeLatestWikiDocxImportsOnlySelectedLatestNode();
+await testSelectedWikiAnalysisPreservesCardDispatchResult();
+await testSelectedWikiAnalysisPreservesFailedCardDispatchResult();
 
 console.log('feishu wiki docx scan tests passed');

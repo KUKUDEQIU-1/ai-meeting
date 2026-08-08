@@ -370,9 +370,21 @@ async function notifyUserSafe(params) {
 async function dispatchDraftTaskCardsSafe(draft) {
   try {
     const result = await dispatchDraftTaskCards(draft);
-    return { status: result.status || 'success', error: result.error || null };
+    return {
+      ...result,
+      status: result.status || 'success',
+      error: result.error || null
+    };
   } catch (error) {
-    return { status: 'failed', error: error.message };
+    return {
+      status: 'failed',
+      sent_count: 0,
+      skipped_count: 0,
+      failed_count: 1,
+      results: [],
+      delivery_failures: [],
+      error: error.message
+    };
   }
 }
 
@@ -480,6 +492,7 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
   let meetingTable = null;
   let notifyStatus = 'pending';
   let notifyError = null;
+  let feishuResult = null;
   const { notifyTargetType, notifyTargetId } = getNotifyTarget();
 
   console.log(`[Feishu Meeting Notes Sync] import start note_id=${normalizedNoteId}`);
@@ -687,7 +700,14 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
     notifyError = notifyResult.error;
 
     const cardDispatchResult = await dispatchDraftTaskCardsSafe(draft);
+    feishuResult = cardDispatchResult;
     console.log(`[Feishu Meeting Notes Sync] private task cards done note_id=${normalizedNoteId} status=${cardDispatchResult.status}${cardDispatchResult.error ? ` error=${cardDispatchResult.error}` : ''}`);
+
+    if (cardDispatchResult.status !== 'success') {
+      const error = new Error(cardDispatchResult.error || '飞书任务卡片发送失败');
+      error.feishuSync = cardDispatchResult;
+      throw error;
+    }
 
     await upsertSyncRecord({
       noteId: normalizedNoteId,
@@ -736,10 +756,10 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
       needs_confirmation_count: needsConfirmationCount,
       extracted_content_length: rawText.length,
       generated_tasks_count: aiResult.tasks.length,
-      feishu_result: null
+      feishu_result: cardDispatchResult
     };
   } catch (error) {
-    const feishuResult = error.feishuSync || null;
+    feishuResult = error.feishuSync || feishuResult;
     const failureNotifyResult = await notifyUserSafe({
       meeting_title: meetingTitle,
       meeting_source: '飞书会议智能纪要',

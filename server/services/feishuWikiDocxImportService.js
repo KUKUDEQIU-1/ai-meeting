@@ -192,7 +192,11 @@ function summarizeImported(node, doc, result, record) {
     tasks_count: tasksCount,
     table_url: result.table_url || record?.table_url || '',
     status: result.status,
-    draft_id: result.draft_id || null
+    draft_id: result.draft_id || null,
+    feishu_result: result.feishu_result || null,
+    sent_count: Number(result.feishu_result?.sent_count || 0),
+    skipped_count: Number(result.feishu_result?.skipped_count || 0),
+    failed_count: Number(result.feishu_result?.failed_count || 0)
   };
 }
 
@@ -274,7 +278,18 @@ async function importWikiDocxNode(node, { deps, force, reanalyze, spaceId, paren
   } catch (error) {
     await deps.updateWikiSourceResult(node.node_token, { status: 'failed', error: error.message });
     const blocked = isPermissionError(error);
-    const row = { node_token: node.node_token, document_id: node.obj_token, title: node.title, error: error.message, status: blocked ? 'blocked' : 'failed' };
+    const feishuResult = error.feishu_result || error.feishuSync || null;
+    const row = {
+      node_token: node.node_token,
+      document_id: node.obj_token,
+      title: node.title,
+      error: error.message,
+      status: blocked ? 'blocked' : 'failed',
+      feishu_result: feishuResult,
+      sent_count: Number(feishuResult?.sent_count || 0),
+      skipped_count: Number(feishuResult?.skipped_count || 0),
+      failed_count: Number(feishuResult?.failed_count || 0)
+    };
 
     if (manualLatest) console.log(`[Feishu Wiki Sync] manual latest analysis failed document_id=${node.obj_token} status=${row.status} error=${error.message}`);
     return { status: blocked ? 'blocked' : 'failed', row };
