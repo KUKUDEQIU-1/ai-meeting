@@ -5643,6 +5643,7 @@ async function testOwnerScopedHandledTaskForcesTerminalPatchCard() {
   const previousFetch = globalThis.fetch;
   const previousAppId = process.env.FEISHU_APP_ID;
   const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const messageId = `om_owner_terminal_card_${Date.now()}`;
   let patchedCard = null;
 
   process.env.FEISHU_APP_ID = 'cli_test_app_id';
@@ -5675,7 +5676,7 @@ async function testOwnerScopedHandledTaskForcesTerminalPatchCard() {
     assigneeKey: '简学勤',
     assigneeName: '简学勤',
     receiveId: 'ou_actor',
-    cardMessageId: 'om_owner_terminal_card',
+    cardMessageId: messageId,
     deliveryStatus: 'sent'
   });
   await upsertDraftCardMessage({
@@ -5683,7 +5684,7 @@ async function testOwnerScopedHandledTaskForcesTerminalPatchCard() {
     assigneeKey: '简学勤',
     cardKind: 'tasks',
     itemId: 'handled_owner_1',
-    cardMessageId: 'om_owner_terminal_card'
+    cardMessageId: messageId
   });
 
   globalThis.fetch = async (url, options = {}) => {
@@ -5704,7 +5705,7 @@ async function testOwnerScopedHandledTaskForcesTerminalPatchCard() {
 
   try {
     const result = await updateFeishuTaskCard({
-      messageId: 'om_owner_terminal_card',
+      messageId,
       draftId: draft.id,
       assigneeKey: '简学勤',
       cardKind: 'tasks',
@@ -5718,6 +5719,100 @@ async function testOwnerScopedHandledTaskForcesTerminalPatchCard() {
     assert.ok(form);
     assert.equal(form.elements.some((item) => item.tag === 'button' && item.form_action_type === 'submit'), true);
     assert.match(JSON.stringify(patchedCard), /已丢弃/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    process.env.FEISHU_APP_ID = previousAppId;
+    process.env.FEISHU_APP_SECRET = previousAppSecret;
+  }
+}
+
+async function testOwnerScopedMultiItemPatchKeepsSiblingActionable() {
+  const previousFetch = globalThis.fetch;
+  const previousAppId = process.env.FEISHU_APP_ID;
+  const previousAppSecret = process.env.FEISHU_APP_SECRET;
+  const messageId = `om_owner_multi_card_${Date.now()}`;
+  let patchedCard = null;
+
+  process.env.FEISHU_APP_ID = 'cli_test_app_id';
+  process.env.FEISHU_APP_SECRET = 'cli_test_app_secret';
+
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `owner-multi-patch-${Date.now()}`,
+    meetingTitle: '双任务卡片逐条处理会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-08-10',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [
+      { item_id: 'owner_multi_1', task_name: '双任务卡第一条', assignee: '简学勤', status: 'confirmed', task_choice: 'old_task_progress', matched_task_name: '旧任务一' },
+      { item_id: 'owner_multi_2', task_name: '双任务卡第二条', assignee: '简学勤', status: 'pending' }
+    ],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_owner_multi',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    assigneeName: '简学勤',
+    receiveId: 'ou_actor',
+    cardMessageId: messageId,
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '简学勤',
+    cardKind: 'tasks',
+    itemId: 'owner_multi_1,owner_multi_2',
+    cardMessageId: messageId
+  });
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+
+    if (href.includes('/auth/v3/tenant_access_token/internal')) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: 'tenant_token' }), { status: 200 });
+    }
+
+    if (href.includes('/im/v1/messages/') && options.method === 'PATCH') {
+      const body = JSON.parse(options.body);
+      patchedCard = JSON.parse(body.content);
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+
+    return new Response(JSON.stringify({ code: 999, msg: `unexpected ${href}` }), { status: 500 });
+  };
+
+  try {
+    const result = await updateFeishuTaskCard({
+      messageId,
+      draftId: draft.id,
+      assigneeKey: '简学勤',
+      cardKind: 'tasks',
+      itemId: 'owner_multi_1,owner_multi_2',
+      terminal: false
+    });
+
+    const text = JSON.stringify(patchedCard);
+    assert.equal(result.status, 'updated');
+    assert.equal(patchedCard.header.title.content, '任务归类待确认');
+    assert.match(text, /双任务卡第一条/);
+    assert.match(text, /旧任务进展/);
+    assert.match(text, /双任务卡第二条/);
+    assert.match(text, /mark_new_owner_multi_2/);
+    assert.match(text, /mark_old_owner_multi_2/);
+    assert.match(text, /discard_owner_multi_2/);
+    assert.doesNotMatch(text, /会议任务已确认/);
   } finally {
     globalThis.fetch = previousFetch;
     process.env.FEISHU_APP_ID = previousAppId;
@@ -6016,6 +6111,7 @@ await testConfirmedNewTaskCreateRecordWritesFollowerField();
 await testConfirmedNewTaskCreateRecordSkipsInvalidPersonFollowerField();
 await testFailureCardUpdateUsesNonFormCard();
 await testOwnerScopedHandledTaskForcesTerminalPatchCard();
+await testOwnerScopedMultiItemPatchKeepsSiblingActionable();
 await testRecoverableFailureCardUpdateKeepsEditableControls();
 await testProgressConfirmationUsesProgressOnlyAction();
 

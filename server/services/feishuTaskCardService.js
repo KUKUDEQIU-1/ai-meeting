@@ -277,7 +277,7 @@ function buildCardForKind({ cardKind, draft, assignee, terminal, itemId, oldTask
   }
 
   const tasks = itemsForAssignee(draft.draft_tasks || [], assignee.assignee_key)
-    .filter((task) => !itemId || String(task.item_id || '') === itemId);
+    .filter((task) => itemScopeIncludes(itemId, task.item_id));
 
   return buildAssigneeTaskCard({ draft, assignee, tasks, terminal, confirmItemId: itemId || '', oldTaskOptions });
 }
