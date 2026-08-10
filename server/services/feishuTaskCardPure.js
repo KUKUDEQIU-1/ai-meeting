@@ -581,7 +581,10 @@ function terminalTaskSummaryContent({ draft, assignee, tasks }) {
 }
 
 function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOptionsByItemId = null, assigneeOptions = [], cardKind = 'tasks' }) {
-  const elements = [];
+  const elements = [
+    { tag: 'markdown', content: `**会议：** ${truncateText(draft?.meeting_title || '未命名会议', 60)}\n**负责人：** ${truncateText(assignee.assignee_name, 30)}\n卡片内容较长，已切换为精简确认模式。` },
+    { tag: 'hr' }
+  ];
 
   for (const task of tasks) {
     const itemId = String(task.item_id || '');
@@ -596,12 +599,15 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOp
       continue;
     }
 
+    elements.push({ tag: 'markdown', content: `**事项 ${truncateText(itemId, 16)}｜${taskChoiceTitle(task)}**` });
     elements.push(inputElement({ tag: `task_name_${itemId}`, label: '新任务', value: taskNameOf(task) }));
     elements.push(workTypeSelectElement({ tag: `work_type_select_${itemId}`, value: task.work_type }));
     if (assigneeOptions.length) {
       elements.push(assigneeSelectElement({ tag: `assignee_select_${itemId}`, options: assigneeOptions, value: task.assignee }));
     }
     const itemOldTaskOptions = oldTaskOptionsForItem({ itemId, oldTaskOptions, oldTaskOptionsByItemId });
+    const unmatchedOldTask = unmatchedOldTaskElement(matchedTaskName, itemOldTaskOptions);
+    if (unmatchedOldTask) elements.push(unmatchedOldTask);
     elements.push(selectElement({ tag: `matched_task_name_select_${itemId}`, options: itemOldTaskOptions, value: matchedTaskName }));
     elements.push(inputElement({
       tag: `progress_summary_${itemId}`,
