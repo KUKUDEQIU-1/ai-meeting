@@ -1,7 +1,7 @@
 import express from 'express';
 import { createTaskRecord } from '../services/feishuBitableClient.js';
 import { analyzeMeetingText, syncTasksToFeishu } from '../services/meetingService.js';
-import { analyzeSelectedGetNote, importGetNoteMeeting, listRecentGetNotes, syncRecentGetNotes } from '../services/getnoteImportService.js';
+import { analyzeSelectedGetNote, importGetNoteMeeting, listRecentGetNotes, resendCachedGetNoteCards, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { feishuScanCoordinator } from '../services/feishuScanCoordinator.js';
 import { listMasterTaskAuditRecords } from '../services/feishuBitableClient.js';
 import { sendMasterTaskAuditCard, sendMasterTaskInspectionAdminSummary, updateMasterTaskAuditCard } from '../services/masterTaskAuditCardService.js';
@@ -13,8 +13,10 @@ import { getMeetingTaskDraftById, getMeetingTaskDraftBySource, listDraftAssignee
 import { forceResendDraftTaskCard, resendFailedDraftTaskCards, updateFeishuTaskCard } from '../services/feishuTaskCardService.js';
 import { requireMaintenanceToken } from '../middleware/maintenanceAuth.js';
 import { deleteMember, getMember, listMembers, refreshRecentTasksFromConfirmedDrafts, upsertMember } from '../services/memberMemoryService.js';
+import { createGetNoteManualJobStore } from '../services/getnoteManualJobService.js';
 
 const router = express.Router();
+const GETNOTE_MANUAL_ACTIONS = new Set(['resend_cards', 'reanalyze_and_send']);
 
 function requestBool(value) {
   return value === true || value === 'true' || value === '1';
@@ -46,6 +48,24 @@ export function getManualGetNoteImportOptions(body = {}) {
     freshOwnerTaskConfirmationRound: true
   };
 }
+
+export function getManualGetNoteAction(body = {}) {
+  const action = String(body.action || '').trim();
+  if (!action) return 'reanalyze_and_send';
+  if (!GETNOTE_MANUAL_ACTIONS.has(action)) {
+    const error = new Error('action must be resend_cards or reanalyze_and_send');
+    error.status = 400;
+    throw error;
+  }
+  return action;
+}
+
+const getNoteManualJobs = createGetNoteManualJobStore({
+  handlers: {
+    resend_cards: async ({ noteId }) => getGetNoteSyncResponse(await resendCachedGetNoteCards(noteId, { forceCardResend: true })),
+    reanalyze_and_send: async ({ noteId }) => getGetNoteSyncResponse(await analyzeSelectedGetNote(noteId, getManualGetNoteImportOptions({})))
+  }
+});
 
 function deliveryErrorStatus(error) {
   return String(error || '').trim() ? 'present' : '';
@@ -1003,10 +1023,38 @@ router.post('/maintenance/analyze-getnote-note', requireMaintenanceToken, async 
       return;
     }
 
-    const result = await analyzeSelectedGetNote(noteId, getManualGetNoteImportOptions(req.body || {}));
-    res.json(getGetNoteSyncResponse(result));
+    const action = getManualGetNoteAction(req.body || {});
+    const jobResult = getNoteManualJobs.createJob({ noteId, action });
+
+    if (jobResult.status === 'conflict') {
+      res.status(409).json({ success: false, status: 'job_conflict', capability: 'getnote_manual_job', job: jobResult.job });
+      return;
+    }
+
+    const statusCode = jobResult.status === 'existing' ? 200 : 202;
+    res.status(statusCode)
+      .location(jobResult.job.status_url)
+      .json({ success: true, idempotent_replay: jobResult.status === 'existing' || undefined, job: jobResult.job });
   } catch (error) {
+    if (error.status === 400) {
+      res.status(400).json({ success: false, status: 'validation_failed', message: error.message });
+      return;
+    }
     res.status(error.status || 502).json(getGetNoteSyncErrorResponse(error, req.body?.note_id));
+  }
+});
+
+router.get('/maintenance/getnote-jobs/:jobId', requireMaintenanceToken, async (req, res, next) => {
+  try {
+    const job = getNoteManualJobs.getJob(req.params.jobId);
+    if (!job) {
+      res.status(404).json({ success: false, message: 'GetNote job not found' });
+      return;
+    }
+
+    res.json({ success: true, job });
+  } catch (error) {
+    next(error);
   }
 });
 

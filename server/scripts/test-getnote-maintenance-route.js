@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import express from 'express';
-import meetingRouter, { getGetNoteSyncErrorResponse, getGetNoteSyncResponse, getMaintenanceGetNotePayload, getManualGetNoteImportOptions } from '../routes/meeting.js';
+import meetingRouter, { getGetNoteSyncErrorResponse, getGetNoteSyncResponse, getMaintenanceGetNotePayload, getManualGetNoteAction, getManualGetNoteImportOptions } from '../routes/meeting.js';
 import { initDatabase, run } from '../db/database.js';
 import { createMeetingTaskDraft, upsertDraftAssigneeState, upsertDraftCardMessage } from '../services/taskDraftService.js';
 import { getMasterTaskAuditLogById, upsertMasterTaskAuditLog } from '../services/masterTaskAuditLogService.js';
@@ -238,7 +238,8 @@ function testManualGetNoteImportOptionsAlwaysForceProcessing() {
   }), {
     force: true,
     reanalyze: true,
-    forceCardResend: true
+    forceCardResend: true,
+    freshOwnerTaskConfirmationRound: true
   });
 
   assert.deepEqual(getManualGetNoteImportOptions({
@@ -248,8 +249,66 @@ function testManualGetNoteImportOptionsAlwaysForceProcessing() {
   }), {
     force: true,
     reanalyze: true,
-    forceCardResend: true
+    forceCardResend: true,
+    freshOwnerTaskConfirmationRound: true
   });
+}
+
+function testManualGetNoteActionParsing() {
+  assert.equal(getManualGetNoteAction({}), 'reanalyze_and_send');
+  assert.equal(getManualGetNoteAction({ action: 'resend_cards' }), 'resend_cards');
+  assert.equal(getManualGetNoteAction({ action: 'reanalyze_and_send' }), 'reanalyze_and_send');
+  assert.throws(() => getManualGetNoteAction({ action: 'delete_everything' }), /action must be/);
+}
+
+async function testSelectedGetNoteRouteStartsBackgroundJob() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'selected-job-token';
+  const server = await listen(createApp());
+
+  try {
+    const started = await requestPath(server, '/api/meeting/maintenance/analyze-getnote-note', {
+      headers: { Authorization: 'Bearer selected-job-token' },
+      body: { note_id: 'note_route_job_1', action: 'resend_cards' }
+    });
+
+    assert.equal(started.response.status, 202);
+    assert.equal(started.body.success, true);
+    assert.equal(started.body.job.note_id, 'note_route_job_1');
+    assert.equal(started.body.job.action, 'resend_cards');
+    assert.match(started.body.job.status_url, /\/api\/meeting\/maintenance\/getnote-jobs\//);
+    assert.equal(started.response.headers.get('location'), started.body.job.status_url);
+
+    const polled = await getPath(server, started.body.job.status_url, {
+      headers: { Authorization: 'Bearer selected-job-token' }
+    });
+
+    assert.equal(polled.response.status, 200);
+    assert.equal(polled.body.success, true);
+    assert.equal(polled.body.job.job_id, started.body.job.job_id);
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+  }
+}
+
+async function testSelectedGetNoteRouteRejectsInvalidAction() {
+  const previousOpsToken = process.env.OPS_MAINTENANCE_TOKEN;
+  process.env.OPS_MAINTENANCE_TOKEN = 'selected-job-token';
+  const server = await listen(createApp());
+
+  try {
+    const result = await requestPath(server, '/api/meeting/maintenance/analyze-getnote-note', {
+      headers: { Authorization: 'Bearer selected-job-token' },
+      body: { note_id: 'note_route_job_invalid', action: 'invalid' }
+    });
+
+    assert.equal(result.response.status, 400);
+    assert.equal(result.body.status, 'validation_failed');
+  } finally {
+    await close(server);
+    restoreEnv('OPS_MAINTENANCE_TOKEN', previousOpsToken);
+  }
 }
 
 function testGetNoteSyncResponseShowsPendingConfirmationAsImported() {
@@ -587,9 +646,12 @@ await testMaintenanceGetNoteRouteRejectsMissingNoteIdBeforeImport();
 await testGetNoteMutationRoutesRequireMaintenanceToken();
 testMaintenanceGetNotePayloadIsNarrow();
 testManualGetNoteImportOptionsAlwaysForceProcessing();
+testManualGetNoteActionParsing();
 testGetNoteSyncResponseShowsPendingConfirmationAsImported();
 testGetNoteSyncResponseShowsDispatchLockSkip();
 testGetNoteSyncErrorResponseHasStableEnvelope();
+await testSelectedGetNoteRouteStartsBackgroundJob();
+await testSelectedGetNoteRouteRejectsInvalidAction();
 await initDatabase();
 await testGetNoteCardDeliveryAuditRequiresMaintenanceToken();
 await testGetNoteCardDeliveryAuditIsSanitized();
