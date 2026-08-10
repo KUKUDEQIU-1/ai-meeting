@@ -367,9 +367,9 @@ async function notifyUserSafe(params) {
   }
 }
 
-async function dispatchDraftTaskCardsSafe(draft) {
+async function dispatchDraftTaskCardsSafe(draft, dispatchTaskCards = dispatchDraftTaskCards) {
   try {
-    const result = await dispatchDraftTaskCards(draft);
+    const result = await dispatchTaskCards(draft);
     return {
       ...result,
       status: result.status || 'success',
@@ -699,7 +699,7 @@ export async function importFeishuMeetingNote(noteId, options = {}) {
     notifyStatus = notifyResult.status;
     notifyError = notifyResult.error;
 
-    const cardDispatchResult = await dispatchDraftTaskCardsSafe(draft);
+    const cardDispatchResult = await dispatchDraftTaskCardsSafe(draft, options.dispatchTaskCards || dispatchDraftTaskCards);
     feishuResult = cardDispatchResult;
     console.log(`[Feishu Meeting Notes Sync] private task cards done note_id=${normalizedNoteId} status=${cardDispatchResult.status}${cardDispatchResult.error ? ` error=${cardDispatchResult.error}` : ''}`);
 
@@ -819,6 +819,7 @@ export async function importFeishuMeetingNoteFromBotContent(noteId, options = {}
   return importFeishuMeetingNote(noteId, {
     force: options.force,
     reanalyze: options.reanalyze,
+    dispatchTaskCards: options.dispatchTaskCards,
     note: {
       note_id: noteId,
       title: options.title || '飞书知识库文档',

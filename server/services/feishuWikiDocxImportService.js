@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import { all, get, run } from '../db/database.js';
 import { getFeishuDocxRawContent } from './feishuDocxClient.js';
 import { getFeishuMeetingNoteSyncRecord, importFeishuMeetingNoteFromBotContent } from './feishuMeetingNotesImportService.js';
+import { dispatchGetNoteTaskCard } from './feishuTaskCardService.js';
 import { extractWikiNodeToken, getFeishuWikiNode, listFeishuWikiChildNodes } from './feishuWikiClient.js';
+import { getMeetingTaskDraftBySource } from './taskDraftService.js';
 
 function nowIso() {
   return new Date().toISOString();
@@ -41,6 +43,10 @@ function tasksCountFromRecord(record) {
 
 function configuredNodeToken() {
   return extractWikiNodeToken(process.env.FEISHU_WIKI_SOURCE_NODE_TOKEN || process.env.FEISHU_WIKI_SOURCE_NODE_URL || '');
+}
+
+function wikiDocxCardDispatchMode() {
+  return process.env.GETNOTE_CARD_DISPATCH_MODE?.trim().toLowerCase() || 'production';
 }
 
 function toEpochMs(value) {
@@ -134,6 +140,8 @@ function dependencySet(overrides = {}) {
     listWikiChildNodes: overrides.listWikiChildNodes || listFeishuWikiChildNodes,
     getDocxRawContent: overrides.getDocxRawContent || getFeishuDocxRawContent,
     getMeetingNoteSyncRecord: overrides.getMeetingNoteSyncRecord || getFeishuMeetingNoteSyncRecord,
+    getMeetingTaskDraftBySource: overrides.getMeetingTaskDraftBySource || getMeetingTaskDraftBySource,
+    dispatchGetNoteTaskCard: overrides.dispatchGetNoteTaskCard || dispatchGetNoteTaskCard,
     importMeetingNote: overrides.importMeetingNote || importFeishuMeetingNoteFromBotContent,
     getWikiDocxSource: overrides.getWikiDocxSource || getFeishuWikiDocxSource,
     upsertDiscoveredWikiDocxSource: overrides.upsertDiscoveredWikiDocxSource || upsertDiscoveredWikiDocxSource,
@@ -200,6 +208,15 @@ function summarizeImported(node, doc, result, record) {
   };
 }
 
+function cardDispatchCounts(result) {
+  return {
+    feishu_result: result || null,
+    sent_count: Number(result?.sent_count || 0),
+    skipped_count: Number(result?.skipped_count || 0),
+    failed_count: Number(result?.failed_count || 0)
+  };
+}
+
 function summarizeSelectedNode(node) {
   return {
     node_token: node.node_token,
@@ -250,12 +267,28 @@ async function importWikiDocxNode(node, { deps, force, reanalyze, spaceId, paren
       };
 
       if (manualLatest) console.log(`[Feishu Wiki Sync] manual latest analysis skipped document_id=${node.obj_token} reason=content_unchanged`);
+      if (manualLatest) {
+        const draft = await deps.getMeetingTaskDraftBySource('feishu_meeting_note', node.obj_token, { includeAnyStatus: true });
+
+        if (draft) {
+          const cardDispatchResult = await deps.dispatchGetNoteTaskCard(draft, { dispatchMode: wikiDocxCardDispatchMode() });
+
+          if (cardDispatchResult.status !== 'success') {
+            const error = new Error(cardDispatchResult.error || '飞书任务卡片发送失败');
+            error.feishuSync = cardDispatchResult;
+            throw error;
+          }
+
+          return { status: 'skipped', row: { ...skipped, ...cardDispatchCounts(cardDispatchResult) } };
+        }
+      }
       return { status: 'skipped', row: skipped };
     }
 
     const result = await deps.importMeetingNote(node.obj_token, {
       force,
       reanalyze,
+      dispatchTaskCards: (draft) => deps.dispatchGetNoteTaskCard(draft, { dispatchMode: wikiDocxCardDispatchMode() }),
       title: node.title || '飞书知识库文档',
       createTime: node.node_create_time || String(Math.floor(Date.now() / 1000)),
       noteContent: doc.content,

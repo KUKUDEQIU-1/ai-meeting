@@ -155,6 +155,53 @@ async function testSelectedWikiAnalysisPreservesCardDispatchResult() {
   assert.equal(result.imported[0].failed_count, 0);
 }
 
+async function testSelectedWikiAnalysisUsesGetNoteCompatibleCardDispatch() {
+  let dispatchKind = '';
+  const result = await analyzeSelectedFeishuWikiDocx({
+    nodeToken: 'compatible-dispatch-node',
+    nodeTokenOrUrl: 'root-node',
+    dependencies: {
+      getWikiNode: async () => ({ node_token: 'root-node', obj_type: 'wiki', space_id: 'space-test' }),
+      listWikiChildNodes: async () => ([{
+        node_token: 'compatible-dispatch-node',
+        obj_token: 'compatible-dispatch-doc',
+        obj_type: 'docx',
+        title: 'GetNote 同款卡片文档'
+      }]),
+      getDocxRawContent: async () => ({ content: '张三负责验证同款卡片', length: 12 }),
+      getMeetingNoteSyncRecord: async () => null,
+      importMeetingNote: async (_documentId, options = {}) => {
+        const draft = { id: 456, draft_tasks: [{ item_id: 'task_1', assignee: '张三' }], progress_updates: [] };
+        const dispatchResult = await options.dispatchTaskCards(draft);
+        dispatchKind = dispatchResult.results[0].card_kind;
+
+        return {
+          status: 'pending_confirmation',
+          title: 'GetNote 同款卡片文档',
+          tasks_count: 1,
+          draft_id: draft.id,
+          table_url: 'https://example.com/table',
+          feishu_result: dispatchResult
+        };
+      },
+      dispatchGetNoteTaskCard: async () => ({
+        status: 'success',
+        sent_count: 1,
+        skipped_count: 0,
+        failed_count: 0,
+        results: [{ card_kind: 'getnote_tasks', status: 'sent' }]
+      }),
+      getWikiDocxSource: async () => null,
+      upsertDiscoveredWikiDocxSource: async () => {},
+      updateWikiSourceResult: async () => {}
+    }
+  });
+
+  assert.equal(result.status, 'pending_confirmation');
+  assert.equal(dispatchKind, 'getnote_tasks');
+  assert.equal(result.imported[0].sent_count, 1);
+}
+
 async function testSelectedWikiAnalysisPreservesFailedCardDispatchResult() {
   const dispatchResult = {
     status: 'failed',
@@ -192,6 +239,102 @@ async function testSelectedWikiAnalysisPreservesFailedCardDispatchResult() {
   assert.equal(result.failed[0].failed_count, 1);
 }
 
+async function testSelectedUnchangedWikiAnalysisDispatchesExistingDraftCards() {
+  let imported = false;
+  let dispatchedDraftId = null;
+  const dispatchResult = {
+    status: 'success',
+    sent_count: 2,
+    skipped_count: 0,
+    failed_count: 0,
+    delivery_failures: []
+  };
+  const result = await analyzeSelectedFeishuWikiDocx({
+    nodeToken: 'unchanged-node',
+    nodeTokenOrUrl: 'root-node',
+    dependencies: {
+      getWikiNode: async () => ({ node_token: 'root-node', obj_type: 'wiki', space_id: 'space-test' }),
+      listWikiChildNodes: async () => ([{
+        node_token: 'unchanged-node',
+        obj_token: 'unchanged-doc',
+        obj_type: 'docx',
+        title: '未变更补发文档'
+      }]),
+      getDocxRawContent: async () => ({ content: '相同正文', length: 4 }),
+      getMeetingNoteSyncRecord: async () => ({
+        analysis_json: JSON.stringify({ tasks: [{ task_name: '补发卡片' }] }),
+        table_url: 'https://example.com/table'
+      }),
+      importMeetingNote: async () => {
+        imported = true;
+        return {};
+      },
+      getWikiDocxSource: async () => ({
+        content_hash: 'da7a2aa5cda2d786ce7139566d5382fefc46691758e759e0b2de30b81de080a5',
+        last_sync_status: 'pending_confirmation',
+        last_tasks_count: 1,
+        last_table_url: 'https://example.com/table'
+      }),
+      getMeetingTaskDraftBySource: async () => ({ id: 789, draft_tasks: [{ assignee: '张三' }], progress_updates: [] }),
+      dispatchGetNoteTaskCard: async (draft) => {
+        dispatchedDraftId = draft.id;
+        return dispatchResult;
+      },
+      upsertDiscoveredWikiDocxSource: async () => {},
+      updateWikiSourceResult: async () => {}
+    }
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.reason, 'content_unchanged');
+  assert.equal(imported, false);
+  assert.equal(dispatchedDraftId, 789);
+  assert.deepEqual(result.skipped[0].feishu_result, dispatchResult);
+  assert.equal(result.skipped[0].sent_count, 2);
+  assert.equal(result.skipped[0].skipped_count, 0);
+  assert.equal(result.skipped[0].failed_count, 0);
+}
+
+async function testSelectedUnchangedWikiAnalysisPreservesAlreadySentCardSkips() {
+  const dispatchResult = {
+    status: 'success',
+    sent_count: 0,
+    skipped_count: 3,
+    failed_count: 0,
+    delivery_failures: []
+  };
+  const result = await analyzeSelectedFeishuWikiDocx({
+    nodeToken: 'already-sent-node',
+    nodeTokenOrUrl: 'root-node',
+    dependencies: {
+      getWikiNode: async () => ({ node_token: 'root-node', obj_type: 'wiki', space_id: 'space-test' }),
+      listWikiChildNodes: async () => ([{
+        node_token: 'already-sent-node',
+        obj_token: 'already-sent-doc',
+        obj_type: 'docx',
+        title: '已发卡片文档'
+      }]),
+      getDocxRawContent: async () => ({ content: '相同正文', length: 4 }),
+      getMeetingNoteSyncRecord: async () => null,
+      importMeetingNote: async () => { throw new Error('AI analysis should not run for unchanged content'); },
+      getWikiDocxSource: async () => ({
+        content_hash: 'da7a2aa5cda2d786ce7139566d5382fefc46691758e759e0b2de30b81de080a5',
+        last_sync_status: 'pending_confirmation',
+        last_tasks_count: 3
+      }),
+      getMeetingTaskDraftBySource: async () => ({ id: 790, draft_tasks: [{ assignee: '张三' }], progress_updates: [] }),
+      dispatchGetNoteTaskCard: async () => dispatchResult,
+      upsertDiscoveredWikiDocxSource: async () => {},
+      updateWikiSourceResult: async () => {}
+    }
+  });
+
+  assert.equal(result.skipped[0].sent_count, 0);
+  assert.equal(result.skipped[0].skipped_count, 3);
+  assert.equal(result.skipped[0].failed_count, 0);
+}
+
 await initDatabase();
 await testSchemaExists();
 testExtractWikiNodeToken();
@@ -200,6 +343,9 @@ testLatestWikiDocxNodeSelectsMostRecentlyEditedNode();
 await testListWikiDocxDocumentsReturnsSelectedNodes();
 await testAnalyzeLatestWikiDocxImportsOnlySelectedLatestNode();
 await testSelectedWikiAnalysisPreservesCardDispatchResult();
+await testSelectedWikiAnalysisUsesGetNoteCompatibleCardDispatch();
 await testSelectedWikiAnalysisPreservesFailedCardDispatchResult();
+await testSelectedUnchangedWikiAnalysisDispatchesExistingDraftCards();
+await testSelectedUnchangedWikiAnalysisPreservesAlreadySentCardSkips();
 
 console.log('feishu wiki docx scan tests passed');
