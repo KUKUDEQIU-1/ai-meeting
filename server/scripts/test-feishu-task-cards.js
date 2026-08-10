@@ -872,7 +872,12 @@ function testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect
     draft: { id: 41, meeting_title: 'GetNote 例会' },
     assignee: { assignee_key: 'getnote_reviewer', assignee_name: 'Wei Tian' },
     tasks: [
-      { item_id: 'getnote_1', task_name: '修复卡片响应Bug', assignee: '待确认' }
+      {
+        item_id: 'getnote_1',
+        task_name: '修复卡片响应Bug',
+        matched_task_name: '不存在的旧任务',
+        assignee: '待确认'
+      }
     ],
     oldTaskOptions: [
       { text: { tag: 'plain_text', content: '历史任务 A' }, value: '历史任务 A' },
@@ -894,6 +899,8 @@ function testGetNoteReviewCardReusesTaskClassificationControlsWithAssigneeSelect
   assert.match(text, /progress_summary_getnote_1/);
   assert.match(text, /task_name_getnote_1/);
   assert.match(text, /assignee_select_getnote_1/);
+  assert.doesNotMatch(text, /会议：|负责人：|卡片内容较长/);
+  assert.doesNotMatch(text, /事项|当前选择|上次填写的旧任务|尚未选择新任务/);
   assert.deepEqual(oldTaskSelect.options.map((option) => option.value), ['历史任务 A', '历史任务 B']);
   assert.deepEqual(assigneeSelect.options.map((option) => option.value), ['洪伟填', '李嘉华']);
   assert.doesNotMatch(text, /confirm_assignee_tasks/);
