@@ -318,6 +318,111 @@ export async function analyzeSelectedGetNote(noteId, options = {}) {
   return importGetNoteMeeting(noteId, options);
 }
 
+export async function resendCachedGetNoteCards(noteId, options = {}) {
+  if (!noteId?.trim()) {
+    const error = new Error('note_id is required');
+    error.status = 400;
+    throw error;
+  }
+
+  const normalizedNoteId = noteId.trim();
+  const existingRecord = await getGetNoteSyncRecord(normalizedNoteId);
+  const draft = await getMeetingTaskDraftBySource('getnote', normalizedNoteId, { includeAnyStatus: true });
+
+  if (!existingRecord || !draft) {
+    return {
+      success: true,
+      note_id: normalizedNoteId,
+      title: existingRecord?.title || draft?.meeting_title || undefined,
+      status: 'skipped',
+      reason: 'cached_draft_not_found',
+      table_url: existingRecord?.table_url || draft?.table_url || undefined
+    };
+  }
+
+  const lockOwner = newDispatchLockOwner();
+  const dispatchLock = await claimGetNoteDispatchLock(normalizedNoteId, lockOwner);
+
+  if (!dispatchLock.claimed) {
+    return {
+      success: true,
+      note_id: normalizedNoteId,
+      title: existingRecord.title || draft.meeting_title,
+      status: 'skipped',
+      reason: 'dispatch_in_progress',
+      table_url: existingRecord.table_url || draft.table_url || undefined,
+      lock: {
+        status: 'busy',
+        lease_until: dispatchLock.lease_until || undefined
+      }
+    };
+  }
+
+  try {
+    const cardDispatchMode = options.cardDispatchDeps?.dispatchMode || getCardDispatchMode();
+    console.log(`[GetNote Sync] resend cached card delivery note_id=${normalizedNoteId} draft_id=${draft.id} dispatch_mode=${cardDispatchMode || 'unset'}`);
+    const feishuResult = await dispatchGetNoteTaskCard(draft, {
+      ...(options.cardDispatchDeps || {}),
+      dispatchMode: cardDispatchMode,
+      force: true,
+      forceCardResend: true,
+      freshOwnerTaskConfirmationRound: false
+    });
+    const dispatchSummary = summarizeDispatchResult(feishuResult);
+    console.log(`[GetNote Sync] cached resend result note_id=${normalizedNoteId} draft_id=${draft.id} status=${dispatchSummary.status} sent_count=${dispatchSummary.sent_count} skipped_count=${dispatchSummary.skipped_count} failed_count=${dispatchSummary.failed_count}`);
+
+    if (feishuResult.status !== 'success') {
+      const error = new Error(feishuResult.results?.[0]?.error || 'GetNote 任务确认卡片重发失败');
+      error.feishuSync = feishuResult;
+      throw error;
+    }
+
+    await upsertSyncRecord({
+      noteId: normalizedNoteId,
+      title: existingRecord.title || draft.meeting_title,
+      status: existingRecord.status || 'pending_confirmation',
+      tableId: existingRecord.table_id || draft.table_id,
+      tableName: existingRecord.table_name || draft.table_name,
+      tableUrl: existingRecord.table_url || draft.table_url,
+      tableSchemaVersion: existingRecord.table_schema_version,
+      contentSource: existingRecord.content_source || draft.content_source,
+      contentLength: existingRecord.content_length || draft.content_length,
+      contentHash: existingRecord.content_hash,
+      usedTranscript: Boolean(existingRecord.used_transcript),
+      summary: existingRecord.summary || draft.summary,
+      analysisJson: parseJson(existingRecord.analysis_json),
+      feishuResult,
+      notifyTargetType: existingRecord.notify_target_type,
+      notifyTargetId: existingRecord.notify_target_id,
+      notifyStatus: existingRecord.notify_status,
+      notifyError: existingRecord.notify_error
+    });
+
+    return {
+      success: true,
+      note_id: normalizedNoteId,
+      title: existingRecord.title || draft.meeting_title,
+      status: 'pending_confirmation',
+      reason: 'cards_resent',
+      table_id: existingRecord.table_id || draft.table_id,
+      table_name: existingRecord.table_name || draft.table_name,
+      table_url: existingRecord.table_url || draft.table_url,
+      tasks_count: (draft.draft_tasks || []).length,
+      draft_id: draft.id,
+      feishu_result: feishuResult,
+      content_hash: existingRecord.content_hash || undefined
+    };
+  } catch (error) {
+    error.note_id = normalizedNoteId;
+    error.meeting_title = existingRecord.title || draft.meeting_title;
+    error.feishu_result = error.feishuSync || null;
+    error.table_url = existingRecord.table_url || draft.table_url;
+    throw error;
+  } finally {
+    await releaseGetNoteDispatchLock(normalizedNoteId, lockOwner);
+  }
+}
+
 function parseJson(value) {
   if (!value) {
     return null;

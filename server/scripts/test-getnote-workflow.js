@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { all, get, initDatabase, run } from '../db/database.js';
 import { parseAssigneeMap } from '../services/feishuTaskCardPure.js';
 import { extractGetNoteContentWithMeta, getNoteList } from '../services/getnoteClient.js';
-import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle, syncRecentGetNotes } from '../services/getnoteImportService.js';
+import { buildGetNoteContentHash, importGetNoteMeeting, isDatedTodayWorkArrangementTitle, resendCachedGetNoteCards, syncRecentGetNotes } from '../services/getnoteImportService.js';
 import { listDraftCardMessages } from '../services/taskDraftService.js';
 
 function note(noteId, content) {
@@ -383,6 +383,62 @@ async function testForceCardResendReplacesExistingGetNoteCard() {
   assert.match(JSON.stringify(replacementOptions.patchedCards[0].card), /此卡片已失效，请使用最新卡片/);
 }
 
+async function testCachedResendUsesExistingDraftWithoutAi() {
+  const content = '张三今天修复 GetNote 确认卡片并接入总表。';
+  const noteId = `getnote_workflow_cached_resend_${Date.now()}`;
+  const sentCards = [];
+  const firstOptions = workflowOptions(noteId, content, sentCards);
+
+  const first = await importGetNoteMeeting(noteId, firstOptions);
+  const recordBefore = await get('SELECT * FROM getnote_sync_records WHERE note_id = ?', [noteId]);
+  const draftBefore = await get('SELECT * FROM meeting_task_drafts WHERE source_type = ? AND source_id = ?', ['getnote', noteId]);
+  let aiCalled = false;
+  const resendOptions = workflowOptions(noteId, 'this content must not be read', sentCards);
+  resendOptions.analyzeMeetingText = async () => {
+    aiCalled = true;
+    throw new Error('AI should not run for cached resend');
+  };
+  resendOptions.cardDispatchDeps.postMessage = async ({ receiveId, card }) => {
+    sentCards.push({ receiveId, card });
+    return `om_cached_resend_${noteId}_${sentCards.length}`;
+  };
+
+  const resent = await resendCachedGetNoteCards(noteId, resendOptions);
+  const recordAfter = await get('SELECT * FROM getnote_sync_records WHERE note_id = ?', [noteId]);
+  const draftAfter = await get('SELECT * FROM meeting_task_drafts WHERE source_type = ? AND source_id = ?', ['getnote', noteId]);
+
+  assert.equal(first.status, 'pending_confirmation');
+  assert.equal(resent.status, 'pending_confirmation');
+  assert.equal(resent.reason, 'cards_resent');
+  assert.equal(resent.draft_id, first.draft_id);
+  assert.equal(aiCalled, false);
+  assert.equal(sentCards.length, 2);
+  assert.equal(draftAfter.id, draftBefore.id);
+  assert.equal(recordAfter.content_hash, recordBefore.content_hash);
+  assert.equal(recordAfter.analysis_json, recordBefore.analysis_json);
+}
+
+async function testCachedResendRespectsActiveDispatchLock() {
+  const content = '张三今天修复 GetNote 确认卡片并接入总表。';
+  const noteId = `getnote_workflow_cached_busy_${Date.now()}`;
+  const sentCards = [];
+
+  await importGetNoteMeeting(noteId, workflowOptions(noteId, content, sentCards));
+  await run(
+    `INSERT INTO getnote_dispatch_locks (note_id, lock_owner, lease_until, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [noteId, 'other-worker', new Date(Date.now() + 60000).toISOString(), new Date().toISOString(), new Date().toISOString()]
+  );
+
+  const result = await resendCachedGetNoteCards(noteId, workflowOptions(noteId, content, sentCards));
+  const lock = await get('SELECT * FROM getnote_dispatch_locks WHERE note_id = ?', [noteId]);
+
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.reason, 'dispatch_in_progress');
+  assert.equal(sentCards.length, 1);
+  assert.equal(lock.lock_owner, 'other-worker');
+}
+
 function testGetNoteSummaryIsNotUsedAsTaskSource() {
   assert.throws(
     () => extractGetNoteContentWithMeta({ summary: 'GetNote 智能总结声称张三要做任务。' }),
@@ -678,5 +734,7 @@ await testImportRecoveryRespectsActiveDispatchLock();
 await testImportSplitsKnownAndUnknownGetNoteTasks();
 await testImportZeroEffectiveTasksCreatesReviewOnlyDraft();
 await testForceCardResendReplacesExistingGetNoteCard();
+await testCachedResendUsesExistingDraftWithoutAi();
+await testCachedResendRespectsActiveDispatchLock();
 
 console.log('getnote workflow tests passed');
