@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 const MAINTENANCE_TOKEN_STORAGE_KEY = 'ai-meeting.maintenance-token';
 const health = ref(null);
@@ -16,6 +16,12 @@ const getnoteListState = ref('idle');
 const getnoteListMessage = ref('尚未刷新 Get笔记列表');
 const getnoteNotes = ref([]);
 const selectedNoteId = ref('');
+const getnoteJobPoller = ref(null);
+
+const getnoteActionLabels = {
+  resend_cards: '重发已有任务卡片',
+  reanalyze_and_send: '重新分析并发送'
+};
 
 function restoreMaintenanceToken() {
   try {
@@ -106,6 +112,12 @@ function maintenanceFailure(error) {
         detail: `已有一个飞书巡检任务正在执行，请稍候再试。\n\n运行信息：\n${JSON.stringify(error.data, null, 2)}`
       };
     }
+    if (error.data?.capability === 'getnote_manual_job') {
+      return {
+        title: 'Get笔记后台任务正在运行',
+        detail: `同一篇 Get笔记已有另一个后台任务正在执行，请等待当前任务完成。\n\n运行信息：\n${JSON.stringify(error.data, null, 2)}`
+      };
+    }
     return {
       title: 'Wiki 扫描正在运行，GetNote 结果已返回',
       detail: JSON.stringify(error.data, null, 2)
@@ -150,6 +162,63 @@ function getNoteSuccessMessage(result) {
   return sentCount > 0 || result?.imported?.[0]?.draft_id
     ? 'Get笔记扫描完成，任务卡片已发送'
     : 'Get笔记扫描完成，请查看返回结果';
+}
+
+function getNoteJobResult(job) {
+  return job?.result || null;
+}
+
+function getNoteJobTitle(job) {
+  if (job?.status === 'failed') return 'Get笔记后台任务失败';
+  if (job?.status === 'skipped') return getNoteSuccessMessage(getNoteJobResult(job));
+  if (job?.status === 'completed') return getNoteSuccessMessage(getNoteJobResult(job));
+  return `Get笔记后台任务运行中：${getnoteActionLabels[job?.action] || '处理中'}`;
+}
+
+function stopGetNoteJobPolling() {
+  if (getnoteJobPoller.value) {
+    clearInterval(getnoteJobPoller.value);
+    getnoteJobPoller.value = null;
+  }
+}
+
+function finishGetNoteJob(job) {
+  const result = getNoteJobResult(job);
+  maintenanceResult.value = {
+    type: job.status === 'failed' ? 'error' : 'success',
+    title: getNoteJobTitle(job),
+    detail: JSON.stringify(job.status === 'failed' ? job : result || job, null, 2)
+  };
+  maintenanceState.value = job.status === 'failed' ? 'error' : 'success';
+  stopGetNoteJobPolling();
+}
+
+async function pollGetNoteJob(statusUrl) {
+  try {
+    const response = await fetch(statusUrl, { headers: authHeaders() });
+    const data = await parseResponse(response);
+    const job = data.job;
+
+    if (['completed', 'failed', 'skipped'].includes(job?.status)) {
+      finishGetNoteJob(job);
+      return;
+    }
+
+    maintenanceResult.value = {
+      type: 'info',
+      title: getNoteJobTitle(job),
+      detail: JSON.stringify(job, null, 2)
+    };
+  } catch (error) {
+    const failure = maintenanceFailure(error);
+    maintenanceResult.value = {
+      type: 'error',
+      title: failure.title,
+      detail: failure.detail
+    };
+    maintenanceState.value = 'error';
+    stopGetNoteJobPolling();
+  }
 }
 
 function masterTaskAuditSuccessMessage(result) {
@@ -403,7 +472,7 @@ async function refreshGetNoteNotes() {
   }
 }
 
-async function triggerSelectedGetNote() {
+async function triggerSelectedGetNote(action) {
   if (maintenanceState.value === 'submitting') return;
 
   if (!maintenanceToken.value.trim()) {
@@ -427,16 +496,17 @@ async function triggerSelectedGetNote() {
   maintenanceState.value = 'submitting';
   maintenanceResult.value = {
     type: 'info',
-    title: '正在处理 Get笔记扫描请求',
-    detail: '正在准备读取选中的笔记，请稍候…'
+    title: `正在启动：${getnoteActionLabels[action] || 'Get笔记处理'}`,
+    detail: '后端会先创建后台任务并立即返回，页面随后自动轮询处理结果。'
   };
+  stopGetNoteJobPolling();
 
   try {
     await new Promise((resolve) => setTimeout(resolve, 120));
     maintenanceResult.value = {
       type: 'info',
-      title: '正在扫描 Get笔记并准备任务卡片',
-      detail: '正在读取笔记正文、调用 AI 分析任务，并准备发送负责人卡片…'
+      title: `正在提交：${getnoteActionLabels[action] || 'Get笔记处理'}`,
+      detail: '请求已提交，等待后端返回后台任务编号…'
     };
 
     const response = await fetch('/api/meeting/maintenance/analyze-getnote-note', {
@@ -444,18 +514,21 @@ async function triggerSelectedGetNote() {
       headers: authHeaders(),
       body: JSON.stringify({
         note_id: selectedNoteId.value,
-        force: true,
-        reanalyze: true,
-        force_card_resend: true
+        action
       })
     });
     const result = await parseResponse(response);
+    const job = result.job;
+    if (!job?.status_url) {
+      throw new Error('后端未返回 GetNote 后台任务地址');
+    }
     maintenanceResult.value = {
-      type: 'success',
-      title: getNoteSuccessMessage(result),
-      detail: JSON.stringify(result, null, 2)
+      type: 'info',
+      title: getNoteJobTitle(job),
+      detail: JSON.stringify(job, null, 2)
     };
-    maintenanceState.value = 'success';
+    getnoteJobPoller.value = setInterval(() => pollGetNoteJob(job.status_url), 1000);
+    await pollGetNoteJob(job.status_url);
   } catch (error) {
     const failure = maintenanceFailure(error);
     maintenanceResult.value = {
@@ -464,12 +537,17 @@ async function triggerSelectedGetNote() {
       detail: failure.detail
     };
     maintenanceState.value = 'error';
+    stopGetNoteJobPolling();
   }
 }
 
 onMounted(() => {
   restoreMaintenanceToken();
   checkHealth();
+});
+
+onUnmounted(() => {
+  stopGetNoteJobPolling();
 });
 </script>
 
@@ -588,12 +666,16 @@ onMounted(() => {
                     {{ note.title }}
                   </option>
                 </select>
-                <button class="primary-button" type="button" :disabled="maintenanceState === 'submitting'" @click="triggerSelectedGetNote">
+                <button class="secondary-button" type="button" :disabled="maintenanceState === 'submitting'" @click="triggerSelectedGetNote('resend_cards')">
                   <span v-if="maintenanceState === 'submitting'" class="button-spinner" aria-hidden="true"></span>
-                  {{ maintenanceState === 'submitting' ? '提交中' : '扫描选中笔记' }}
+                  {{ maintenanceState === 'submitting' ? '处理中' : '重发已有任务卡片' }}
+                </button>
+                <button class="primary-button" type="button" :disabled="maintenanceState === 'submitting'" @click="triggerSelectedGetNote('reanalyze_and_send')">
+                  <span v-if="maintenanceState === 'submitting'" class="button-spinner" aria-hidden="true"></span>
+                  {{ maintenanceState === 'submitting' ? '处理中' : '重新分析并发送' }}
                 </button>
               </div>
-              <p class="field-hint">下拉列表来自 Get笔记最近列表；点击“扫描选中笔记”只处理这条 Get笔记，不会扫描飞书 Wiki。</p>
+              <p class="field-hint">“重发已有任务卡片”复用缓存草稿，不重新调用 AI；“重新分析并发送”会重新读取笔记、AI 分析并替换任务卡片。两者都会后台执行并自动轮询结果。</p>
             </div>
 
             <div class="document-picker audit-picker" aria-labelledby="master-task-audit-title">
