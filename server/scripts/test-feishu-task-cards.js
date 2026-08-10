@@ -2466,6 +2466,48 @@ async function testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard() {
   assert.equal(reviewerState.delivery_status, 'sent');
 }
 
+async function testGetNoteCompatibleReviewerCardCallbackIsActionable() {
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'feishu_wiki_docx',
+    sourceId: `wiki-compatible-callback-${Date.now()}-${Math.random()}`,
+    meetingTitle: 'Wiki 同款卡片回调测试',
+    meetingSource: '飞书知识库文档',
+    draftTasks: [{ item_id: 'wiki_callback_1', task_name: '确认 Wiki 文档任务', assignee: '待确认', owner: '待确认' }],
+    tableId: 'table_wiki_callback',
+    tableName: '事务列表',
+    tableUrl: 'https://example.com/master'
+  });
+  const sentMessages = [];
+  const result = await dispatchGetNoteTaskCard(draft, {
+    dispatchMode: 'local',
+    receiveId: 'ou_wiki_reviewer',
+    listMasterTaskAuditRecords: async () => [],
+    postMessage: async ({ receiveId, card }) => {
+      sentMessages.push({ receiveId, card });
+      return `om_wiki_compatible_${draft.id}_${sentMessages.length}`;
+    }
+  });
+  const message = await listDraftCardMessages(draft.id, 'getnote_reviewer', 'getnote_tasks');
+  const prepared = await prepareFeishuCardAction({
+    header: { event_id: `evt_wiki_compatible_${draft.id}`, token: 'secret' },
+    event: {
+      context: { open_message_id: message[0].card_message_id },
+      operator: { open_id: 'ou_wiki_reviewer' },
+      action: {
+        value: { action: 'mark_task_as_new', draft_id: draft.id, assignee_key: 'getnote_reviewer', item_id: 'wiki_callback_1', card_kind: 'getnote_tasks' },
+        form_value: { task_name_wiki_callback_1: '确认 Wiki 文档任务' }
+      }
+    }
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(sentMessages[0].receiveId, 'ou_wiki_reviewer');
+  assert.equal(message[0].card_kind, 'getnote_tasks');
+  assert.equal(prepared.shouldProcess, true);
+  assert.equal(prepared.state.card_kind, 'getnote_tasks');
+  assert.equal(prepared.response.toast.content, '已收到，正在后台处理，稍后卡片会自动更新');
+}
+
 async function testGetNoteDispatchEmptyDraftSendsReviewOnlyCard() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'getnote',
@@ -5784,6 +5826,7 @@ await testGetNoteDispatchRoutesKnownAssigneeToNormalTaskCard();
 await testManualOwnerResendResetsConfirmedState();
 await testGetNoteDispatchForceResendsExistingOwnerCardForKnownAssignee();
 await testGetNoteDispatchRoutesUnknownAssigneeToReviewerCard();
+await testGetNoteCompatibleReviewerCardCallbackIsActionable();
 await testGetNoteDispatchEmptyDraftSendsReviewOnlyCard();
 await testGetNoteDispatchSplitsMixedKnownAndUnknownAssignees();
 await testGetNoteMixedDispatchRequiresReviewerBeforeOwnerSend();
