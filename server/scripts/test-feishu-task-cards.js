@@ -287,6 +287,60 @@ function buttonNames(card) {
   return names;
 }
 
+function formSubmitButtonCounts(card) {
+  const counts = [];
+  const stack = [card];
+
+  while (stack.length) {
+    const item = stack.pop();
+    if (!item || typeof item !== 'object') continue;
+
+    if (item.tag === 'form') {
+      const formStack = [...(item.elements || [])];
+      let count = 0;
+
+      while (formStack.length) {
+        const formItem = formStack.pop();
+        if (!formItem || typeof formItem !== 'object') continue;
+        if (formItem.tag === 'button' && formItem.name && formItem.form_action_type === 'submit') count += 1;
+
+        for (const value of Object.values(formItem)) {
+          if (Array.isArray(value)) formStack.push(...value);
+          else if (value && typeof value === 'object') formStack.push(value);
+        }
+      }
+
+      counts.push(count);
+    }
+
+    for (const value of Object.values(item)) {
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+
+  return counts;
+}
+
+function assertEveryFormHasSubmitButton(card) {
+  const counts = formSubmitButtonCounts(card);
+
+  assert.ok(counts.length > 0);
+  assert.equal(counts.every((count) => count > 0), true);
+}
+
+function testHandledOnlyTaskCardsDoNotRenderEmptyForms() {
+  const draft = { id: 131, meeting_title: '文字记录：团队今日工作安排同步会议 2026年7月28日 副本', meeting_source: '飞书 Wiki' };
+  const assignee = { assignee_key: '简学勤', assignee_name: '简学勤' };
+  const tasks = [
+    { item_id: 'draft_131_item_6', task_name: '已处理的新任务', assignee: '简学勤', status: 'confirmed', task_choice: 'new_task' },
+    { item_id: 'draft_131_item_7', task_name: '已丢弃任务', assignee: '简学勤', status: 'discarded', task_choice: 'discard' }
+  ];
+
+  assertEveryFormHasSubmitButton(buildAssigneeTaskCard({ draft, assignee, tasks }));
+  assertEveryFormHasSubmitButton(buildGetNoteTaskReviewCard({ draft, assignee, tasks }));
+}
+
 function inputDefaultValue(card, name) {
   const stack = [card];
 
@@ -5836,6 +5890,7 @@ await testRegularTaskAndProgressDispatchDoesNotResendExistingSentCards();
 await testGetNoteDispatchUsesDedicatedTestRecipientOverride();
 await testDraftCardDeliveryDiagnosticsMaskIdentifiers();
 await testGetNoteDispatchForceUsesTerminalCardWhenAllTasksHandled();
+testHandledOnlyTaskCardsDoNotRenderEmptyForms();
 testTerminalProgressCardKeepsValidFormSubmitButton();
 await testGetNoteRegularMarkNewPersistsSelectedAssigneeForOwnership();
 await testGetNoteRegularMarkNewPersistsSelectedWorkType();

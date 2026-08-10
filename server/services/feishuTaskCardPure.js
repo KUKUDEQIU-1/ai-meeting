@@ -568,10 +568,10 @@ function terminalTaskSummaryContent({ draft, assignee, tasks }) {
   ];
 
   for (const task of groups.new_task) {
-    lines.push(`- 新任务：${truncateText(taskNameOf(task), 120)}`);
+    lines.push(`- 已处理为新任务：${truncateText(taskNameOf(task), 120)}`);
   }
   for (const task of groups.old_task_progress) {
-    lines.push(`- 旧任务进展：${truncateText(matchedTaskNameOf(task) || taskNameOf(task), 120)}`);
+    lines.push(`- 已处理为旧任务进展：${truncateText(matchedTaskNameOf(task) || taskNameOf(task), 120)}`);
   }
   for (const task of groups.discarded) {
     lines.push(`- 已丢弃：${truncateText(taskNameOf(task), 120)}`);
@@ -619,6 +619,21 @@ function compactTaskElements({ draft, assignee, tasks, oldTaskOptions, oldTaskOp
   }
 
   return elements;
+}
+
+function hasPendingTasks(tasks = []) {
+  return tasks.some((task) => !task.status || task.status === 'pending');
+}
+
+function handledTasksAcknowledgedButton(formName) {
+  return {
+    tag: 'button',
+    name: `${formName}_handled_acknowledged`,
+    form_action_type: 'submit',
+    type: 'default',
+    disabled: true,
+    text: { tag: 'plain_text', content: '已处理' }
+  };
 }
 
 export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false, compact = false, confirmItemId = '', oldTaskOptions = [], oldTaskOptionsByItemId = null, assigneeOptions = [], cardKind = 'tasks', sourceLabel = '', formName = 'meeting_task_form', pendingTitle = '', terminalTitle = '' }) {
@@ -675,6 +690,10 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
   }
 
   if (compact) {
+    if (!hasPendingTasks(tasks)) {
+      elements.push(handledTasksAcknowledgedButton(formName));
+    }
+
     return {
       schema: '2.0',
       config: { wide_screen_mode: true, update_multi: true },
@@ -721,6 +740,10 @@ export function buildAssigneeTaskCard({ draft, assignee, tasks, terminal = false
     elements.push(inputElement({ tag: `progress_summary_${itemId}`, label: '备注', value: progressSummaryOf(task) }));
     elements.push(taskActionSet({ draft, assignee, task, cardKind }));
     elements.push({ tag: 'hr' });
+  }
+
+  if (!hasPendingTasks(tasks)) {
+    elements.push(handledTasksAcknowledgedButton(formName));
   }
 
   return {
