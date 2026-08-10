@@ -271,7 +271,7 @@ async function importWikiDocxNode(node, { deps, force, reanalyze, spaceId, paren
         const draft = await deps.getMeetingTaskDraftBySource('feishu_meeting_note', node.obj_token, { includeAnyStatus: true });
 
         if (draft) {
-          const cardDispatchResult = await deps.dispatchGetNoteTaskCard(draft, { dispatchMode: wikiDocxCardDispatchMode() });
+          const cardDispatchResult = await deps.dispatchGetNoteTaskCard(draft, { dispatchMode: wikiDocxCardDispatchMode(), forceCardResend: true });
 
           if (cardDispatchResult.status !== 'success') {
             const error = new Error(cardDispatchResult.error || '飞书任务卡片发送失败');
@@ -288,7 +288,7 @@ async function importWikiDocxNode(node, { deps, force, reanalyze, spaceId, paren
     const result = await deps.importMeetingNote(node.obj_token, {
       force,
       reanalyze,
-      dispatchTaskCards: (draft) => deps.dispatchGetNoteTaskCard(draft, { dispatchMode: wikiDocxCardDispatchMode() }),
+      dispatchTaskCards: (draft) => deps.dispatchGetNoteTaskCard(draft, { dispatchMode: wikiDocxCardDispatchMode(), forceCardResend: true }),
       title: node.title || '飞书知识库文档',
       createTime: node.node_create_time || String(Math.floor(Date.now() / 1000)),
       noteContent: doc.content,

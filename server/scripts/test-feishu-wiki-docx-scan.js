@@ -157,6 +157,7 @@ async function testSelectedWikiAnalysisPreservesCardDispatchResult() {
 
 async function testSelectedWikiAnalysisUsesGetNoteCompatibleCardDispatch() {
   let dispatchKind = '';
+  let forceCardResend = false;
   const result = await analyzeSelectedFeishuWikiDocx({
     nodeToken: 'compatible-dispatch-node',
     nodeTokenOrUrl: 'root-node',
@@ -184,13 +185,16 @@ async function testSelectedWikiAnalysisUsesGetNoteCompatibleCardDispatch() {
           feishu_result: dispatchResult
         };
       },
-      dispatchGetNoteTaskCard: async () => ({
+      dispatchGetNoteTaskCard: async (_draft, options = {}) => {
+        forceCardResend = options.forceCardResend === true;
+        return {
         status: 'success',
         sent_count: 1,
         skipped_count: 0,
         failed_count: 0,
         results: [{ card_kind: 'getnote_tasks', status: 'sent' }]
-      }),
+        };
+      },
       getWikiDocxSource: async () => null,
       upsertDiscoveredWikiDocxSource: async () => {},
       updateWikiSourceResult: async () => {}
@@ -199,6 +203,7 @@ async function testSelectedWikiAnalysisUsesGetNoteCompatibleCardDispatch() {
 
   assert.equal(result.status, 'pending_confirmation');
   assert.equal(dispatchKind, 'getnote_tasks');
+  assert.equal(forceCardResend, true);
   assert.equal(result.imported[0].sent_count, 1);
 }
 
@@ -242,6 +247,7 @@ async function testSelectedWikiAnalysisPreservesFailedCardDispatchResult() {
 async function testSelectedUnchangedWikiAnalysisDispatchesExistingDraftCards() {
   let imported = false;
   let dispatchedDraftId = null;
+  let forceCardResend = false;
   const dispatchResult = {
     status: 'success',
     sent_count: 2,
@@ -276,8 +282,9 @@ async function testSelectedUnchangedWikiAnalysisDispatchesExistingDraftCards() {
         last_table_url: 'https://example.com/table'
       }),
       getMeetingTaskDraftBySource: async () => ({ id: 789, draft_tasks: [{ assignee: '张三' }], progress_updates: [] }),
-      dispatchGetNoteTaskCard: async (draft) => {
+      dispatchGetNoteTaskCard: async (draft, options = {}) => {
         dispatchedDraftId = draft.id;
+        forceCardResend = options.forceCardResend === true;
         return dispatchResult;
       },
       upsertDiscoveredWikiDocxSource: async () => {},
@@ -290,17 +297,18 @@ async function testSelectedUnchangedWikiAnalysisDispatchesExistingDraftCards() {
   assert.equal(result.reason, 'content_unchanged');
   assert.equal(imported, false);
   assert.equal(dispatchedDraftId, 789);
+  assert.equal(forceCardResend, true);
   assert.deepEqual(result.skipped[0].feishu_result, dispatchResult);
   assert.equal(result.skipped[0].sent_count, 2);
   assert.equal(result.skipped[0].skipped_count, 0);
   assert.equal(result.skipped[0].failed_count, 0);
 }
 
-async function testSelectedUnchangedWikiAnalysisPreservesAlreadySentCardSkips() {
+async function testSelectedUnchangedWikiAnalysisForceResendsAlreadySentCards() {
   const dispatchResult = {
     status: 'success',
-    sent_count: 0,
-    skipped_count: 3,
+    sent_count: 3,
+    skipped_count: 0,
     failed_count: 0,
     delivery_failures: []
   };
@@ -324,14 +332,17 @@ async function testSelectedUnchangedWikiAnalysisPreservesAlreadySentCardSkips() 
         last_tasks_count: 3
       }),
       getMeetingTaskDraftBySource: async () => ({ id: 790, draft_tasks: [{ assignee: '张三' }], progress_updates: [] }),
-      dispatchGetNoteTaskCard: async () => dispatchResult,
+      dispatchGetNoteTaskCard: async (_draft, options = {}) => {
+        assert.equal(options.forceCardResend, true);
+        return dispatchResult;
+      },
       upsertDiscoveredWikiDocxSource: async () => {},
       updateWikiSourceResult: async () => {}
     }
   });
 
-  assert.equal(result.skipped[0].sent_count, 0);
-  assert.equal(result.skipped[0].skipped_count, 3);
+  assert.equal(result.skipped[0].sent_count, 3);
+  assert.equal(result.skipped[0].skipped_count, 0);
   assert.equal(result.skipped[0].failed_count, 0);
 }
 
@@ -346,6 +357,6 @@ await testSelectedWikiAnalysisPreservesCardDispatchResult();
 await testSelectedWikiAnalysisUsesGetNoteCompatibleCardDispatch();
 await testSelectedWikiAnalysisPreservesFailedCardDispatchResult();
 await testSelectedUnchangedWikiAnalysisDispatchesExistingDraftCards();
-await testSelectedUnchangedWikiAnalysisPreservesAlreadySentCardSkips();
+await testSelectedUnchangedWikiAnalysisForceResendsAlreadySentCards();
 
 console.log('feishu wiki docx scan tests passed');

@@ -162,6 +162,20 @@ function masterTaskAuditSuccessMessage(result) {
   return '总表巡检完成，暂无需要发送的巡检卡片';
 }
 
+function cardDispatchCountsFromRows(result) {
+  const rows = [
+    ...(Array.isArray(result?.imported) ? result.imported : []),
+    ...(Array.isArray(result?.skipped) ? result.skipped : []),
+    ...(Array.isArray(result?.failed) ? result.failed : [])
+  ];
+
+  return rows.reduce((counts, row) => ({
+    sent: counts.sent + Number(row?.sent_count || row?.feishu_result?.sent_count || 0),
+    skipped: counts.skipped + Number(row?.skipped_count || row?.feishu_result?.skipped_count || 0),
+    failed: counts.failed + Number(row?.failed_count || row?.feishu_result?.failed_count || 0)
+  }), { sent: 0, skipped: 0, failed: 0 });
+}
+
 function authHeaders() {
   return {
     'Content-Type': 'application/json',
@@ -339,14 +353,11 @@ async function triggerSelectedDocument() {
       throw error;
     }
 
-    const imported = Array.isArray(result.imported) ? result.imported[0] : null;
-    const sentCount = Number(imported?.sent_count || imported?.feishu_result?.sent_count || 0);
-    const skippedCount = Number(imported?.skipped_count || imported?.feishu_result?.skipped_count || 0);
-    const failedCount = Number(imported?.failed_count || imported?.feishu_result?.failed_count || 0);
+    const cardCounts = cardDispatchCountsFromRows(result);
     maintenanceResult.value = {
       type: 'success',
-      title: failedCount > 0 ? '文档已处理，但卡片部分发送失败' : '选中文档扫描已完成',
-      detail: `卡片发送：${sentCount} 张，跳过：${skippedCount} 张，失败：${failedCount} 张\n\n${JSON.stringify(result, null, 2)}`
+      title: cardCounts.failed > 0 ? '文档已处理，但卡片部分发送失败' : '选中文档扫描已完成',
+      detail: `卡片发送：${cardCounts.sent} 张，跳过：${cardCounts.skipped} 张，失败：${cardCounts.failed} 张\n\n${JSON.stringify(result, null, 2)}`
     };
     maintenanceState.value = 'success';
   } catch (error) {
