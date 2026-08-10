@@ -411,7 +411,7 @@ export async function updateFeishuTaskCard({ messageId, draftId, assigneeKey, ca
   const effectiveCardKind = state.card_kind || cardKind;
   const ownerScopedTasks = effectiveCardKind === 'tasks'
     ? itemsForAssignee(draft.draft_tasks || [], assignee.assignee_key)
-      .filter((task) => !scopedItemId || String(task.item_id || '') === String(scopedItemId))
+      .filter((task) => itemScopeIncludes(scopedItemId, task.item_id))
     : [];
   const effectiveTerminal = terminal || (
     effectiveCardKind === 'tasks'

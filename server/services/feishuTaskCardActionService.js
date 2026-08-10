@@ -257,7 +257,7 @@ function hasPendingScopedTask(draft, assigneeKey, itemId) {
   return (draft?.draft_tasks || []).some((task) => (
     normalizeAssigneeKey(assigneeNameOf(task)) === assigneeKey
     && task.status === 'pending'
-    && (!itemId || String(task.item_id || '') === itemId)
+    && itemScopeIncludes(itemId, task.item_id)
   ));
 }
 

@@ -4174,6 +4174,91 @@ async function testSplitCardIndividualActionTerminalShowsScopedOutcome() {
   assert.equal(updatedDraft.draft_tasks[1].status, 'pending');
 }
 
+async function testMultiItemSplitCardActionKeepsSiblingTaskActionable() {
+  const messageId = `om_split_multi_mark_new_${Date.now()}`;
+  const draft = await createMeetingTaskDraft({
+    sourceType: 'unit-test',
+    sourceId: `split-multi-action-${Date.now()}`,
+    meetingTitle: '多任务卡片逐条处理会议',
+    meetingSource: '纪要',
+    meetingTime: '2026-07-24',
+    summary: 'summary',
+    segments: [],
+    discardedSegments: [],
+    draftTasks: [
+      { item_id: 'split_multi_1', task_name: '多任务卡第一条', assignee: '张三' },
+      { item_id: 'split_multi_2', task_name: '多任务卡第二条', assignee: '张三' }
+    ],
+    existingMatches: [],
+    uncertainTasks: [],
+    progressUpdates: [],
+    discardedItems: [],
+    contentSource: 'test',
+    contentLength: 0,
+    rawContent: 'test',
+    tableId: 'table_split_multi_action',
+    tableName: 'table',
+    tableUrl: 'https://example.com'
+  });
+
+  await upsertDraftAssigneeState({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    assigneeName: '张三',
+    receiveId: 'ou_actor',
+    deliveryStatus: 'sent'
+  });
+  await upsertDraftCardMessage({
+    draftId: draft.id,
+    assigneeKey: '张三',
+    cardKind: 'tasks',
+    itemId: 'split_multi_1,split_multi_2',
+    cardMessageId: messageId,
+    deliveryStatus: 'sent'
+  });
+
+  let refreshedCard = null;
+  let updateTerminal = null;
+  let updateItemId = '';
+  const response = await handleFeishuCardAction({
+    header: { event_id: 'evt_split_multi_mark_new' },
+    event: {
+      operator: { open_id: 'ou_actor' },
+      context: { open_message_id: messageId },
+      action: {
+        value: { action: 'mark_task_as_new', draft_id: draft.id, assignee_key: '张三', item_id: 'split_multi_1' },
+        form_value: { task_name_split_multi_1: '多任务卡第一条' }
+      }
+    }
+  }, {
+    finalizeAssignee: async () => ({ status: 'synced' }),
+    updateCard: async ({ terminal, itemId }) => {
+      const latestDraft = await getMeetingTaskDraftById(draft.id);
+      updateTerminal = terminal;
+      updateItemId = itemId;
+      refreshedCard = buildAssigneeTaskCard({
+        draft: latestDraft,
+        assignee: { assignee_key: '张三', assignee_name: '张三' },
+        tasks: latestDraft.draft_tasks.filter((task) => itemScopeIncludes(itemId, task.item_id)),
+        terminal
+      });
+      return { status: 'updated' };
+    }
+  });
+  const text = JSON.stringify(refreshedCard);
+  const updatedDraft = await getMeetingTaskDraftById(draft.id);
+
+  assert.equal(response.toast.content, '新任务已处理');
+  assert.equal(updateTerminal, false);
+  assert.equal(updateItemId, 'split_multi_1,split_multi_2');
+  assert.equal(updatedDraft.draft_tasks[0].status, 'confirmed');
+  assert.equal(updatedDraft.draft_tasks[1].status, 'pending');
+  assert.match(text, /多任务卡第一条/);
+  assert.match(text, /多任务卡第二条/);
+  assert.match(text, /mark_new_split_multi_2/);
+  assert.doesNotMatch(text, /会议任务已确认/);
+}
+
 async function testTaskChoiceCanConvertDraftTaskToProgress() {
   const draft = await createMeetingTaskDraft({
     sourceType: 'unit-test',
@@ -5912,6 +5997,7 @@ await testValidNewTaskConfirmationShowsTerminalFeedback();
 await testSplitCardSingleConfirmLeavesSiblingTaskActionable();
 await testSharedCardIndividualActionKeepsSiblingVisibleAndActionable();
 await testSplitCardIndividualActionTerminalShowsScopedOutcome();
+await testMultiItemSplitCardActionKeepsSiblingTaskActionable();
 await testValidOldProgressConfirmationUsesMasterCandidateOnly();
 await testInvalidDirectOldNameInputRollsBackAndUpdatesFailureCard();
 await testOldProgressConfirmFailsWhenMasterTaskIsMissing();
